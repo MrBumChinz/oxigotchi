@@ -1,0 +1,72 @@
+# PwnOxide v5 — AngryOxide + Bull Faces config overlay
+# Drop in /etc/pwnagotchi/conf.d/ — pwnagotchi merges these over defaults.toml
+# Use `pwnoxide-mode ao|pwn` to toggle this overlay on/off
+#
+# AO ON  = AngryOxide attacks + bull faces
+# AO OFF = bettercap attacks + stock faces (Korean/fancygotchi/whatever)
+
+[main.plugins.angryoxide]
+enabled = true
+binary_path = "/usr/local/bin/angryoxide"
+interface = "wlan0mon"
+no_setup = true
+nexmon_mode = false
+output_dir = "/etc/pwnagotchi/handshakes/"
+
+# Disable plugins that are redundant or overlap in AO mode
+[main.plugins.walkby]
+enabled = false
+
+[main.plugins.enable_assoc]
+enabled = false
+
+[main.plugins.enable_deauth]
+enabled = false
+
+# Enable wpa-sec for automatic handshake cracking
+[main.plugins.wpa-sec]
+enabled = true
+api_key = ""
+api_url = "https://wpa-sec.stanev.org"
+download_results = true
+
+[main]
+# Prevent blind-epoch restarts when AO holds the WiFi interface
+mon_max_blind_epochs = 9999
+
+[personality]
+frame_padding = true
+frame_padding_min_bytes = 650
+deauth = false
+associate = false
+
+# --- Bull faces (PNG mode) ---
+# Position moved up to y=16 since we hide the name element
+# All 28 mood states mapped to bull head PNGs
+
+[ui.faces]
+png = true
+position_x = 0
+position_y = 16
+look_r = ["/etc/pwnagotchi/custom-plugins/faces/look_r.png"]
+look_l = ["/etc/pwnagotchi/custom-plugins/faces/look_l.png"]
+look_r_happy = ["/etc/pwnagotchi/custom-plugins/faces/look_r_happy.png"]
+look_l_happy = ["/etc/pwnagotchi/custom-plugins/faces/look_l_happy.png"]
+sleep = ["/etc/pwnagotchi/custom-plugins/faces/sleep.png"]
+awake = ["/etc/pwnagotchi/custom-plugins/faces/awake.png"]
+bored = ["/etc/pwnagotchi/custom-plugins/faces/bored.png"]
+intense = ["/etc/pwnagotchi/custom-plugins/faces/intense.png"]
+cool = ["/etc/pwnagotchi/custom-plugins/faces/cool.png"]
+happy = ["/etc/pwnagotchi/custom-plugins/faces/happy.png"]
+grateful = ["/etc/pwnagotchi/custom-plugins/faces/grateful.png"]
+excited = ["/etc/pwnagotchi/custom-plugins/faces/excited.png"]
+motivated = ["/etc/pwnagotchi/custom-plugins/faces/motivated.png"]
+demotivated = ["/etc/pwnagotchi/custom-plugins/faces/demotivated.png"]
+smart = ["/etc/pwnagotchi/custom-plugins/faces/smart.png"]
+lonely = ["/etc/pwnagotchi/custom-plugins/faces/lonely.png"]
+sad = ["/etc/pwnagotchi/custom-plugins/faces/sad.png"]
+angry = ["/etc/pwnagotchi/custom-plugins/faces/angry.png"]
+friend = ["/etc/pwnagotchi/custom-plugins/faces/friend.png"]
+broken = ["/etc/pwnagotchi/custom-plugins/faces/broken.png"]
+debug = ["/etc/pwnagotchi/custom-plugins/faces/debug.png"]
+upload = ["/etc/pwnagotchi/custom-plugins/faces/upload.png"]

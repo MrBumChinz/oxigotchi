@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Firmware binaries (proprietary)
+*.bin
+*.clm_blob
+
+# Development
+*.log
+*_results.json
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db

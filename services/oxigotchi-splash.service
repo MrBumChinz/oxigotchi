@@ -1,0 +1,15 @@
+[Unit]
+Description=Oxagotchi Boot Splash
+Before=pwnagotchi.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/pi/.pwn/bin/python3 /usr/local/bin/oxagotchi-splash.py /etc/pwnagotchi/custom-plugins/faces/awake.png
+ExecStop=/home/pi/.pwn/bin/python3 /usr/local/bin/oxagotchi-splash.py /etc/pwnagotchi/custom-plugins/faces/shutdown.png
+RemainAfterExit=yes
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
