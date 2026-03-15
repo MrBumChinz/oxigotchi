@@ -38,6 +38,18 @@ class AngryOxide(plugins.Plugin):
         re.IGNORECASE
     )
 
+    # Fast boot: defer non-essential plugins until AO is running
+    _DELAY_PLUGINS = [
+        'bt-tether', 'grid', 'wpa-sec', 'auto_backup', 'memtemp-plus',
+        'display-password', 'IPDisplay', 'handshakes-dl', 'better_quickdic',
+        'pwnstore_ui', 'internet-connection',
+    ]
+    _KEEP_PLUGINS = [
+        'angryoxide', 'pisugarx', 'cache', 'fix_services', 'logtail',
+        'exp', 'tweak_view', 'webcfg', 'button-feedback',
+    ]
+    _DELAY_STATE_FILE = '/home/pi/delayed_plugins.json'
+
     def __init__(self):
         self.options = dict()
         self._lock = Lock()
@@ -82,6 +94,8 @@ class AngryOxide(plugins.Plugin):
         self._captured_macs = set()
         self._captured_macs_stale = True
         self._discord_webhook = None
+        # Non-blocking restart scheduling (avoids sleeping the main thread)
+        self._next_restart_time = 0
         # Cache for expensive API calls (subprocess-based)
         self._health_cache = None
         self._health_cache_time = 0
@@ -164,6 +178,52 @@ class AngryOxide(plugins.Plugin):
         self._load_state()
         self._discord_webhook = self.options.get('discord_webhook', '')
 
+    def _save_delayed_plugins(self):
+        """On shutdown, mark non-essential plugins for delayed loading."""
+        import pwnagotchi.plugins as _plugins
+        try:
+            delayed = []
+            for name in self._DELAY_PLUGINS:
+                if name in _plugins.loaded and _plugins.loaded[name] is not None:
+                    delayed.append(name)
+            if delayed:
+                with open(self._DELAY_STATE_FILE, 'w') as f:
+                    json.dump({'delayed': delayed, 'timestamp': time.time()}, f)
+                logging.info("[angryoxide] saved %d plugins for delayed boot: %s", len(delayed), delayed)
+        except Exception as e:
+            logging.debug("[angryoxide] could not save delayed plugins: %s", e)
+
+    def _restore_delayed_plugins(self):
+        """After AO is running, re-enable plugins that were delayed for fast boot."""
+        try:
+            if not os.path.isfile(self._DELAY_STATE_FILE):
+                return
+            with open(self._DELAY_STATE_FILE, 'r') as f:
+                data = json.load(f)
+            # Ignore stale state files (older than 10 minutes)
+            ts = data.get('timestamp', 0)
+            if time.time() - ts > 600:
+                logging.info("[angryoxide] delayed plugins state file is stale (%.0fs old), ignoring",
+                             time.time() - ts)
+                os.remove(self._DELAY_STATE_FILE)
+                return
+            delayed = data.get('delayed', [])
+            if not delayed:
+                return
+            import pwnagotchi.plugins as _plugins
+            restored = 0
+            for name in delayed:
+                try:
+                    _plugins.toggle_plugin(name, True)
+                    logging.info("[angryoxide] restored delayed plugin: %s", name)
+                    restored += 1
+                except Exception as e:
+                    logging.debug("[angryoxide] could not restore plugin %s: %s", name, e)
+            os.remove(self._DELAY_STATE_FILE)
+            logging.info("[angryoxide] restored %d delayed plugins", restored)
+        except Exception as e:
+            logging.debug("[angryoxide] could not restore delayed plugins: %s", e)
+
     def on_ready(self, agent):
         self._agent = agent
 
@@ -180,6 +240,11 @@ class AngryOxide(plugins.Plugin):
         logging.info("[angryoxide] disabled bettercap deauth/assoc, AO will handle attacks")
 
         self._start_ao(agent)
+
+        # Restore delayed plugins 30s after AO starts (don't slow down AO startup)
+        if self._running:
+            import threading
+            threading.Timer(30.0, self._restore_delayed_plugins).start()
 
         # Set awake bull face on boot
         try:
@@ -373,10 +438,9 @@ class AngryOxide(plugins.Plugin):
                 return True
 
             backoff = self._backoff_seconds()
-            logging.info("[angryoxide] restarting after %.1fs backoff (crash %d/%d)",
+            logging.info("[angryoxide] scheduling restart after %.1fs backoff (crash %d/%d)",
                          backoff, self._crash_count, max_crashes)
-            time.sleep(backoff)
-            self._start_ao(agent)
+            self._next_restart_time = time.time() + backoff
 
         return needs_restart
 
@@ -638,6 +702,23 @@ class AngryOxide(plugins.Plugin):
         if self._stopped_permanently:
             return
 
+        # Prevent blind epoch restart — report AO's AP count to pwnagotchi
+        if self._running and self._agent:
+            try:
+                ao_aps = self._agent._access_points
+                if not ao_aps or len(ao_aps) == 0:
+                    # If bettercap sees no APs but AO is running, inject a dummy
+                    # to prevent blind_for counter from incrementing
+                    self._agent._access_points = [{'hostname': 'AO-active', 'mac': '00:00:00:00:00:00', 'channel': 0, 'rssi': 0, 'encryption': '', 'clients': []}]
+            except Exception:
+                pass
+
+        # Handle deferred restart from non-blocking backoff
+        if self._next_restart_time > 0 and time.time() >= self._next_restart_time:
+            self._next_restart_time = 0
+            self._start_ao(agent)
+            return
+
         if not self._running and os.path.isfile(self.options.get('binary_path', '/usr/local/bin/angryoxide')):
             # try to start if not running yet (e.g. binary was installed after boot)
             self._start_ao(agent)
@@ -756,8 +837,68 @@ class AngryOxide(plugins.Plugin):
             else:
                 ui.set('angryoxide', 'AO: off')
 
+    @staticmethod
+    def _validate_channels(channels_str):
+        """Validate and sanitize channel string. Returns cleaned string or empty."""
+        if not channels_str or not isinstance(channels_str, str):
+            return ''
+        channels_str = channels_str.strip()
+        if not channels_str:
+            return ''
+        parts = [p.strip() for p in channels_str.split(',')]
+        valid = []
+        for p in parts:
+            try:
+                ch = int(p)
+                if 1 <= ch <= 14:
+                    valid.append(str(ch))
+            except (ValueError, TypeError):
+                continue
+        return ','.join(valid)
+
+    @staticmethod
+    def _validate_mac_or_ssid(entry):
+        """Validate a target/whitelist entry. Must be a MAC (XX:XX:XX:XX:XX:XX) or non-empty SSID string.
+        Returns cleaned string or None if invalid."""
+        if not entry or not isinstance(entry, str):
+            return None
+        entry = entry.strip()
+        if not entry:
+            return None
+        # Check if it looks like a MAC address
+        mac_pattern = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
+        if mac_pattern.match(entry):
+            return entry.upper()
+        # Otherwise treat as SSID — must be non-empty printable string, max 32 chars
+        if len(entry) > 32:
+            entry = entry[:32]
+        # Strip control characters
+        entry = ''.join(c for c in entry if c.isprintable())
+        return entry if entry else None
+
+    @staticmethod
+    def _validate_discord_webhook(url):
+        """Validate discord webhook URL. Must start with https://discord.com/api/webhooks/ or be empty.
+        Returns cleaned string or empty."""
+        if not url or not isinstance(url, str):
+            return ''
+        url = url.strip()
+        if not url:
+            return ''
+        if url.startswith('https://discord.com/api/webhooks/'):
+            return url
+        return ''
+
     def on_webhook(self, path, request):
         from flask import jsonify, Response
+
+        # Check auth for POST requests if pwnagotchi web auth is enabled
+        if request.method == 'POST' and self._agent:
+            web_cfg = self._agent._config.get('ui', {}).get('web', {})
+            if web_cfg.get('auth', False):
+                auth = request.authorization
+                if not auth or auth.username != web_cfg.get('username', '') or auth.password != web_cfg.get('password', ''):
+                    return jsonify({'error': 'unauthorized'}), 401
 
         # Normalize path: pwnagotchi may pass None, '', '/', or without leading slash
         if path is None:
@@ -876,7 +1017,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/channels':
             data = get_body()
-            self._channels = data.get('channels', '')
+            self._channels = self._validate_channels(data.get('channels', ''))
             self._autohunt = bool(data.get('autohunt', False))
             self._dwell = max(1, min(30, int(data.get('dwell', self._dwell))))
             self._restart_ao()
@@ -887,7 +1028,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/targets/add':
             data = get_body()
-            target = data.get('target', '').strip()
+            target = self._validate_mac_or_ssid(data.get('target', ''))
             if target and target not in self._targets:
                 self._targets.append(target)
                 self._restart_ao()
@@ -897,7 +1038,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/targets/remove':
             data = get_body()
-            target = data.get('target', '').strip()
+            target = (data.get('target', '') or '').strip()
             if target in self._targets:
                 self._targets.remove(target)
                 self._restart_ao()
@@ -907,7 +1048,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/whitelist/add':
             data = get_body()
-            entry = data.get('entry', '').strip()
+            entry = self._validate_mac_or_ssid(data.get('entry', ''))
             if entry and entry not in self._whitelist_entries:
                 self._whitelist_entries.append(entry)
                 self._restart_ao()
@@ -917,7 +1058,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/whitelist/remove':
             data = get_body()
-            entry = data.get('entry', '').strip()
+            entry = (data.get('entry', '') or '').strip()
             if entry in self._whitelist_entries:
                 self._whitelist_entries.remove(entry)
                 self._restart_ao()
@@ -962,6 +1103,11 @@ class AngryOxide(plugins.Plugin):
                             self._agent._view.update(force=True)
                         except Exception:
                             pass
+                    # Disable non-essential plugins for faster mode switch restart
+                    try:
+                        self._save_delayed_plugins()
+                    except Exception:
+                        pass
                     subprocess.run(['pwnoxide-mode', mode], timeout=60, capture_output=True)
                     logging.info("[angryoxide] mode switched to %s via web", mode)
                     return jsonify({'status': 'ok', 'mode': mode})
@@ -971,7 +1117,7 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'POST' and path == '/api/discord-webhook':
             data = get_body()
-            self._discord_webhook = data.get('url', '').strip()
+            self._discord_webhook = self._validate_discord_webhook(data.get('url', ''))
             self.options['discord_webhook'] = self._discord_webhook
             self._save_state()
             return jsonify({'status': 'ok'})
@@ -1126,18 +1272,29 @@ class AngryOxide(plugins.Plugin):
                         existing[section] = {}
                     existing[section].update(values)
                 # Write using simple TOML writer since toml module may not be available
+                def _escape_toml_string(s):
+                    return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+
                 lines = ['# Oxigotchi user settings (managed by web dashboard)', '']
                 for section, values in existing.items():
-                    lines.append('[%s]' % section)
+                    lines.append('[%s]' % _escape_toml_string(str(section)))
                     for k, v in values.items():
                         if isinstance(v, bool):
-                            lines.append('%s = %s' % (k, 'true' if v else 'false'))
+                            lines.append('%s = %s' % (_escape_toml_string(str(k)), 'true' if v else 'false'))
                         elif isinstance(v, (int, float)):
-                            lines.append('%s = %s' % (k, v))
+                            lines.append('%s = %s' % (_escape_toml_string(str(k)), v))
                         elif isinstance(v, list):
-                            lines.append('%s = %s' % (k, str(v)))
+                            items = []
+                            for item in v:
+                                if isinstance(item, bool):
+                                    items.append('true' if item else 'false')
+                                elif isinstance(item, (int, float)):
+                                    items.append(str(item))
+                                else:
+                                    items.append('"%s"' % _escape_toml_string(str(item)))
+                            lines.append('%s = [%s]' % (_escape_toml_string(str(k)), ', '.join(items)))
                         else:
-                            lines.append('%s = "%s"' % (k, str(v)))
+                            lines.append('%s = "%s"' % (_escape_toml_string(str(k)), _escape_toml_string(str(v))))
                     lines.append('')
                 with open(overlay_path, 'w') as f:
                     f.write('\\n'.join(lines))
@@ -1145,6 +1302,18 @@ class AngryOxide(plugins.Plugin):
                 return jsonify({'status': 'ok', 'message': 'Saved. Restart pwnagotchi to apply.'})
             except Exception as e:
                 return jsonify({'status': 'error', 'message': str(e)}), 500
+
+        if request.method == 'POST' and path == '/api/shutdown-pi':
+            logging.info("[angryoxide] Pi shutdown requested via web")
+            import threading
+            threading.Timer(2.0, lambda: os.system('sudo shutdown -h now')).start()
+            return jsonify({'status': 'ok', 'message': 'Shutting down in 2 seconds...'})
+
+        if request.method == 'POST' and path == '/api/restart-pi':
+            logging.info("[angryoxide] Pi restart requested via web")
+            import threading
+            threading.Timer(2.0, lambda: os.system('sudo reboot')).start()
+            return jsonify({'status': 'ok', 'message': 'Restarting in 2 seconds...'})
 
         return jsonify({'error': 'not found'}), 404
 
@@ -1416,6 +1585,10 @@ input:checked+.slider:before{transform:translateX(22px)}
 <button class="action-btn btn-restart" onclick="doAction('restart')">Restart AO</button>
 <button class="action-btn btn-stop" onclick="doAction('stop')">Stop AO</button>
 <button class="action-btn btn-reset" onclick="doAction('reset')">Reset Crashes</button>
+</div>
+<div style="margin-top:8px;display:flex;gap:8px">
+<button class="action-btn" style="flex:1;background:#e94560;color:#fff" onclick="if(confirm('Shut down the Pi?'))doAction('shutdown-pi')">Shutdown Pi</button>
+<button class="action-btn" style="flex:1;background:#f0c040;color:#1a1a2e" onclick="if(confirm('Restart the Pi?'))doAction('restart-pi')">Restart Pi</button>
 </div>
 </div>
 
@@ -1869,6 +2042,9 @@ setInterval(refreshLogs, 30000);
 </html>'''
 
     def on_unload(self, ui):
+        # Fast boot: save plugin states before shutdown
+        self._save_delayed_plugins()
+
         # Show shutdown bull face
         try:
             ui.set('face', self._face('shutdown'))

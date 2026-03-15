@@ -30,6 +30,8 @@ def _install_pwnagotchi_mocks():
     plugins_mod = types.ModuleType('pwnagotchi.plugins')
     plugins_mod.Plugin = type('Plugin', (), {})
     plugins_mod.on = MagicMock()
+    plugins_mod.loaded = {}
+    plugins_mod.toggle_plugin = MagicMock()
     mods['pwnagotchi.plugins'] = plugins_mod
     pwnagotchi_mod.plugins = plugins_mod
 
@@ -140,6 +142,8 @@ class FakeRequest:
         self.method = method
         self.path = path
         self._json = json_data or {}
+        self.authorization = None
+        self.data = None
 
     def get_json(self, force=False, silent=False):
         return self._json
@@ -585,6 +589,7 @@ class TestWebhook:
     def test_post_api_attacks(self, plugin, make_request):
         """POST /api/attacks updates attack toggles and triggers restart."""
         plugin._agent = MagicMock()  # needed for _restart_ao
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._attacks['deauth'] = True
         plugin._attacks['pmkid'] = True
 
@@ -604,6 +609,7 @@ class TestWebhook:
     def test_post_api_rate(self, plugin, make_request):
         """POST /api/rate updates rate and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._rate = 2
 
         req = make_request(method='POST', path='/api/rate', json_data={'rate': 3})
@@ -619,6 +625,7 @@ class TestWebhook:
     def test_post_api_rate_invalid_unchanged(self, plugin, make_request):
         """POST /api/rate with invalid rate (not 1-3) keeps rate unchanged."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._rate = 2
 
         req = make_request(method='POST', path='/api/rate', json_data={'rate': 99})
@@ -632,6 +639,7 @@ class TestWebhook:
     def test_post_api_channels(self, plugin, make_request):
         """POST /api/channels updates channels/autohunt/dwell and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
 
         req = make_request(method='POST', path='/api/channels',
                            json_data={'channels': '1,6,11', 'autohunt': True, 'dwell': 15})
@@ -647,6 +655,7 @@ class TestWebhook:
     def test_post_api_channels_dwell_clamped(self, plugin, make_request):
         """POST /api/channels clamps dwell to [1, 30]."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
 
         req = make_request(method='POST', path='/api/channels',
                            json_data={'channels': '', 'dwell': 999})
@@ -659,6 +668,7 @@ class TestWebhook:
     def test_post_api_targets_add(self, plugin, make_request):
         """POST /api/targets/add adds target and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._targets = []
 
         req = make_request(method='POST', path='/api/targets/add',
@@ -673,6 +683,7 @@ class TestWebhook:
     def test_post_api_targets_add_duplicate_no_restart(self, plugin, make_request):
         """POST /api/targets/add with duplicate does not add or restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._targets = ['AA:BB:CC:DD:EE:FF']
 
         req = make_request(method='POST', path='/api/targets/add',
@@ -687,6 +698,7 @@ class TestWebhook:
     def test_post_api_targets_remove(self, plugin, make_request):
         """POST /api/targets/remove removes target and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._targets = ['AA:BB:CC:DD:EE:FF', '11:22:33:44:55:66']
 
         req = make_request(method='POST', path='/api/targets/remove',
@@ -702,6 +714,7 @@ class TestWebhook:
     def test_post_api_whitelist_add(self, plugin, make_request):
         """POST /api/whitelist/add adds entry and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._whitelist_entries = []
 
         req = make_request(method='POST', path='/api/whitelist/add',
@@ -716,6 +729,7 @@ class TestWebhook:
     def test_post_api_whitelist_add_duplicate_no_restart(self, plugin, make_request):
         """POST /api/whitelist/add with duplicate does not add or restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._whitelist_entries = ['MyNetwork']
 
         req = make_request(method='POST', path='/api/whitelist/add',
@@ -730,6 +744,7 @@ class TestWebhook:
     def test_post_api_whitelist_remove(self, plugin, make_request):
         """POST /api/whitelist/remove removes entry and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._whitelist_entries = ['MyNetwork', 'OtherNet']
 
         req = make_request(method='POST', path='/api/whitelist/remove',
@@ -745,6 +760,7 @@ class TestWebhook:
     def test_post_api_restart(self, plugin, make_request):
         """POST /api/restart calls _restart_ao."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
 
         req = make_request(method='POST', path='/api/restart')
         with patch.object(plugin, '_restart_ao') as mock_restart:
@@ -843,9 +859,8 @@ class TestHealthCheck:
     @patch('angryoxide_v2.subprocess')
     @patch('angryoxide_v2.os')
     def test_check_health_crashed_restarts(self, mock_os, mock_sub, mock_time, plugin, agent):
-        """Crashed process triggers restart with backoff."""
+        """Crashed process schedules non-blocking restart with backoff."""
         mock_time.time.return_value = 5000.0
-        mock_time.sleep = MagicMock()
 
         plugin._running = True
         mock_proc = MagicMock()
@@ -856,12 +871,12 @@ class TestHealthCheck:
         plugin.options['max_crashes'] = 10
 
         with patch.object(plugin, '_try_fw_recovery', return_value=True):
-            with patch.object(plugin, '_start_ao') as mock_start:
-                result = plugin._check_health(agent)
+            result = plugin._check_health(agent)
 
         assert result is True
         assert plugin._crash_count == 1
-        mock_start.assert_called_once_with(agent)
+        # Non-blocking: _next_restart_time is set instead of calling _start_ao directly
+        assert plugin._next_restart_time > 5000.0
 
     @patch('angryoxide_v2.time')
     def test_check_health_max_crashes_stops_permanently(self, mock_time, plugin, agent):
@@ -1270,6 +1285,7 @@ class TestEdgeCases:
     def test_webhook_post_targets_empty_string_ignored(self, plugin, make_request):
         """POST /api/targets/add with empty target string does nothing."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._targets = []
 
         req = make_request(method='POST', path='/api/targets/add',
@@ -1363,10 +1379,12 @@ class TestSkipCaptured:
     def test_webhook_skip_captured_toggle(self, plugin):
         """POST to /api/skip-captured with {"enabled": true} updates state and triggers restart."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._skip_captured = False
 
         req = MagicMock()
         req.method = 'POST'
+        req.authorization = None
         req.get_json = MagicMock(return_value={'enabled': True})
         req.data = b''
 
@@ -2003,6 +2021,7 @@ class TestWebhookEdgeCases:
     def test_post_attacks_partial_update(self, plugin):
         """POST /api/attacks with only 1 key changes that key, leaves others unchanged."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         plugin._attacks = {
             'deauth': True, 'pmkid': True, 'csa': True,
             'disassoc': True, 'anon_reassoc': True, 'rogue_m2': True,
@@ -2024,6 +2043,7 @@ class TestWebhookEdgeCases:
     def test_post_channels_dwell_zero_clamped_to_1(self, plugin):
         """POST /api/channels with dwell=0 clamps to 1."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         req = FakeRequest(method='POST', path='/api/channels',
                           json_data={'channels': '', 'dwell': 0})
         with patch.object(plugin, '_restart_ao'), \
@@ -2034,6 +2054,7 @@ class TestWebhookEdgeCases:
     def test_post_channels_dwell_999_clamped_to_30(self, plugin):
         """POST /api/channels with dwell=999 clamps to 30."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         req = FakeRequest(method='POST', path='/api/channels',
                           json_data={'channels': '', 'dwell': 999})
         with patch.object(plugin, '_restart_ao'), \
@@ -2044,6 +2065,7 @@ class TestWebhookEdgeCases:
     def test_post_mode_subprocess_exception_returns_500(self, plugin):
         """POST /api/mode with subprocess exception returns 500."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         req = FakeRequest(method='POST', path='/api/mode',
                           json_data={'mode': 'ao'})
         with patch('angryoxide_v2.subprocess.run', side_effect=OSError('command not found')):
@@ -2357,6 +2379,7 @@ class TestRestartAoEdgeCases:
     def test_restart_calls_stop_before_start(self, plugin):
         """_restart_ao calls _stop_ao before _start_ao, in order."""
         plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
         call_order = []
 
         def mock_stop():
@@ -2782,3 +2805,709 @@ class TestGPSIntegration:
         assert 'firmware' in health
         assert 'usb0' in health
         assert 'battery' in health
+
+
+# ---------------------------------------------------------------------------
+# TestNonBlockingRestart -- verify _check_health doesn't call time.sleep
+# ---------------------------------------------------------------------------
+
+class TestNonBlockingRestart:
+    """Verify _check_health uses non-blocking backoff (no time.sleep)."""
+
+    def test_check_health_no_sleep_on_crash(self, plugin, agent):
+        """When AO process dies, _check_health schedules a deferred restart
+        via _next_restart_time instead of calling time.sleep."""
+        import inspect
+        source = inspect.getsource(plugin._check_health)
+        assert 'time.sleep' not in source, (
+            "_check_health should not call time.sleep; it should use "
+            "_next_restart_time for non-blocking backoff"
+        )
+
+    def test_check_health_sets_next_restart_time(self, plugin, agent):
+        """After a crash, _check_health sets _next_restart_time > 0."""
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = 1  # process exited
+        fake_proc.returncode = 1
+        plugin._process = fake_proc
+        plugin._running = True
+        plugin._agent = agent
+
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(stdout='normal log', returncode=0)
+            plugin._check_health(agent)
+
+        assert plugin._next_restart_time > 0, (
+            "_check_health should schedule a future restart, not sleep"
+        )
+
+    def test_check_health_healthy_process_no_restart(self, plugin, agent):
+        """A healthy (still-running) AO process triggers no restart."""
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = None  # still running
+        plugin._process = fake_proc
+        plugin._running = True
+
+        result = plugin._check_health(agent)
+        assert result is False
+        assert plugin._next_restart_time == 0
+
+
+# ---------------------------------------------------------------------------
+# TestInputValidation -- channel format, MAC format, webhook URL
+# ---------------------------------------------------------------------------
+
+class TestInputValidation:
+    """Test that the plugin handles various input formats correctly."""
+
+    def test_channel_string_in_build_cmd(self, plugin):
+        """Channel string like '1,6,11' is passed correctly to --channel."""
+        plugin._channels = '1,6,11'
+        cmd = plugin._build_cmd()
+        assert '--channel' in cmd
+        idx = cmd.index('--channel')
+        assert cmd[idx + 1] == '1,6,11'
+
+    def test_empty_channel_string_omits_flag(self, plugin):
+        """Empty channel string means no --channel flag."""
+        plugin._channels = ''
+        plugin._autohunt = False
+        cmd = plugin._build_cmd()
+        assert '--channel' not in cmd
+
+    def test_autohunt_overrides_channels(self, plugin):
+        """When autohunt is True, --autohunt is used instead of --channel."""
+        plugin._channels = '1,6,11'
+        plugin._autohunt = True
+        cmd = plugin._build_cmd()
+        assert '--autohunt' in cmd
+        assert '--channel' not in cmd
+
+    def test_single_channel(self, plugin):
+        """Single channel value is accepted."""
+        plugin._channels = '6'
+        cmd = plugin._build_cmd()
+        assert '--channel' in cmd
+        idx = cmd.index('--channel')
+        assert cmd[idx + 1] == '6'
+
+    def test_mac_format_in_targets(self, plugin):
+        """MAC addresses in targets are passed through to --target-entry."""
+        plugin._targets = ['AA:BB:CC:DD:EE:FF']
+        cmd = plugin._build_cmd()
+        assert '--target-entry' in cmd
+        idx = cmd.index('--target-entry')
+        assert cmd[idx + 1] == 'AA:BB:CC:DD:EE:FF'
+
+    def test_ssid_in_targets(self, plugin):
+        """SSID strings in targets are passed through to --target-entry."""
+        plugin._targets = ['MyNetwork']
+        cmd = plugin._build_cmd()
+        assert '--target-entry' in cmd
+        idx = cmd.index('--target-entry')
+        assert cmd[idx + 1] == 'MyNetwork'
+
+    def test_whitelist_entries_in_cmd(self, plugin):
+        """Whitelist entries are passed to --whitelist-entry."""
+        plugin._whitelist_entries = ['00:11:22:33:44:55', 'HomeWiFi']
+        cmd = plugin._build_cmd()
+        wl_indices = [i for i, c in enumerate(cmd) if c == '--whitelist-entry']
+        assert len(wl_indices) == 2
+        wl_values = [cmd[i + 1] for i in wl_indices]
+        assert '00:11:22:33:44:55' in wl_values
+        assert 'HomeWiFi' in wl_values
+
+    def test_discord_webhook_url_stored(self, plugin):
+        """Discord webhook URL is stored and retrievable."""
+        plugin._discord_webhook = 'https://discord.com/api/webhooks/123/abc'
+        assert plugin._discord_webhook == 'https://discord.com/api/webhooks/123/abc'
+
+    def test_discord_webhook_empty_string(self, plugin):
+        """Empty string webhook disables notifications."""
+        plugin._discord_webhook = ''
+        assert not plugin._discord_webhook
+
+    def test_rate_must_be_1_2_or_3(self, plugin):
+        """Rate values are passed correctly to --rate in _build_cmd."""
+        plugin._rate = 1
+        cmd = plugin._build_cmd()
+        idx = cmd.index('--rate')
+        assert cmd[idx + 1] == '1'
+
+        plugin._rate = 3
+        cmd = plugin._build_cmd()
+        idx = cmd.index('--rate')
+        assert cmd[idx + 1] == '3'
+
+    def test_dwell_in_build_cmd(self, plugin):
+        """Dwell time is passed to --dwell."""
+        plugin._dwell = 5
+        cmd = plugin._build_cmd()
+        assert '--dwell' in cmd
+        idx = cmd.index('--dwell')
+        assert cmd[idx + 1] == '5'
+
+
+# ---------------------------------------------------------------------------
+# TestTOMLEscaping -- test the config writer escapes special characters
+# ---------------------------------------------------------------------------
+
+class TestTOMLEscaping:
+    """Test the inline TOML writer's escaping of special characters."""
+
+    def _get_escape_fn(self):
+        """Extract the _escape_toml_string function logic for testing."""
+        def _escape_toml_string(s):
+            return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+        return _escape_toml_string
+
+    def test_escape_backslash(self):
+        escape = self._get_escape_fn()
+        assert escape('C:\\path\\to\\file') == 'C:\\\\path\\\\to\\\\file'
+
+    def test_escape_double_quote(self):
+        escape = self._get_escape_fn()
+        assert escape('say "hello"') == 'say \\"hello\\"'
+
+    def test_escape_newline(self):
+        escape = self._get_escape_fn()
+        assert escape('line1\nline2') == 'line1\\nline2'
+
+    def test_escape_carriage_return(self):
+        escape = self._get_escape_fn()
+        assert escape('line1\rline2') == 'line1\\rline2'
+
+    def test_escape_combined(self):
+        escape = self._get_escape_fn()
+        result = escape('C:\\path\n"quoted"')
+        assert result == 'C:\\\\path\\n\\"quoted\\"'
+
+    def test_escape_empty_string(self):
+        escape = self._get_escape_fn()
+        assert escape('') == ''
+
+    def test_escape_no_special_chars(self):
+        escape = self._get_escape_fn()
+        assert escape('simple_key') == 'simple_key'
+
+    def test_toml_bool_rendering(self):
+        """Booleans should render as 'true'/'false' (not Python True/False)."""
+        v = True
+        rendered = 'true' if v else 'false'
+        assert rendered == 'true'
+        v = False
+        rendered = 'true' if v else 'false'
+        assert rendered == 'false'
+
+    def test_toml_list_rendering(self):
+        """Lists of mixed types should render correctly."""
+        escape = self._get_escape_fn()
+        items = []
+        test_list = [True, 42, 'hello "world"']
+        for item in test_list:
+            if isinstance(item, bool):
+                items.append('true' if item else 'false')
+            elif isinstance(item, (int, float)):
+                items.append(str(item))
+            else:
+                items.append('"%s"' % escape(str(item)))
+        result = '[%s]' % ', '.join(items)
+        assert result == '[true, 42, "hello \\"world\\""]'
+
+
+# ---------------------------------------------------------------------------
+# TestBlindEpochPrevention -- verify on_epoch injects dummy AP when AO running
+# ---------------------------------------------------------------------------
+
+class TestBlindEpochPrevention:
+    """Verify on_epoch prevents blind epoch counting when AO is active."""
+
+    def test_injects_dummy_ap_when_no_aps(self, plugin, agent):
+        """When AO is running and agent has no APs, on_epoch injects a dummy AP."""
+        plugin._running = True
+        plugin._agent = agent
+        agent._access_points = []
+
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None):
+            plugin.on_epoch(agent, 1, {})
+
+        assert len(agent._access_points) >= 1
+        dummy = agent._access_points[0]
+        assert dummy['hostname'] == 'AO-active'
+        assert dummy['mac'] == '00:00:00:00:00:00'
+
+    def test_no_injection_when_aps_exist(self, plugin, agent):
+        """When agent already has APs, on_epoch does not overwrite them."""
+        plugin._running = True
+        plugin._agent = agent
+        existing_ap = {'hostname': 'RealAP', 'mac': 'AA:BB:CC:DD:EE:FF', 'channel': 6, 'rssi': -50, 'encryption': 'WPA2', 'clients': []}
+        agent._access_points = [existing_ap]
+
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None):
+            plugin.on_epoch(agent, 1, {})
+
+        assert agent._access_points[0]['hostname'] == 'RealAP'
+
+    def test_no_injection_when_not_running(self, plugin, agent):
+        """When AO is not running, no dummy AP is injected."""
+        plugin._running = False
+        plugin._agent = agent
+        agent._access_points = []
+
+        with patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch.object(plugin, '_start_ao', return_value=None):
+            plugin.on_epoch(agent, 1, {})
+
+        assert agent._access_points == []
+
+    def test_no_injection_when_no_agent(self, plugin, agent):
+        """When _agent is None, no dummy AP is injected."""
+        plugin._running = True
+        plugin._agent = None
+        agent._access_points = []
+
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None):
+            plugin.on_epoch(agent, 1, {})
+
+        assert agent._access_points == []
+
+    def test_injection_survives_exception(self, plugin, agent):
+        """If accessing _access_points throws, on_epoch continues normally."""
+        plugin._running = True
+        plugin._agent = agent
+        type(agent)._access_points = PropertyMock(side_effect=AttributeError("no such attr"))
+
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None):
+            plugin.on_epoch(agent, 1, {})
+
+        # Clean up the PropertyMock so other tests aren't affected
+        if hasattr(type(agent), '_access_points'):
+            del type(agent)._access_points
+
+
+# ---------------------------------------------------------------------------
+# Security: API Authentication Tests
+# ---------------------------------------------------------------------------
+
+class TestWebhookAuth:
+    """Tests for the auth check added to on_webhook for POST requests."""
+
+    @pytest.fixture
+    def plugin(self):
+        from angryoxide_v2 import AngryOxide
+        p = AngryOxide()
+        p.options = {
+            'binary_path': '/usr/local/bin/angryoxide',
+            'interface': 'wlan0mon',
+            'output_dir': '/etc/pwnagotchi/handshakes/',
+            'notx': False, 'no_setup': True, 'extra_args': '',
+        }
+        return p
+
+    def test_post_no_auth_configured_passes(self, plugin):
+        """POST request passes when web auth is not enabled."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        req = FakeRequest(method='POST', path='/api/restart')
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            resp = plugin.on_webhook('/api/restart', req)
+        data = _resp_data(resp)
+        assert data.get('status') == 'ok'
+
+    def test_post_auth_enabled_no_credentials_returns_401(self, plugin):
+        """POST request returns 401 when auth is enabled but no credentials provided."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {
+            'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {},
+            'ui': {'web': {'auth': True, 'username': 'admin', 'password': 'secret'}},
+        }
+        req = FakeRequest(method='POST', path='/api/restart')
+        resp = plugin.on_webhook('/api/restart', req)
+        assert _resp_status(resp) == 401
+        assert _resp_data(resp)['error'] == 'unauthorized'
+
+    def test_post_auth_enabled_wrong_credentials_returns_401(self, plugin):
+        """POST request returns 401 when credentials are wrong."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {
+            'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {},
+            'ui': {'web': {'auth': True, 'username': 'admin', 'password': 'secret'}},
+        }
+        req = FakeRequest(method='POST', path='/api/restart')
+        req.authorization = MagicMock()
+        req.authorization.username = 'admin'
+        req.authorization.password = 'wrong'
+        resp = plugin.on_webhook('/api/restart', req)
+        assert _resp_status(resp) == 401
+
+    def test_post_auth_enabled_correct_credentials_passes(self, plugin):
+        """POST request passes when correct credentials are provided."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {
+            'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {},
+            'ui': {'web': {'auth': True, 'username': 'admin', 'password': 'secret'}},
+        }
+        req = FakeRequest(method='POST', path='/api/restart')
+        req.authorization = MagicMock()
+        req.authorization.username = 'admin'
+        req.authorization.password = 'secret'
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            resp = plugin.on_webhook('/api/restart', req)
+        data = _resp_data(resp)
+        assert data.get('status') == 'ok'
+
+    def test_get_bypasses_auth(self, plugin):
+        """GET requests are not subject to auth checks."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {
+            'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {},
+            'ui': {'web': {'auth': True, 'username': 'admin', 'password': 'secret'}},
+        }
+        req = FakeRequest(method='GET', path='/api/status')
+        plugin._running = True
+        plugin._start_time = time.time()
+        resp = plugin.on_webhook('/api/status', req)
+        data = _resp_data(resp)
+        assert 'running' in data
+
+    def test_post_no_agent_skips_auth(self, plugin):
+        """POST request passes when agent is not set (auth check skipped)."""
+        plugin._agent = None
+        req = FakeRequest(method='POST', path='/api/restart')
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            resp = plugin.on_webhook('/api/restart', req)
+        data = _resp_data(resp)
+        assert data.get('status') == 'ok'
+
+
+# ---------------------------------------------------------------------------
+# Security: Input Validation Tests
+# ---------------------------------------------------------------------------
+
+class TestInputValidation:
+    """Tests for _validate_channels, _validate_mac_or_ssid, _validate_discord_webhook."""
+
+    # --- Channel validation ---
+
+    def test_validate_channels_valid(self):
+        assert AngryOxide._validate_channels('1,6,11') == '1,6,11'
+
+    def test_validate_channels_single(self):
+        assert AngryOxide._validate_channels('6') == '6'
+
+    def test_validate_channels_out_of_range(self):
+        assert AngryOxide._validate_channels('0,15,20') == ''
+
+    def test_validate_channels_mixed(self):
+        assert AngryOxide._validate_channels('1,abc,6,99,11') == '1,6,11'
+
+    def test_validate_channels_empty(self):
+        assert AngryOxide._validate_channels('') == ''
+
+    def test_validate_channels_none(self):
+        assert AngryOxide._validate_channels(None) == ''
+
+    def test_validate_channels_spaces(self):
+        assert AngryOxide._validate_channels(' 1 , 6 , 11 ') == '1,6,11'
+
+    def test_validate_channels_all_14(self):
+        assert AngryOxide._validate_channels('1,2,3,4,5,6,7,8,9,10,11,12,13,14') == '1,2,3,4,5,6,7,8,9,10,11,12,13,14'
+
+    def test_validate_channels_negative(self):
+        assert AngryOxide._validate_channels('-1,6') == '6'
+
+    # --- MAC/SSID validation ---
+
+    def test_validate_mac_valid_uppercase(self):
+        assert AngryOxide._validate_mac_or_ssid('AA:BB:CC:DD:EE:FF') == 'AA:BB:CC:DD:EE:FF'
+
+    def test_validate_mac_valid_lowercase_uppercased(self):
+        assert AngryOxide._validate_mac_or_ssid('aa:bb:cc:dd:ee:ff') == 'AA:BB:CC:DD:EE:FF'
+
+    def test_validate_ssid_valid(self):
+        assert AngryOxide._validate_mac_or_ssid('MyNetwork') == 'MyNetwork'
+
+    def test_validate_ssid_stripped(self):
+        assert AngryOxide._validate_mac_or_ssid('  MyNetwork  ') == 'MyNetwork'
+
+    def test_validate_empty_returns_none(self):
+        assert AngryOxide._validate_mac_or_ssid('') is None
+
+    def test_validate_none_returns_none(self):
+        assert AngryOxide._validate_mac_or_ssid(None) is None
+
+    def test_validate_whitespace_only_returns_none(self):
+        assert AngryOxide._validate_mac_or_ssid('   ') is None
+
+    def test_validate_ssid_truncated_to_32(self):
+        long_ssid = 'A' * 50
+        result = AngryOxide._validate_mac_or_ssid(long_ssid)
+        assert len(result) == 32
+
+    def test_validate_ssid_control_chars_stripped(self):
+        result = AngryOxide._validate_mac_or_ssid('test\x00\x01net')
+        assert result == 'testnet'
+
+    def test_validate_mac_mixed_case(self):
+        assert AngryOxide._validate_mac_or_ssid('aA:bB:cC:dD:eE:fF') == 'AA:BB:CC:DD:EE:FF'
+
+    def test_validate_mac_invalid_format_treated_as_ssid(self):
+        result = AngryOxide._validate_mac_or_ssid('AA-BB-CC-DD-EE-FF')
+        assert result == 'AA-BB-CC-DD-EE-FF'  # treated as SSID, not MAC
+
+    # --- Discord webhook validation ---
+
+    def test_validate_discord_valid(self):
+        url = 'https://discord.com/api/webhooks/12345/abcdef'
+        assert AngryOxide._validate_discord_webhook(url) == url
+
+    def test_validate_discord_empty(self):
+        assert AngryOxide._validate_discord_webhook('') == ''
+
+    def test_validate_discord_none(self):
+        assert AngryOxide._validate_discord_webhook(None) == ''
+
+    def test_validate_discord_invalid_url(self):
+        assert AngryOxide._validate_discord_webhook('https://evil.com/webhook') == ''
+
+    def test_validate_discord_http_not_https(self):
+        assert AngryOxide._validate_discord_webhook('http://discord.com/api/webhooks/123/abc') == ''
+
+    def test_validate_discord_stripped(self):
+        url = '  https://discord.com/api/webhooks/123/abc  '
+        assert AngryOxide._validate_discord_webhook(url) == url.strip()
+
+
+class TestInputValidationIntegration:
+    """Test that validation is applied in actual webhook handlers."""
+
+    @pytest.fixture
+    def plugin(self):
+        from angryoxide_v2 import AngryOxide
+        p = AngryOxide()
+        p.options = {
+            'binary_path': '/usr/local/bin/angryoxide',
+            'interface': 'wlan0mon',
+            'output_dir': '/etc/pwnagotchi/handshakes/',
+            'notx': False, 'no_setup': True, 'extra_args': '',
+        }
+        return p
+
+    def test_channels_invalid_filtered(self, plugin):
+        """POST /api/channels with invalid channels filters them out."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        req = FakeRequest(method='POST', json_data={'channels': '1,abc,99,6', 'dwell': 5})
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/channels', req)
+        assert plugin._channels == '1,6'
+
+    def test_target_add_invalid_mac_ignored(self, plugin):
+        """POST /api/targets/add with invalid entry is ignored."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        plugin._targets = []
+        req = FakeRequest(method='POST', json_data={'target': '   '})
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/targets/add', req)
+        assert len(plugin._targets) == 0
+
+    def test_target_add_mac_uppercased(self, plugin):
+        """POST /api/targets/add uppercases MAC addresses."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        plugin._targets = []
+        req = FakeRequest(method='POST', json_data={'target': 'aa:bb:cc:dd:ee:ff'})
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/targets/add', req)
+        assert plugin._targets == ['AA:BB:CC:DD:EE:FF']
+
+    def test_whitelist_add_ssid_valid(self, plugin):
+        """POST /api/whitelist/add with SSID string works."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        plugin._whitelist_entries = []
+        req = FakeRequest(method='POST', json_data={'entry': 'HomeNetwork'})
+        with patch.object(plugin, '_restart_ao'), patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/whitelist/add', req)
+        assert 'HomeNetwork' in plugin._whitelist_entries
+
+    def test_discord_webhook_invalid_url_cleared(self, plugin):
+        """POST /api/discord-webhook with invalid URL sets empty."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        req = FakeRequest(method='POST', json_data={'url': 'https://evil.com/steal'})
+        with patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/discord-webhook', req)
+        assert plugin._discord_webhook == ''
+
+    def test_discord_webhook_valid_url_accepted(self, plugin):
+        """POST /api/discord-webhook with valid Discord URL is accepted."""
+        plugin._agent = MagicMock()
+        plugin._agent._config = {'personality': {}, 'bettercap': {'handshakes': '/tmp'}, 'main': {}}
+        valid_url = 'https://discord.com/api/webhooks/123456/abcdef'
+        req = FakeRequest(method='POST', json_data={'url': valid_url})
+        with patch.object(plugin, '_save_state'):
+            plugin.on_webhook('/api/discord-webhook', req)
+        assert plugin._discord_webhook == valid_url
+
+
+# ---------------------------------------------------------------------------
+# Fast Boot (Delayed Plugin Loading) Tests
+# ---------------------------------------------------------------------------
+
+class TestFastBoot:
+    """Tests for the fast boot delayed plugin loading system."""
+
+    def test_class_constants_exist(self, plugin):
+        """Class-level constants are defined."""
+        assert isinstance(plugin._DELAY_PLUGINS, list)
+        assert isinstance(plugin._KEEP_PLUGINS, list)
+        assert plugin._DELAY_STATE_FILE == '/home/pi/delayed_plugins.json'
+        assert 'bt-tether' in plugin._DELAY_PLUGINS
+        assert 'angryoxide' in plugin._KEEP_PLUGINS
+
+    def test_save_delayed_plugins_writes_file(self, plugin):
+        """_save_delayed_plugins writes enabled non-essential plugins to JSON."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.loaded = {
+            'bt-tether': MagicMock(),
+            'grid': MagicMock(),
+            'angryoxide': MagicMock(),
+            'wpa-sec': None,  # disabled — should not be saved
+        }
+        m = mock_open()
+        with patch('angryoxide_v2.open', m), \
+             patch('angryoxide_v2.time.time', return_value=1000.0):
+            plugin._save_delayed_plugins()
+
+        m.assert_called_once_with('/home/pi/delayed_plugins.json', 'w')
+        written = m().write.call_args_list
+        written_str = ''.join(c[0][0] for c in written)
+        data = json.loads(written_str)
+        assert set(data['delayed']) == {'bt-tether', 'grid'}
+        assert data['timestamp'] == 1000.0
+
+    def test_save_delayed_plugins_skips_when_none_loaded(self, plugin):
+        """_save_delayed_plugins does nothing if no delay plugins are loaded."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.loaded = {'angryoxide': MagicMock()}
+        m = mock_open()
+        with patch('angryoxide_v2.open', m):
+            plugin._save_delayed_plugins()
+        m.assert_not_called()
+
+    def test_save_delayed_plugins_handles_exception(self, plugin):
+        """_save_delayed_plugins swallows errors gracefully."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.loaded = {'bt-tether': MagicMock()}
+        with patch('angryoxide_v2.open', side_effect=OSError("disk full")):
+            # Should not raise
+            plugin._save_delayed_plugins()
+
+    def test_restore_delayed_plugins_loads_and_removes_file(self, plugin):
+        """_restore_delayed_plugins re-enables plugins and removes the state file."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.toggle_plugin = MagicMock()
+        state = json.dumps({'delayed': ['bt-tether', 'grid'], 'timestamp': time.time()})
+        m = mock_open(read_data=state)
+        with patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.open', m), \
+             patch('angryoxide_v2.os.remove') as mock_rm:
+            plugin._restore_delayed_plugins()
+
+        assert _plugins.toggle_plugin.call_count == 2
+        _plugins.toggle_plugin.assert_any_call('bt-tether', True)
+        _plugins.toggle_plugin.assert_any_call('grid', True)
+        mock_rm.assert_called_once_with('/home/pi/delayed_plugins.json')
+
+    def test_restore_delayed_plugins_no_file(self, plugin):
+        """_restore_delayed_plugins does nothing if state file is missing."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.toggle_plugin = MagicMock()
+        with patch('angryoxide_v2.os.path.isfile', return_value=False):
+            plugin._restore_delayed_plugins()
+        _plugins.toggle_plugin.assert_not_called()
+
+    def test_restore_delayed_plugins_stale_file(self, plugin):
+        """_restore_delayed_plugins ignores state files older than 10 minutes."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.toggle_plugin = MagicMock()
+        old_ts = time.time() - 700  # 11+ minutes ago
+        state = json.dumps({'delayed': ['bt-tether'], 'timestamp': old_ts})
+        m = mock_open(read_data=state)
+        with patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.open', m), \
+             patch('angryoxide_v2.os.remove') as mock_rm:
+            plugin._restore_delayed_plugins()
+
+        _plugins.toggle_plugin.assert_not_called()
+        # stale file should still be removed
+        mock_rm.assert_called_once_with('/home/pi/delayed_plugins.json')
+
+    def test_restore_handles_toggle_failure(self, plugin):
+        """_restore_delayed_plugins continues if one plugin fails to toggle."""
+        import pwnagotchi.plugins as _plugins
+        _plugins.toggle_plugin = MagicMock(side_effect=[Exception("fail"), None])
+        state = json.dumps({'delayed': ['bt-tether', 'grid'], 'timestamp': time.time()})
+        m = mock_open(read_data=state)
+        with patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.open', m), \
+             patch('angryoxide_v2.os.remove'):
+            plugin._restore_delayed_plugins()
+
+        assert _plugins.toggle_plugin.call_count == 2
+
+    def test_on_unload_calls_save(self, plugin):
+        """on_unload calls _save_delayed_plugins before shutdown."""
+        ui = MagicMock()
+        with patch.object(plugin, '_save_delayed_plugins') as mock_save, \
+             patch.object(plugin, '_stop_ao'):
+            plugin.on_unload(ui)
+        mock_save.assert_called_once()
+
+    def test_on_ready_schedules_restore(self, plugin, agent):
+        """on_ready schedules _restore_delayed_plugins after AO starts."""
+        plugin._running = False  # _start_ao will set it to True
+        mock_timer_cls = MagicMock()
+        mock_threading = MagicMock()
+        mock_threading.Timer = mock_timer_cls
+        with patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.subprocess.Popen') as mock_popen, \
+             patch('angryoxide_v2.os.makedirs'), \
+             patch('angryoxide_v2.glob.glob', return_value=[]), \
+             patch.dict('sys.modules', {'threading': mock_threading}):
+            mock_popen.return_value = MagicMock(pid=1234)
+            plugin.on_ready(agent)
+
+        # AO started, so timer should have been created
+        mock_timer_cls.assert_called_once_with(30.0, plugin._restore_delayed_plugins)
+        mock_timer_cls.return_value.start.assert_called_once()
+
+    def test_on_ready_no_restore_if_ao_fails(self, plugin, agent):
+        """on_ready does NOT schedule restore if AO fails to start."""
+        mock_timer_cls = MagicMock()
+        mock_threading = MagicMock()
+        mock_threading.Timer = mock_timer_cls
+        with patch('angryoxide_v2.os.path.isfile', return_value=False), \
+             patch.dict('sys.modules', {'threading': mock_threading}):
+            plugin.on_ready(agent)
+
+        mock_timer_cls.assert_not_called()

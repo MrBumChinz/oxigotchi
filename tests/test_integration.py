@@ -1,5 +1,5 @@
 """
-Live integration tests for the Oxagotchi system.
+Live integration tests for the Oxigotchi system.
 
 Connects to the real Pi at 192.168.137.8 and verifies the full stack:
 firmware, AO binary, plugin, web dashboard, services, and safety features.
@@ -281,4 +281,46 @@ class TestSafety:
 
     def test_boot_splash_service_enabled(self):
         out, _, rc = ssh_cmd("systemctl is-enabled oxagotchi-splash.service")
-        assert out == "enabled", f"oxagotchi-splash.service is {out}, expected enabled"
+        assert out == "enabled", f"oxigotchi-splash service is {out}, expected enabled"
+
+    def test_csrf_patch_applied(self):
+        """Plugin webhooks must be exempted from CSRF."""
+        out, _, rc = ssh_cmd(
+            "grep -c 'csrf.exempt' "
+            "/home/pi/.pwn/lib/python3.13/site-packages/pwnagotchi/ui/web/handler.py"
+        )
+        assert rc == 0 and out.strip() != '0', "CSRF exemption not found in handler.py"
+
+    def test_apt_holds_active(self):
+        """Critical packages must be held to prevent breakage from apt upgrade."""
+        out, _, rc = ssh_cmd("apt-mark showhold")
+        assert rc == 0
+        held = set(out.splitlines())
+        for pkg in ["linux-image-rpi-v8", "firmware-brcm80211"]:
+            assert pkg in held, f"{pkg} is not held — apt upgrade could break the system"
+
+    def test_firmware_protection_hook(self):
+        """Apt hook must exist to protect patched firmware binary."""
+        _, _, rc = ssh_cmd(
+            "test -f /etc/apt/apt.conf.d/99-oxigotchi-firmware-protect"
+        )
+        assert rc == 0, "Firmware protection apt hook not found"
+
+    def test_bt_keepalive_timer_enabled(self):
+        """BT keepalive timer must be enabled to prevent tether drops."""
+        out, _, rc = ssh_cmd("systemctl is-enabled bt-keepalive.timer")
+        assert out == "enabled", f"bt-keepalive.timer is {out}, expected enabled"
+
+    def test_tweak_view_deployed(self):
+        """tweak_view.json display layout must be deployed."""
+        _, _, rc = ssh_cmd(
+            "test -f /etc/pwnagotchi/custom-plugins/tweak_view.json"
+        )
+        assert rc == 0, "tweak_view.json not found on Pi"
+
+    def test_avahi_hostname(self):
+        """Avahi hostname should be set to oxigotchi for mDNS discovery."""
+        out, _, rc = ssh_cmd(
+            "grep 'host-name=oxigotchi' /etc/avahi/avahi-daemon.conf"
+        )
+        assert rc == 0, "Avahi hostname not set to oxigotchi"

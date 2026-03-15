@@ -1,0 +1,19 @@
+[Unit]
+Description=Watch pwnagotchi package for changes (oxigotchi patch trigger)
+Documentation=https://github.com/oxigotchi
+
+[Path]
+# Monitor the pwnagotchi site-packages directory for file changes.
+# PathChanged fires when a file is closed after writing — catches pip/apt updates.
+PathChanged=/home/pi/.pwn/lib/python3.13/site-packages/pwnagotchi/
+# Also watch pwnlib in case the pwnagotchi system package is updated via apt.
+PathChanged=/usr/bin/pwnlib
+
+# Debounce: don't trigger more than once per package upgrade transaction.
+# systemd coalesces events within a short window automatically, but
+# MakeDirectory and TriggerLimitBurst provide additional protection.
+TriggerLimitIntervalSec=30
+TriggerLimitBurst=1
+
+[Install]
+WantedBy=multi-user.target

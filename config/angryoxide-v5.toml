@@ -13,8 +13,13 @@ no_setup = true
 nexmon_mode = false
 output_dir = "/etc/pwnagotchi/handshakes/"
 
-# Disable plugins that are redundant or overlap in AO mode
+# Disable plugins that are redundant or conflict in AO mode
 [main.plugins.walkby]
+enabled = false
+
+# fix_services conflicts with AO — it runs modprobe -r brcmfmac on crash,
+# which kills the SDIO bus. AO plugin handles its own crash recovery.
+[main.plugins.fix_services]
 enabled = false
 
 [main.plugins.enable_assoc]
@@ -26,13 +31,9 @@ enabled = false
 # Enable wpa-sec for automatic handshake cracking
 [main.plugins.wpa-sec]
 enabled = true
-api_key = ""
+api_key = "YOUR_WPA_SEC_API_KEY"
 api_url = "https://wpa-sec.stanev.org"
 download_results = true
-
-[main]
-# Prevent blind-epoch restarts when AO holds the WiFi interface
-mon_max_blind_epochs = 9999
 
 [personality]
 frame_padding = true

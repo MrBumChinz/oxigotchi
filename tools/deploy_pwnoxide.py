@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """PwnOxide Package Deployer — one-command installer for Pi Zero 2W.
 
-Deploys the full Oxagotchi/PwnOxide stack to a Raspberry Pi Zero 2W over SSH
-in 13 automated steps. Uploads patched BCM43436B0 v5 firmware, the angryoxide
+Deploys the full Oxigotchi/PwnOxide stack to a Raspberry Pi Zero 2W over SSH
+in 18 automated steps. Uploads patched BCM43436B0 v5 firmware, the angryoxide
 binary, pwnagotchi plugin, config overlay, mode-switcher script, boot splash
-service, and e-ink face PNGs, then applies WiFi stability patches and verifies
-the entire deployment before optionally rebooting.
+service, and e-ink face PNGs, then applies WiFi stability patches, CSRF fix,
+apt protection, BT keepalive, avahi config, and verifies the entire deployment
+before optionally rebooting.
 
 Usage
 -----
@@ -17,7 +18,7 @@ Command-line flags
     Run only the preflight step (Step 1) to check connectivity, disk space,
     and service state, then exit without making any changes on the Pi.
 --no-reboot
-    Perform all deploy and verify steps but skip the final reboot (Step 13).
+    Perform all deploy and verify steps but skip the final reboot (Step 18).
     Useful when you want to inspect the Pi before restarting.
 
 Deployment steps
@@ -40,7 +41,10 @@ Deployment steps
                       (chmod +x) for runtime mode management.
  8. Disable iovars  — Stop and disable the obsolete set-iovars.service that
                       conflicts with v5 firmware.
- 9. WiFi fixes      — Apply four stability patches to prevent SDIO crashes on
+ 9. Apt protection  — Apply apt-mark holds on kernel/firmware/nexmon packages
+                      and install a dpkg hook to protect the patched firmware
+                      binary from being overwritten by apt upgrades.
+10. WiFi fixes      — Apply four stability patches to prevent SDIO crashes on
                       WiFi restarts:
                         a. pwnlib: comment out reload_brcm in
                            stop_monitor_interface to avoid driver unload.
@@ -50,15 +54,25 @@ Deployment steps
                            StartLimitIntervalSec=300 drop-in for pwnagotchi.service.
                         d. cache.py: guard access_point with isinstance(..., dict)
                            to fix TypeError on angryoxide handshakes.
-10. Upload faces    — Upload all e-ink-processed PNG files from faces/eink/ to
+11. CSRF patch      — Exempt plugin webhooks from Flask-CSRF so the AO
+                      dashboard POST endpoints work without 403 errors.
+12. Upload faces    — Upload all e-ink-processed PNG files from faces/eink/ to
                       /etc/pwnagotchi/custom-plugins/faces/ on the Pi.
-11. Deploy splash   — Upload oxagotchi-splash.py and oxagotchi-splash.service,
+13. Upload tweak_view — Upload tweak_view.json display layout config to
+                      /etc/pwnagotchi/custom-plugins/ for proper e-ink element
+                      positioning on the 2.13" V4 screen.
+14. Deploy splash   — Upload oxigotchi-splash.py and oxigotchi-splash.service,
                       then systemctl enable the boot/shutdown splash service.
-12. Verify          — MD5-compare every deployed file against its local source,
+15. BT keepalive    — Create and enable bt-keepalive.service and
+                      bt-keepalive.timer to prevent BT tether drops during
+                      idle periods.
+16. Avahi config    — Set hostname to "oxigotchi" in avahi-daemon.conf and
+                      ensure avahi-daemon is enabled for mDNS discovery.
+17. Verify          — MD5-compare every deployed file against its local source,
                       check executable permissions, count installed face PNGs,
                       confirm WiFi patches are present, and report service
-                      enable states for pwnagotchi and oxagotchi-splash.
-13. Reboot          — Reboot the Pi and poll SSH (up to 90 s) until it returns,
+                      enable states for pwnagotchi and oxigotchi-splash.
+18. Reboot          — Reboot the Pi and poll SSH (up to 90 s) until it returns,
                       then wait 30 s for pwnagotchi to start and run post-boot
                       checks: usb0 tethering, NetworkManager, wlan0mon,
                       angryoxide process, pwnagotchi service, firmware dmesg,
@@ -77,7 +91,8 @@ Prerequisites
     pwnoxide-mode.sh             — mode switcher script
     oxagotchi-splash.py          — boot splash script
     oxagotchi-splash.service     — systemd unit for splash
-- Face PNGs in faces/eink/ (optional; Step 10 warns and continues if absent).
+    tweak_view.json              — e-ink display layout config
+- Face PNGs in faces/eink/ (optional; Step 12 warns and continues if absent).
 - Pi reachable over SSH on one of the candidate addresses with sudo access.
 - usb0 USB gadget tethering strongly recommended so SSH survives WiFi firmware
   replacement.
@@ -88,6 +103,8 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import paramiko
 from pi_client import PI_HOST, PI_USER, PI_PASS
+
+TOTAL_STEPS = 18
 
 # ---------------------------------------------------------------------------
 # Color helpers
@@ -107,7 +124,7 @@ def ok(msg="OK"):      print(f"  {green('[PASS]')} {msg}")
 def warn(msg):          print(f"  {yellow('[WARN]')} {msg}")
 def fail(msg):          print(f"  {red('[FAIL]')} {msg}")
 def info(msg):          print(f"  {msg}")
-def step(n, msg):       print(f"\n{bold(f'[{n}/13]')} {msg}")
+def step(n, msg):       print(f"\n{bold(f'[{n}/{TOTAL_STEPS}]')} {msg}")
 def abort(msg):
     fail(msg)
     print(f"\n{red('Aborting.')}")
@@ -164,6 +181,12 @@ FILE_MAP = {
         "/etc/systemd/system/oxagotchi-splash.service",
         None,
     ),
+    "tweak_view": (
+        os.path.join(SCRIPT_DIR, "tweak_view.json"),
+        "tweak_view.json",
+        "/etc/pwnagotchi/custom-plugins/tweak_view.json",
+        None,
+    ),
 }
 
 # Faces directory (eink-processed PNGs)
@@ -172,6 +195,23 @@ FACES_REMOTE_DIR = "/etc/pwnagotchi/custom-plugins/faces"
 
 FW_ORIG = "/lib/firmware/brcm/brcmfmac43436-sdio.bin.orig"
 HOSTS_TO_TRY = ["192.168.137.8", "10.0.0.2", PI_HOST]
+
+# Packages to hold — prevents kernel/firmware upgrades from breaking monitor mode
+APT_HOLD_PACKAGES = [
+    "linux-image-rpi-v8",
+    "linux-image-rpi-2712",
+    "firmware-nexmon",
+    "brcmfmac-nexmon-dkms",
+    "firmware-brcm80211",
+    "firmware-atheros",
+    "firmware-libertas",
+    "firmware-realtek",
+    "firmware-misc-nonfree",
+]
+
+# CSRF patch targets
+CSRF_HANDLER = "/home/pi/.pwn/lib/python3.13/site-packages/pwnagotchi/ui/web/handler.py"
+CSRF_SERVER = "/home/pi/.pwn/lib/python3.13/site-packages/pwnagotchi/ui/web/server.py"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -345,9 +385,55 @@ def step8_disable_iovars(ssh):
     ok("set-iovars service disabled/stopped (or was already absent)")
 
 
-def step9_apply_wifi_fixes(ssh):
+def step9_apt_protection(ssh):
+    """Apply apt-mark holds and install firmware protection hook."""
+    step(9, "Apt protection")
+
+    # Apply apt-mark holds on critical packages
+    pkg_list = " ".join(APT_HOLD_PACKAGES)
+    info(f"Holding {len(APT_HOLD_PACKAGES)} packages...")
+    run(ssh, f"sudo apt-mark hold {pkg_list} 2>/dev/null", timeout=15)
+
+    # Verify holds
+    out, _ = run(ssh, "apt-mark showhold 2>/dev/null")
+    held = set(out.splitlines()) if out else set()
+    all_held = True
+    for pkg in APT_HOLD_PACKAGES:
+        if pkg in held:
+            ok(f"  {pkg}: held")
+        else:
+            # Package may not be installed — that's OK, hold still applies
+            warn(f"  {pkg}: not in showhold (may not be installed)")
+            all_held = False
+
+    if all_held:
+        ok("All critical packages held")
+
+    # Install dpkg hook to protect patched firmware binary
+    hook_path = "/etc/apt/apt.conf.d/99-oxigotchi-firmware-protect"
+    hook_content = r'''// Oxigotchi firmware protection hook
+// Backs up and restores the patched brcmfmac firmware around package operations
+DPkg::Pre-Invoke {
+    "if [ -f /lib/firmware/brcm/brcmfmac43436-sdio.bin ]; then cp /lib/firmware/brcm/brcmfmac43436-sdio.bin /lib/firmware/brcm/brcmfmac43436-sdio.bin.deploy-save; fi";
+};
+DPkg::Post-Invoke {
+    "if [ -f /lib/firmware/brcm/brcmfmac43436-sdio.bin.deploy-save ]; then cp /lib/firmware/brcm/brcmfmac43436-sdio.bin.deploy-save /lib/firmware/brcm/brcmfmac43436-sdio.bin; rm -f /lib/firmware/brcm/brcmfmac43436-sdio.bin.deploy-save; fi";
+};'''
+    run(ssh, f"sudo tee {hook_path} > /dev/null << 'APTEOF'\n{hook_content}\nAPTEOF")
+    out, _ = run(ssh, f"test -f {hook_path} && echo exists || echo missing")
+    if out == "exists":
+        ok(f"Firmware protection hook installed at {hook_path}")
+    else:
+        warn("Failed to install firmware protection hook")
+
+    # Disable unattended-upgrades timer if present
+    run(ssh, "sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null")
+    ok("Auto-update timers disabled (if present)")
+
+
+def step10_apply_wifi_fixes(ssh):
     """Apply WiFi stability fixes to prevent SDIO crash on restarts."""
-    step(9, "Apply WiFi stability fixes")
+    step(10, "Apply WiFi stability fixes")
 
     # Fix 1: Comment out reload_brcm in stop_monitor_interface
     out, err = run(ssh, "grep -c '#.*reload_brcm' /usr/bin/pwnlib")
@@ -384,9 +470,58 @@ EOF''')
         ok("Patched cache.py: TypeError fix for AO handshakes")
 
 
-def step10_upload_faces(ssh, sftp):
+def step11_csrf_patch(ssh):
+    """Exempt plugin webhooks from Flask-CSRF protection."""
+    step(11, "CSRF patch")
+
+    # Step 1: Make CSRFProtect instance accessible on app (server.py)
+    out, _ = run(ssh, f"grep -c 'app.csrf = csrf' {CSRF_SERVER} 2>/dev/null || echo 0")
+    if out.strip() != '0':
+        ok("server.py: already patched")
+    else:
+        run(ssh, f"""sudo sed -i 's/CSRFProtect(app)/csrf = CSRFProtect(app)\\n            app.csrf = csrf/' {CSRF_SERVER}""")
+        verify, _ = run(ssh, f"grep -c 'app.csrf = csrf' {CSRF_SERVER} 2>/dev/null || echo 0")
+        if verify.strip() != '0':
+            ok("server.py: csrf instance stored on app")
+        else:
+            warn("server.py: CSRF patch may have failed — verify manually")
+
+    # Step 2: Exempt plugins route from CSRF (handler.py)
+    out, _ = run(ssh, f"grep -c 'csrf.exempt' {CSRF_HANDLER} 2>/dev/null || echo 0")
+    if out.strip() != '0':
+        ok("handler.py: already patched")
+    else:
+        # Use a Python one-liner to do the text replacement safely
+        patch_cmd = f"""sudo python3 -c "
+import sys
+with open('{CSRF_HANDLER}') as f:
+    code = f.read()
+if 'csrf.exempt' not in code:
+    code = code.replace(
+        'plugins_with_auth = self.with_auth(self.plugins)',
+        'plugins_with_auth = self.with_auth(self.plugins)\\n'
+        '        # Exempt plugin webhooks from CSRF (plugins handle their own auth)\\n'
+        '        if hasattr(self._app, \\'csrf\\'):                                     \\n'
+        '            plugins_with_auth = self._app.csrf.exempt(plugins_with_auth)'
+    )
+    with open('{CSRF_HANDLER}', 'w') as f:
+        f.write(code)
+    print('patched')
+else:
+    print('already')
+" """
+        patch_out, patch_err = run(ssh, patch_cmd, timeout=15)
+        if "patched" in patch_out:
+            ok("handler.py: plugins route CSRF-exempted")
+        elif "already" in patch_out:
+            ok("handler.py: already patched")
+        else:
+            warn(f"handler.py: CSRF patch may have failed: {patch_err}")
+
+
+def step12_upload_faces(ssh, sftp):
     """Upload eink-processed face PNGs to the Pi."""
-    step(10, "Upload face PNGs")
+    step(12, "Upload face PNGs")
 
     if not os.path.isdir(FACES_LOCAL_DIR):
         warn(f"Faces directory not found: {FACES_LOCAL_DIR}")
@@ -412,9 +547,16 @@ def step10_upload_faces(ssh, sftp):
     ok(f"Uploaded and installed {len(faces)} faces to {FACES_REMOTE_DIR}")
 
 
-def step11_deploy_splash(ssh, sftp):
+def step13_upload_tweak_view(ssh, sftp):
+    """Upload tweak_view.json display layout config."""
+    step(13, "Upload tweak_view.json")
+
+    _upload_and_install(ssh, sftp, "tweak_view")
+
+
+def step14_deploy_splash(ssh, sftp):
     """Deploy boot/shutdown splash service."""
-    step(11, "Deploy boot splash service")
+    step(14, "Deploy boot splash service")
 
     _upload_and_install(ssh, sftp, "splash_script")
     _upload_and_install(ssh, sftp, "splash_service")
@@ -424,9 +566,89 @@ def step11_deploy_splash(ssh, sftp):
     ok("oxagotchi-splash.service enabled")
 
 
-def step12_verify(ssh):
+def step15_bt_keepalive(ssh):
+    """Create and enable BT keepalive timer to prevent tether drops."""
+    step(15, "BT keepalive timer")
+
+    # Create the service unit
+    service_content = """[Unit]
+Description=Bluetooth Tether Keepalive Ping
+After=bluetooth.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for iface in bnep0 bt-pan pan0; do if ip link show "$iface" &>/dev/null; then ping -c 1 -W 2 -I "$iface" 192.168.44.1 &>/dev/null || true; break; fi; done'
+"""
+    run(ssh, """sudo tee /etc/systemd/system/bt-keepalive.service > /dev/null << 'EOF'
+""" + service_content + "EOF")
+
+    # Create the timer unit
+    timer_content = """[Unit]
+Description=Bluetooth Tether Keepalive Timer
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=30
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target
+"""
+    run(ssh, """sudo tee /etc/systemd/system/bt-keepalive.timer > /dev/null << 'EOF'
+""" + timer_content + "EOF")
+
+    run(ssh, "sudo systemctl daemon-reload")
+    run(ssh, "sudo systemctl enable bt-keepalive.timer")
+
+    out, _ = run(ssh, "systemctl is-enabled bt-keepalive.timer 2>/dev/null || echo unknown")
+    if out == "enabled":
+        ok("bt-keepalive.timer enabled (pings BT tether every 30s)")
+    else:
+        warn(f"bt-keepalive.timer: {out}")
+
+
+def step16_avahi_config(ssh):
+    """Configure avahi-daemon hostname for mDNS discovery."""
+    step(16, "Avahi config")
+
+    avahi_conf = "/etc/avahi/avahi-daemon.conf"
+
+    # Check if avahi-daemon is installed
+    out, _ = run(ssh, "which avahi-daemon 2>/dev/null || echo missing")
+    if "missing" in out:
+        warn("avahi-daemon not installed — skipping mDNS config")
+        return
+
+    # Set hostname in avahi-daemon.conf
+    # The [server] section should have host-name=oxigotchi
+    out, _ = run(ssh, f"grep -c 'host-name=oxigotchi' {avahi_conf} 2>/dev/null || echo 0")
+    if out.strip() != '0':
+        ok("avahi hostname already set to oxigotchi")
+    else:
+        # Try to replace existing host-name line, or add one under [server]
+        run(ssh, f"sudo sed -i '/^host-name=/c\\host-name=oxigotchi' {avahi_conf} 2>/dev/null")
+        # Verify it took
+        verify, _ = run(ssh, f"grep -c 'host-name=oxigotchi' {avahi_conf} 2>/dev/null || echo 0")
+        if verify.strip() != '0':
+            ok("Set avahi hostname to oxigotchi")
+        else:
+            # No existing host-name line — add one under [server]
+            run(ssh, f"sudo sed -i '/^\\[server\\]/a host-name=oxigotchi' {avahi_conf}")
+            ok("Added host-name=oxigotchi to avahi-daemon.conf [server] section")
+
+    # Ensure avahi-daemon is enabled and restart it
+    run(ssh, "sudo systemctl enable avahi-daemon 2>/dev/null")
+    run(ssh, "sudo systemctl restart avahi-daemon 2>/dev/null")
+    out, _ = run(ssh, "systemctl is-active avahi-daemon 2>/dev/null || echo inactive")
+    if out == "active":
+        ok("avahi-daemon active (Pi discoverable as oxigotchi.local)")
+    else:
+        warn(f"avahi-daemon: {out}")
+
+
+def step17_verify(ssh):
     """Verify deployed files with md5sums, permissions, and service state."""
-    step(12, "Verify deployment")
+    step(17, "Verify deployment")
 
     print()
     header = f"  {'File':<20} {'Local MD5':<34} {'Remote MD5':<34} {'Match'}"
@@ -473,12 +695,49 @@ def step12_verify(ssh):
     else:
         warn("pwnagotchi restart rate-limit NOT configured")
 
+    # CSRF patch check
+    out, _ = run(ssh, f"grep -c 'csrf.exempt' {CSRF_HANDLER} 2>/dev/null || echo 0")
+    if out.strip() != '0':
+        ok("CSRF patch verified in handler.py")
+    else:
+        warn("CSRF patch NOT applied to handler.py")
+
+    # Apt holds check
+    out, _ = run(ssh, "apt-mark showhold 2>/dev/null")
+    held = set(out.splitlines()) if out else set()
+    critical_held = [p for p in ["linux-image-rpi-v8", "firmware-nexmon", "brcmfmac-nexmon-dkms"] if p in held]
+    if len(critical_held) >= 2:
+        ok(f"Apt holds active ({len(held)} packages held)")
+    else:
+        warn(f"Some critical apt holds may be missing (held: {held})")
+
+    # Firmware protection hook
+    out, _ = run(ssh, "test -f /etc/apt/apt.conf.d/99-oxigotchi-firmware-protect && echo exists || echo missing")
+    if out == "exists":
+        ok("Firmware protection apt hook present")
+    else:
+        warn("Firmware protection apt hook NOT installed")
+
+    # BT keepalive check
+    out, _ = run(ssh, "systemctl is-enabled bt-keepalive.timer 2>/dev/null || echo unknown")
+    if out == "enabled":
+        ok("bt-keepalive.timer enabled")
+    else:
+        warn(f"bt-keepalive.timer: {out}")
+
+    # Avahi check
+    out, _ = run(ssh, "systemctl is-active avahi-daemon 2>/dev/null || echo inactive")
+    if out == "active":
+        ok("avahi-daemon active")
+    else:
+        warn(f"avahi-daemon: {out}")
+
     # Service checks
     svc_out, _ = run(ssh, "systemctl is-enabled pwnagotchi 2>/dev/null || echo unknown")
     info(f"pwnagotchi service: {svc_out}")
 
     splash_out, _ = run(ssh, "systemctl is-enabled oxagotchi-splash 2>/dev/null || echo unknown")
-    info(f"oxagotchi-splash service: {splash_out}")
+    info(f"oxigotchi-splash service: {splash_out}")
 
     if all_ok:
         ok("All files verified")
@@ -488,9 +747,9 @@ def step12_verify(ssh):
     return all_ok
 
 
-def step13_reboot(ssh, host, no_reboot):
+def step18_reboot(ssh, host, no_reboot):
     """Reboot the Pi and wait for it to come back."""
-    step(13, "Reboot and verify")
+    step(18, "Reboot and verify")
 
     if no_reboot:
         info("--no-reboot specified, skipping reboot.")
@@ -581,7 +840,7 @@ def main():
     no_reboot = "--no-reboot" in sys.argv
 
     print(bold("=" * 60))
-    print(bold("  Oxagotchi Deployer — PwnOxide Package"))
+    print(bold("  Oxigotchi Deployer — PwnOxide Package"))
     print(bold("=" * 60))
 
     # Preflight check for local files before even connecting
@@ -609,27 +868,42 @@ def main():
     step6_upload_config(ssh, sftp)
     step7_upload_modeswitcher(ssh, sftp)
 
-    # Step 8
+    # Step 8: Disable iovars
     step8_disable_iovars(ssh)
 
-    # Step 9: WiFi stability fixes
-    step9_apply_wifi_fixes(ssh)
+    # Step 9: Apt protection (holds + firmware hook)
+    step9_apt_protection(ssh)
 
-    # Step 10: Upload faces
-    step10_upload_faces(ssh, sftp)
+    # Step 10: WiFi stability fixes
+    step10_apply_wifi_fixes(ssh)
 
-    # Step 11: Deploy splash service
-    step11_deploy_splash(ssh, sftp)
+    # Step 11: CSRF patch for AO dashboard
+    step11_csrf_patch(ssh)
+
+    # Step 12: Upload faces
+    step12_upload_faces(ssh, sftp)
+
+    # Step 13: Upload tweak_view.json
+    step13_upload_tweak_view(ssh, sftp)
+
+    # Step 14: Deploy splash service
+    step14_deploy_splash(ssh, sftp)
+
+    # Step 15: BT keepalive timer
+    step15_bt_keepalive(ssh)
+
+    # Step 16: Avahi config
+    step16_avahi_config(ssh)
 
     sftp.close()
 
-    # Step 12: Verify
-    step12_verify(ssh)
+    # Step 17: Verify
+    step17_verify(ssh)
 
-    # Step 13: Reboot
-    step13_reboot(ssh, host, no_reboot)
+    # Step 18: Reboot
+    step18_reboot(ssh, host, no_reboot)
 
-    print(f"\n{bold(green('=== Oxagotchi deployment complete ==='))}")
+    print(f"\n{bold(green('=== Oxigotchi deployment complete ==='))}")
     print(f"  Your bull is ready. Run: ssh pi 'pwnoxide-mode status'")
 
 
