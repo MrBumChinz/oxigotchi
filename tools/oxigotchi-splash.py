@@ -1,9 +1,18 @@
 #!/usr/bin/env python3
 """Oxigotchi splash screen — renders a face PNG centered on the waveshare 2.13" V4 e-ink display.
-Matches pwnagotchi's own rendering: white canvas (255), black art (0), no inversion needed."""
+Matches pwnagotchi's own rendering: white canvas (255), black art (0), no inversion needed.
+
+Uses a full display refresh (epd.display) so the image is written to both the
+current and previous-image RAM banks.  This means the bull face survives partial
+refresh cycles that pwnagotchi performs later during its own display init.
+A sentinel file (/tmp/.oxigotchi-splash-done) is written after the image has
+been pushed so downstream services can gate on it."""
 
 import sys
 import os
+import time
+
+SENTINEL = "/tmp/.oxigotchi-splash-done"
 
 def main():
     if len(sys.argv) < 2:
@@ -47,18 +56,21 @@ def main():
         # Convert to 1-bit — same as pwnagotchi does
         canvas = canvas.point(lambda p: 255 if p > 128 else 0, '1')
 
-        # Send to display
+        # Full display refresh — writes image to both RAM banks so it persists
+        # through partial refreshes and survives pwnagotchi's Clear() + base image init
         buf = epd.getbuffer(canvas)
-        try:
-            epd.displayPartBaseImage(buf)
-        except Exception:
-            epd.displayPartial(buf)
+        epd.display(buf)
+
+        # Write sentinel so downstream services know splash is rendered
+        with open(SENTINEL, 'w') as f:
+            f.write(str(time.time()))
 
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
     finally:
         try:
+            # Release SPI/GPIO so pwnagotchi can claim them
             epd2in13_V4.epdconfig.module_exit(cleanup=True)
         except Exception:
             pass

@@ -1,0 +1,44 @@
+# WiFi Keepalive for Pi Zero 2W (BCM43436B0 / brcmfmac)
+#
+# WHY THIS EXISTS:
+#   The BCM43436B0 WiFi chip connects via SDIO bus which crashes when idle.
+#   This service uses tcpdump to continuously read frames from the monitor
+#   interface via libpcap, keeping the brcmfmac driver active. Without it,
+#   the SDIO bus dies and WiFi is gone until GPIO power cycle or reboot.
+#   Uses ~2MB RAM vs bettercap's ~50MB for the same keepalive effect.
+#
+# WHAT HAPPENS IF YOU DISABLE IT:
+#   WiFi will crash every 1-3 minutes when AngryOxide is the sole user of
+#   wlan0mon. You'll see "Firmware has halted or crashed" in dmesg, the bull
+#   shows "WiFi down!", and captures stop. The Pi stays reachable via USB
+#   (SSH over usb0) but WiFi is dead until reboot.
+#
+#   If bettercap is also running, you DON'T need this — bettercap's
+#   wifi.recon does the same keepalive. This service exists so bettercap
+#   can be disabled to save ~50MB RAM.
+#
+# COMMANDS:
+#   sudo systemctl status wlan-keepalive   # check if running
+#   sudo systemctl stop wlan-keepalive     # stop (WiFi may crash!)
+#   sudo systemctl disable wlan-keepalive  # disable on boot
+#   sudo journalctl -u wlan-keepalive      # view logs
+
+[Unit]
+Description=WiFi monitor interface keepalive (brcmfmac SDIO bus)
+After=network.target
+Before=pwnagotchi.service
+
+[Service]
+Type=simple
+# tcpdump with libpcap keeps the brcmfmac driver's RX path active.
+# -c 0 = unlimited, -q = quiet, -w /dev/null = discard captures,
+# --immediate-mode = don't buffer (keeps driver continuously busy)
+ExecStart=/usr/bin/tcpdump -i wlan0mon -q -w /dev/null --immediate-mode
+Restart=always
+RestartSec=3
+Nice=10
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

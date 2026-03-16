@@ -72,9 +72,13 @@ case "${1:-status}" in
     if [ -f "$DISABLED" ]; then
       sudo mv "$DISABLED" "$OVERLAY"
       echo "AngryOxide mode ENABLED"
+      # Stop bettercap — AO-only mode doesn't need it
+      sudo systemctl disable --now bettercap 2>/dev/null
+      echo "  bettercap service disabled"
       echo "Restarting pwnagotchi (with watchdog)..."
       if ! safe_restart "$OVERLAY" "$DISABLED"; then
         echo "ERROR: Mode switch to AO failed, reverted to pwn mode."
+        sudo systemctl enable --now bettercap 2>/dev/null
         exit 1
       fi
     elif [ -f "$OVERLAY" ]; then
@@ -89,6 +93,9 @@ case "${1:-status}" in
     if [ -f "$OVERLAY" ]; then
       sudo mv "$OVERLAY" "$DISABLED"
       echo "AngryOxide mode DISABLED (bettercap attacks restored)"
+      # Re-enable bettercap for pwn mode
+      sudo systemctl enable --now bettercap 2>/dev/null
+      echo "  bettercap service enabled"
       echo "Restarting pwnagotchi (with watchdog)..."
       if ! safe_restart "$DISABLED" "$OVERLAY"; then
         echo "ERROR: Mode switch to pwn failed, reverted to AO mode."

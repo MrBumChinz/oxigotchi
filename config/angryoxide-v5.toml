@@ -5,6 +5,9 @@
 # AO ON  = AngryOxide attacks + bull faces
 # AO OFF = bettercap attacks + stock faces (Korean/fancygotchi/whatever)
 
+[bettercap]
+disabled = true
+
 [main.plugins.angryoxide]
 enabled = true
 binary_path = "/usr/local/bin/angryoxide"
@@ -26,6 +29,10 @@ enabled = false
 enabled = false
 
 [main.plugins.enable_deauth]
+enabled = false
+
+# auto-tune re-enables bettercap deauth/assoc after AO disables them — sabotages AO
+[main.plugins.auto-tune]
 enabled = false
 
 # Enable wpa-sec for automatic handshake cracking

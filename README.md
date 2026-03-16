@@ -81,6 +81,7 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **Web dashboard** — Full control from your phone. 15 cards: attack toggles, AP list with target/whitelist buttons, capture downloads, cracked passwords, system health, BT visibility control, shutdown/restart buttons, config editor, log viewer.
 - **28 bull faces** — Custom 1-bit e-ink art for every mood and system state. Each face is a diagnostic indicator, not decoration.
 - **Auto-crack integration** — Captures automatically upload to wpa-sec for cloud cracking. Cracked passwords appear in the dashboard. Whitelisted networks are never uploaded — your home WiFi stays private.
+- **Unified XP system** — The EXP plugin works in both AO and PWN modes with persistent stats across reboots. In AO mode, a parser reads AngryOxide's capture files and emits the same association/deauth/handshake events that bettercap produces, so XP and leveling work identically in both modes. No captures lost, no stats reset when switching.
 - **Smart Skip** — Auto-whitelists APs with existing captures, focusing on new targets.
 - **Fast boot** — Session data cached, fix_services disabled, skips the 30-60 second log parsing phase that slows stock pwnagotchi.
 - **Backwards compatible** — All existing plugins work. Switch to PWN mode anytime for stock bettercap (now stable with our firmware patch). Your handshakes, config, and plugins are untouched.
@@ -201,7 +202,7 @@ Every mood has its own bull. Here are all 28:
 ## Safety Features
 
 - **Firmware rollback** — `pwnoxide-mode rollback-fw` restores original firmware at any time.
-- **Firmware crash recovery** — Detects brcmfmac crashes via kernel log monitoring and auto-reloads the driver.
+- **GPIO self-heal** — When the WiFi firmware crashes and the SDIO bus dies (error -22), the plugin automatically power-cycles the BCM43436B0 chip via GPIO 41 (WL_REG_ON), rebinds the MMC controller, reloads the driver, and restarts AO. No manual power cycle needed — even with PiSugar battery connected. This is the first pwnagotchi plugin that can recover from a dead SDIO bus without physical intervention.
 - **AO watchdog** — Restarts crashed AO process with exponential backoff (5s → 5min).
 - **Restart rate limiting** — Pwnagotchi capped at 3 restarts per 5 minutes.
 - **USB lifeline** — SSH always available at `10.0.0.2`, even when WiFi is dead.
@@ -246,13 +247,16 @@ Get a free API key from [wpa-sec.stanev.org](https://wpa-sec.stanev.org), add it
 Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3). Check `ui.display.type = "waveshare_4"` in config.
 
 **How does XP and leveling work?**
-Oxigotchi uses the EXP plugin to track your progress. You earn XP for every handshake captured (3 XP), every association sent (1 XP), and every deauth sent (2 XP). In AO mode, every capture triggers the standard `on_handshake` event, so AO captures earn XP just like bettercap captures. The level formula is `XP needed = level³ / 2` — so early levels are fast but higher levels take more captures.
+Oxigotchi uses the EXP plugin to track your progress. XP works in both AO and PWN modes — your stats are persistent across reboots and mode switches. You earn +6 XP per capture: handshake (3 XP) + association (1 XP) + deauth (2 XP). In AO mode, a parser reads AngryOxide's `.pcapng` and `.22000` capture files and emits the same association/deauth/handshake events that bettercap produces, so the EXP plugin sees identical events regardless of which backend captured them. The level formula is `XP needed = level³ / 2` — early levels are fast but higher levels take more captures. AO earns XP **much faster** than stock bettercap because it attacks all APs in range simultaneously with 6 attack types. Stock pwnagotchi might get 1-3 handshakes per hour (6-18 XP). With AO, expect 5-20+ captures per hour (30-120+ XP) depending on AP density. You'll blow through the early levels in one walk.
 
 **Does Smart Skip affect my XP?**
 Yes — with Smart Skip ON, AO won't re-attack networks you already captured, so you won't earn duplicate XP from the same networks. Turn Smart Skip OFF if you want to maximize XP by farming the same APs repeatedly. Turn it ON if you want to focus on capturing new unique networks. You can toggle it anytime from the dashboard.
 
 **Can I change the attack rate?**
 The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive). **Rate 1 is recommended.** Rate 2 works well at home or in low-density areas, but in busy environments (walking through a city, near many APs) the heavy TX load can overwhelm the BCM43436B0 firmware — WiFi freezes and needs a reboot. This isn't a hard hardware limit — it's a firmware timing issue under high AP density + rapid channel hopping + movement. Rate 1 still uses all 6 attack types, just sends fewer frames per second. Rate 3 is experimental and will likely crash in most environments. If you plug in an external WiFi dongle (Alfa, RT5370, etc.) and configure AO to use it instead of the built-in chip, rate 2 and 3 work perfectly — the limitation is specific to the BCM43436B0.
+
+**Does scanning more channels help?**
+Not on the built-in WiFi. The BCM43436B0 firmware is more likely to crash when hopping across many channels — scanning all 13 with a short dwell time stresses the TX path and triggers the same firmware trap (EPC 0x204CA) as high rates. **Stick to channels 1, 6, 11** (the non-overlapping 2.4 GHz channels where 95% of APs live). You won't miss much, and your WiFi won't die mid-walk. If you use an external dongle (Alfa, etc.), scan all channels freely — external chips don't have this limitation.
 
 **How long does the battery last?**
 With PiSugar 3 (1200mAh): 3-4 hours active. The bull face warns at 20% and 15%.

@@ -94,6 +94,8 @@ class AngryOxide(plugins.Plugin):
         self._captured_macs = set()
         self._captured_macs_stale = True
         self._discord_webhook = None
+        self._pwn_deauth = True
+        self._pwn_associate = True
         # Non-blocking restart scheduling (avoids sleeping the main thread)
         self._next_restart_time = 0
         # Cache for expensive API calls (subprocess-based)
@@ -130,8 +132,12 @@ class AngryOxide(plugins.Plugin):
             pass
         return None
 
-    def _save_state(self):
-        """Persist runtime config (targets, whitelist, rate, attacks, channels) to disk."""
+    def _save_state(self, force=False):
+        """Persist runtime config to disk. Debounced: writes at most once per 30s unless force=True."""
+        self._state_dirty = True
+        now = time.time()
+        if not force and now - getattr(self, '_last_state_save', 0) < 30:
+            return  # will be flushed by on_epoch or on_unload
         state = {
             'targets': self._targets,
             'whitelist': self._whitelist_entries,
@@ -142,10 +148,14 @@ class AngryOxide(plugins.Plugin):
             'dwell': self._dwell,
             'skip_captured': self._skip_captured,
             'discord_webhook': self._discord_webhook or '',
+            'pwn_deauth': self._pwn_deauth,
+            'pwn_associate': self._pwn_associate,
         }
         try:
             with open(self._state_file, 'w') as f:
                 json.dump(state, f, indent=2)
+            self._state_dirty = False
+            self._last_state_save = now
         except Exception as e:
             logging.debug("[angryoxide] could not save state: %s", e)
 
@@ -163,6 +173,8 @@ class AngryOxide(plugins.Plugin):
             self._dwell = state.get('dwell', 2)
             self._skip_captured = state.get('skip_captured', False)
             self._discord_webhook = state.get('discord_webhook', self._discord_webhook or '')
+            self._pwn_deauth = state.get('pwn_deauth', True)
+            self._pwn_associate = state.get('pwn_associate', True)
             logging.info("[angryoxide] loaded saved state: %d targets, %d whitelist entries", len(self._targets), len(self._whitelist_entries))
         except FileNotFoundError:
             pass
@@ -224,6 +236,14 @@ class AngryOxide(plugins.Plugin):
         except Exception as e:
             logging.debug("[angryoxide] could not restore delayed plugins: %s", e)
 
+    def _is_ao_mode(self):
+        """Check if we are currently in AO mode (vs PWN mode)."""
+        try:
+            r = subprocess.run(['pwnoxide-mode', 'status'], capture_output=True, text=True, timeout=5)
+            return 'AngryOxide' in r.stdout
+        except Exception:
+            return True  # default to AO mode if status check fails
+
     def on_ready(self, agent):
         self._agent = agent
 
@@ -232,12 +252,20 @@ class AngryOxide(plugins.Plugin):
             logging.error("[angryoxide] binary not found at %s, cannot start", binary)
             return
 
-        # disable bettercap's attacks — AO takes over
-        self._original_deauth = agent._config['personality']['deauth']
-        self._original_associate = agent._config['personality']['associate']
-        agent._config['personality']['deauth'] = False
-        agent._config['personality']['associate'] = False
-        logging.info("[angryoxide] disabled bettercap deauth/assoc, AO will handle attacks")
+        # Only disable bettercap's attacks when AO is active;
+        # in PWN mode, bettercap needs them to populate the AP list.
+        if self._is_ao_mode():
+            self._original_deauth = agent._config['personality']['deauth']
+            self._original_associate = agent._config['personality']['associate']
+            agent._config['personality']['deauth'] = False
+            agent._config['personality']['associate'] = False
+            logging.info("[angryoxide] AO mode: disabled bettercap deauth/assoc, AO will handle attacks")
+        else:
+            # Apply saved PWN attack settings
+            agent._config['personality']['deauth'] = self._pwn_deauth
+            agent._config['personality']['associate'] = self._pwn_associate
+            logging.info("[angryoxide] PWN mode: deauth=%s associate=%s",
+                         self._pwn_deauth, self._pwn_associate)
 
         self._start_ao(agent)
 
@@ -324,6 +352,11 @@ class AngryOxide(plugins.Plugin):
                 if os.path.isdir(d):
                     for f in os.listdir(d):
                         mac = self._extract_mac_from_filename(f)
+                        # AO uses timestamp filenames — fall back to .22000 parser
+                        if mac is None and f.endswith(('.pcapng', '.pcap')):
+                            hash_path = os.path.join(d, f.rsplit('.', 1)[0] + '.22000')
+                            if os.path.isfile(hash_path):
+                                mac, _ = self._parse_22000_file(hash_path)
                         if mac and mac.upper() not in existing_upper:
                             cmd.extend(['--whitelist-entry', mac.upper()])
                             existing_upper.add(mac.upper())
@@ -454,7 +487,7 @@ class AngryOxide(plugins.Plugin):
 
         try:
             result = subprocess.run(
-                ['journalctl', '-n', '20', '-k', '--no-pager'],
+                ['journalctl', '-k', '--since', '-60s', '--no-pager'],
                 capture_output=True, text=True, timeout=5
             )
             if self._FW_CRASH_PATTERN.search(result.stdout):
@@ -464,14 +497,33 @@ class AngryOxide(plugins.Plugin):
                                 self._fw_crash_count)
                 iface = self.options.get('interface', 'wlan0mon')
                 try:
-                    subprocess.run(['monstop'], timeout=10, capture_output=True)
-                    time.sleep(1)
+                    # GPIO power cycle: toggle WL_REG_ON (GPIO 41) to cold-reset
+                    # the BCM43436B0 chip. This recovers from SDIO bus death (error -22)
+                    # that modprobe alone cannot fix.
+                    logging.info("[angryoxide] attempting GPIO power cycle recovery (WL_REG_ON)")
                     subprocess.run(['sudo', 'modprobe', '-r', 'brcmfmac'], timeout=10, capture_output=True)
+                    time.sleep(1)
+                    # Unbind MMC controller
+                    subprocess.run(['sudo', 'bash', '-c',
+                                    'echo 3f300000.mmcnr > /sys/bus/platform/drivers/mmc-bcm2835/unbind'],
+                                   timeout=5, capture_output=True)
+                    # Pull WL_REG_ON low (power off WiFi chip)
+                    subprocess.run(['sudo', 'pinctrl', 'set', '41', 'op', 'dl'], timeout=5, capture_output=True)
                     time.sleep(2)
+                    # Push WL_REG_ON high (power on WiFi chip)
+                    subprocess.run(['sudo', 'pinctrl', 'set', '41', 'op', 'dh'], timeout=5, capture_output=True)
+                    time.sleep(1)
+                    # Rebind MMC controller
+                    subprocess.run(['sudo', 'bash', '-c',
+                                    'echo 3f300000.mmcnr > /sys/bus/platform/drivers/mmc-bcm2835/bind'],
+                                   timeout=5, capture_output=True)
+                    time.sleep(3)
+                    # Reload driver
                     subprocess.run(['sudo', 'modprobe', 'brcmfmac'], timeout=10, capture_output=True)
                     time.sleep(3)
+                    # Set up monitor mode
                     subprocess.run(['monstart'], timeout=10, capture_output=True)
-                    logging.info("[angryoxide] brcmfmac recovery completed, verifying interface")
+                    logging.info("[angryoxide] GPIO power cycle recovery completed, verifying interface")
 
                     # poll for interface to come back
                     for attempt in range(5):
@@ -479,7 +531,7 @@ class AngryOxide(plugins.Plugin):
                         if os.path.exists('/sys/class/net/%s' % iface):
                             logging.info("[angryoxide] interface %s is back (attempt %d)", iface, attempt + 1)
                             return True
-                    logging.error("[angryoxide] interface %s did not come back after recovery", iface)
+                    logging.error("[angryoxide] interface %s did not come back after GPIO recovery", iface)
                     return False
                 except Exception as e:
                     logging.error("[angryoxide] firmware recovery failed: %s", e)
@@ -557,8 +609,14 @@ class AngryOxide(plugins.Plugin):
                     logging.error("[angryoxide] failed to copy capture to %s: %s", dest, e)
                     dest = filepath
 
-            # trigger handshake event for downstream plugins (wigle, wpa-sec, pwncrack)
+            # trigger events for downstream plugins (exp, wigle, wpa-sec, pwncrack)
+            # AO bypasses bettercap so we emit association/deauth/handshake events
+            # that plugins like EXP rely on for XP gain
             ap_mac, sta_mac = self._parse_capture_filename(filename)
+            ap_info = {'mac': ap_mac, 'hostname': '', 'vendor': '', 'channel': 0, 'rssi': 0}
+            sta_info = {'mac': sta_mac, 'vendor': ''}
+            plugins.on('association', agent, ap_info)
+            plugins.on('deauthentication', agent, ap_info, sta_info)
             plugins.on('handshake', agent, dest, ap_mac, sta_mac)
 
             # register in agent handshake tracking for display/mood
@@ -594,6 +652,30 @@ class AngryOxide(plugins.Plugin):
             return mac, 'unknown'
         return 'unknown', 'unknown'
 
+    @staticmethod
+    def _parse_22000_file(path):
+        """Parse a .22000 hashcat file to extract AP MAC and SSID.
+        Format: WPA*type*pmkid_or_mic*AP_MAC*STA_MAC*ESSID_hex*...
+        Returns (ap_mac, ssid) or (None, None)."""
+        try:
+            with open(path, 'r') as f:
+                line = f.readline().strip()
+            if not line.startswith('WPA*'):
+                return None, None
+            parts = line.split('*')
+            if len(parts) < 6:
+                return None, None
+            raw_mac = parts[3]
+            ap_mac = ':'.join(raw_mac[i:i+2] for i in range(0, 12, 2)).upper() if len(raw_mac) == 12 else raw_mac
+            ssid_hex = parts[5]
+            try:
+                ssid = bytes.fromhex(ssid_hex).decode('utf-8', errors='replace')
+            except Exception:
+                ssid = ''
+            return ap_mac, ssid
+        except Exception:
+            return None, None
+
     def _format_uptime(self):
         """Format uptime as Xm (minutes) or Xh (hours)."""
         if self._start_time is None:
@@ -628,24 +710,28 @@ class AngryOxide(plugins.Plugin):
     def _get_health(self):
         """Gather system health for dashboard. Cached for 10 seconds."""
         now = time.time()
-        if self._health_cache and now - self._health_cache_time < 10:
+        if self._health_cache and now - self._health_cache_time < 60:
             return self._health_cache
         health = {'wifi': False, 'monitor': False, 'firmware': True, 'usb0': False, 'battery': None, 'battery_charging': None}
         try:
             health['wifi'] = os.path.exists('/sys/class/net/wlan0')
             iface = self.options.get('interface', 'wlan0mon')
             health['monitor'] = os.path.exists('/sys/class/net/%s' % iface)
-            # If AO is running, WiFi and monitor are working even if interface isn't visible via sysfs
+            # AO process alive means nothing if interface is gone — check both
             if self._running and self._process and self._process.poll() is None:
-                health['wifi'] = True
-                health['monitor'] = True
+                if health['wifi'] and health['monitor']:
+                    pass  # both interface + process alive = truly healthy
+                else:
+                    # AO is zombie — interface dead, process lingering
+                    health['wifi'] = False
+                    health['monitor'] = False
             health['usb0'] = os.path.exists('/sys/class/net/usb0')
         except Exception:
             pass
-        # Check firmware status from recent kernel messages only (last 60s)
+        # Check firmware status: only flag as bad if crash detected AND interface is actually down
         try:
             r = subprocess.run(['journalctl', '-k', '--since', '-60s', '--no-pager'], capture_output=True, text=True, timeout=3)
-            if self._FW_CRASH_PATTERN.search(r.stdout):
+            if self._FW_CRASH_PATTERN.search(r.stdout) and not health['wifi']:
                 health['firmware'] = False
         except Exception:
             pass
@@ -665,6 +751,11 @@ class AngryOxide(plugins.Plugin):
             if os.path.isdir(d):
                 for f in os.listdir(d):
                     mac = self._extract_mac_from_filename(f)
+                    # AO uses timestamp filenames — fall back to .22000 parser
+                    if mac is None and f.endswith(('.pcapng', '.pcap')):
+                        hash_path = os.path.join(d, f.rsplit('.', 1)[0] + '.22000')
+                        if os.path.isfile(hash_path):
+                            mac, _ = self._parse_22000_file(hash_path)
                     if mac:
                         macs.add(mac.lower())
         self._captured_macs = macs
@@ -739,16 +830,29 @@ class AngryOxide(plugins.Plugin):
                 # don't return — still run AO checks
 
         # --- Edge case: WiFi interface down ---
-        iface = self.options.get('interface', 'wlan0mon')
-        if not os.path.exists('/sys/class/net/wlan0'):
+        # Only trigger recovery if wlan0 (base interface) is gone.
+        # wlan0mon cycles during normal AO restarts — don't react to that.
+        iface_dead = not os.path.exists('/sys/class/net/wlan0')
+        if iface_dead:
+            # Kill zombie AO process if interface is gone
+            if self._process and self._process.poll() is None:
+                logging.warning("[angryoxide] interface gone but AO still running — killing zombie process")
+                self._stop_ao()
+                self._running = False
             agent._view.set('face', self._face('wifi_down'))
-            agent._view.set('status', 'WiFi down!')
+            agent._view.set('status', 'WiFi down! Recovering...')
             agent._view.update()
-            return
-        if not os.path.exists('/sys/class/net/%s' % iface):
-            agent._view.set('face', self._face('wifi_down'))
-            agent._view.set('status', '%s missing!' % iface)
-            agent._view.update()
+            # Attempt GPIO power cycle recovery
+            logging.warning("[angryoxide] WiFi interface dead, attempting GPIO recovery")
+            recovered = self._try_fw_recovery()
+            if recovered:
+                agent._view.set('face', self._face('awake'))
+                agent._view.set('status', 'WiFi recovered!')
+                agent._view.update()
+                self._start_ao(agent)
+            else:
+                agent._view.set('status', 'WiFi down! Recovery failed.')
+                agent._view.update()
             return
 
         # --- AO health check ---
@@ -768,6 +872,23 @@ class AngryOxide(plugins.Plugin):
 
         self._captures_this_epoch = self._scan_captures(agent)
         self._stable_epochs += 1
+
+        # Flush debounced state if dirty
+        if getattr(self, '_state_dirty', False):
+            self._save_state(force=True)
+
+        # In AO-only mode, inject AP data into StubClient for display/epoch
+        if getattr(agent, '_ao_mode', False) and hasattr(agent, 'set_stub_aps'):
+            stub_aps = []
+            for filepath in self._known_files:
+                ap_mac, sta_mac = self._parse_capture_filename(os.path.basename(filepath))
+                if ap_mac != 'unknown':
+                    stub_aps.append({
+                        'hostname': '', 'mac': ap_mac, 'vendor': '',
+                        'channel': 0, 'rssi': 0, 'encryption': 'WPA2',
+                        'clients': [{'mac': sta_mac, 'vendor': ''}] if sta_mac != 'unknown' else [],
+                    })
+            agent.set_stub_aps(stub_aps)
 
         # set pwnagotchi mood based on AO activity
         if self._captures_this_epoch > 0:
@@ -817,16 +938,8 @@ class AngryOxide(plugins.Plugin):
                         ui.set(elem, '')
                     except Exception:
                         pass
-                # Rotate display-password and ip_display (they overlap at same position)
-                # Show one for 5s, then the other
-                try:
-                    show_ip = (int(time.time()) // 5) % 2 == 0
-                    if show_ip:
-                        ui.set('display-password', '')
-                    else:
-                        ui.set('ip_display', '')
-                except Exception:
-                    pass
+                # Leave display-password and ip_display alone — those plugins
+                # manage their own content at their own positions.
                 # Override status text that bt-tether/other plugins write
                 try:
                     cur_status = ui.get('status')
@@ -927,10 +1040,20 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'GET' and path == '/api/status':
             uptime_secs = int(time.time() - self._start_time) if self._start_time else None
+            # Count cracked passwords from potfile (not from captures)
+            cracked_count = 0
+            for pf in ['/home/pi/handshakes/wpa-sec.cracked.potfile',
+                        '/etc/pwnagotchi/handshakes/wpa-sec.cracked.potfile']:
+                try:
+                    with open(pf, 'r') as f:
+                        cracked_count += sum(1 for line in f if line.strip() and not line.startswith('#'))
+                except Exception:
+                    pass
             return jsonify({
                 'running': self._running,
                 'pid': self._process.pid if self._process else None,
                 'captures': self._captures,
+                'cracked': cracked_count,
                 'crash_count': self._crash_count,
                 'fw_crash_count': self._fw_crash_count,
                 'stopped_permanently': self._stopped_permanently,
@@ -945,6 +1068,14 @@ class AngryOxide(plugins.Plugin):
                 'skip_captured': self._skip_captured,
                 'config_whitelist': self._agent._config.get('main', {}).get('whitelist', []) if self._agent else [],
                 'discord_webhook': self._discord_webhook or '',
+                # Override cumulative to prevent theme from showing false cracked count
+                # (fix_exp.py on Pi injected total_crackable counting .22000 files as "cracked")
+                'cumulative': {
+                    'total_crackable': cracked_count,
+                    'total_handshakes': self._captures,
+                    'total_networks': len(self._captured_macs) if hasattr(self, '_captured_macs') else 0,
+                    'total_pmkids': 0,
+                },
             })
 
         if request.method == 'GET' and path == '/api/health':
@@ -968,7 +1099,33 @@ class AngryOxide(plugins.Plugin):
                 return jsonify({'mode': 'unknown'})
 
         if request.method == 'GET' and path == '/api/captures':
-            items = sorted(self._known_files.items(), key=lambda x: x[1], reverse=True)[:50]
+            # Scan disk directly (not _known_files) so captures survive restarts
+            output_dir = self.options.get('output_dir', '/etc/pwnagotchi/handshakes/')
+            try:
+                handshake_dir = self._agent._config['bettercap']['handshakes'] if self._agent else output_dir
+            except (KeyError, TypeError):
+                handshake_dir = output_dir
+            logging.debug("[angryoxide] captures API: output_dir=%s handshake_dir=%s", output_dir, handshake_dir)
+            # Collect from both dirs, dedup by basename
+            seen = {}
+            for d in [output_dir, handshake_dir]:
+                if not os.path.isdir(d):
+                    continue
+                for fname in os.listdir(d):
+                    if fname.endswith(('.pcapng', '.pcap', '.22000')):
+                        fpath = os.path.join(d, fname)
+                        if fname not in seen:
+                            try:
+                                seen[fname] = (fpath, os.path.getmtime(fpath))
+                            except OSError:
+                                pass
+            # Filter param: ?filter=verified or ?filter=all (default=all)
+            filter_mode = 'all'
+            try:
+                filter_mode = request.args.get('filter', 'all')
+            except Exception:
+                pass
+            items = sorted(seen.values(), key=lambda x: x[1], reverse=True)
             captures = []
             for f, mt in items:
                 fname = os.path.basename(f)
@@ -979,7 +1136,6 @@ class AngryOxide(plugins.Plugin):
                 elif 'pmkid' in fname.lower():
                     cap_type = 'PMKID'
                 elif fname.endswith('.pcapng') or fname.endswith('.pcap'):
-                    # Check file size as heuristic: PMKID captures are typically < 1KB
                     try:
                         size = os.path.getsize(f)
                         cap_type = 'PMKID' if size < 2048 else '4-way'
@@ -992,8 +1148,22 @@ class AngryOxide(plugins.Plugin):
                 else:
                     hash_name = fname.rsplit('.', 1)[0] + '.22000'
                     verified = os.path.isfile(os.path.join(os.path.dirname(f), hash_name))
-                captures.append({'file': fname, 'mtime': mt, 'type': cap_type, 'verified': verified})
-            return jsonify(captures)
+                if filter_mode == 'verified' and not verified:
+                    continue
+                # Extract AP MAC and SSID from .22000 file if available
+                ap_mac, ssid = '', ''
+                hash_path = os.path.join(os.path.dirname(f), fname.rsplit('.', 1)[0] + '.22000')
+                if fname.endswith('.22000'):
+                    hash_path = f
+                if os.path.isfile(hash_path):
+                    ap_mac, ssid = self._parse_22000_file(hash_path) or ('', '')
+                    if ap_mac is None:
+                        ap_mac = ''
+                    if ssid is None:
+                        ssid = ''
+                captures.append({'file': fname, 'mtime': mt, 'type': cap_type, 'verified': verified, 'ap_mac': ap_mac, 'ssid': ssid})
+            logging.debug("[angryoxide] captures API: scanned=%d filter=%s returning=%d", len(seen), filter_mode, len(captures))
+            return jsonify(captures[:100])
 
         if request.method == 'POST' and path == '/api/attacks':
             data = get_body()
@@ -1004,6 +1174,26 @@ class AngryOxide(plugins.Plugin):
             logging.info("[angryoxide] attacks updated via web: %s", self._attacks)
             self._save_state()
             return jsonify({'status': 'ok', 'attacks': self._attacks})
+
+        if request.method == 'POST' and path == '/api/pwn-attacks':
+            data = get_body()
+            if self._agent:
+                cfg = self._agent._config
+                if 'deauth' in data:
+                    self._pwn_deauth = bool(data['deauth'])
+                    cfg['personality']['deauth'] = self._pwn_deauth
+                if 'associate' in data:
+                    self._pwn_associate = bool(data['associate'])
+                    cfg['personality']['associate'] = self._pwn_associate
+                self._save_state()
+                logging.info("[angryoxide] PWN attacks updated: deauth=%s associate=%s",
+                             self._pwn_deauth, self._pwn_associate)
+                return jsonify({
+                    'status': 'ok',
+                    'deauth': self._pwn_deauth,
+                    'associate': self._pwn_associate,
+                })
+            return jsonify({'status': 'error', 'message': 'agent not ready'}), 503
 
         if request.method == 'POST' and path == '/api/rate':
             data = get_body()
@@ -1108,12 +1298,52 @@ class AngryOxide(plugins.Plugin):
                         self._save_delayed_plugins()
                     except Exception:
                         pass
-                    subprocess.run(['pwnoxide-mode', mode], timeout=60, capture_output=True)
-                    logging.info("[angryoxide] mode switched to %s via web", mode)
-                    return jsonify({'status': 'ok', 'mode': mode})
+                    # Run async — pwnoxide-mode restarts pwnagotchi, which kills this server
+                    import threading
+                    def _do_switch():
+                        time.sleep(1)  # let the HTTP response flush
+                        subprocess.run(['pwnoxide-mode', mode], timeout=90, capture_output=True)
+                    threading.Thread(target=_do_switch, daemon=True).start()
+                    logging.info("[angryoxide] mode switch to %s initiated via web", mode)
+                    return jsonify({'status': 'ok', 'mode': mode, 'message': 'Switching... page will reload in ~90s'})
                 except Exception as e:
                     return jsonify({'status': 'error', 'message': str(e)}), 500
             return jsonify({'status': 'error', 'message': 'invalid mode'}), 400
+
+        if request.method == 'GET' and path == '/api/cracked':
+            # Read cracked passwords from wpa-sec potfile
+            # Check both common locations
+            potfile_paths = [
+                '/home/pi/handshakes/wpa-sec.cracked.potfile',
+                '/etc/pwnagotchi/handshakes/wpa-sec.cracked.potfile',
+            ]
+            results = []
+            for pf in potfile_paths:
+                try:
+                    with open(pf, 'r') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line or line.startswith('#'):
+                                continue
+                            # wpa-sec potfile format: BSSID:ESSID:password
+                            parts = line.split(':')
+                            if len(parts) >= 3:
+                                results.append({
+                                    'bssid': parts[0],
+                                    'ssid': parts[1],
+                                    'password': ':'.join(parts[2:]),  # password may contain colons
+                                })
+                            elif len(parts) == 2:
+                                results.append({
+                                    'bssid': '',
+                                    'ssid': parts[0],
+                                    'password': parts[1],
+                                })
+                except (FileNotFoundError, PermissionError):
+                    continue
+                except Exception:
+                    continue
+            return jsonify(results)
 
         if request.method == 'POST' and path == '/api/discord-webhook':
             data = get_body()
@@ -1157,18 +1387,34 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'GET' and path == '/api/download/all':
             import zipfile, io
+            filter_mode = request.args.get('filter', 'all')
             ao_dir = self.options.get('output_dir', '/etc/pwnagotchi/handshakes/')
             bc_dir = self._agent._config['bettercap']['handshakes'] if self._agent else '/home/pi/handshakes'
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for d, prefix in [(ao_dir, 'ao'), (bc_dir, 'bettercap')]:
                     if os.path.isdir(d):
-                        for f in os.listdir(d):
+                        all_files = os.listdir(d)
+                        hash_basenames = set()
+                        if filter_mode == 'verified':
+                            for f in all_files:
+                                if f.endswith('.22000'):
+                                    hash_basenames.add(os.path.splitext(f)[0])
+                        for f in all_files:
                             fpath = os.path.join(d, f)
-                            if os.path.isfile(fpath) and (f.endswith('.pcapng') or f.endswith('.pcap') or f.endswith('.22000')):
+                            if not os.path.isfile(fpath):
+                                continue
+                            if not (f.endswith('.pcapng') or f.endswith('.pcap') or f.endswith('.22000')):
+                                continue
+                            if filter_mode == 'verified':
+                                base = os.path.splitext(f)[0]
+                                if f.endswith('.22000') or base in hash_basenames:
+                                    zf.write(fpath, f'{prefix}/{f}')
+                            else:
                                 zf.write(fpath, f'{prefix}/{f}')
             buf.seek(0)
-            return Response(buf.read(), mimetype='application/zip', headers={'Content-Disposition': 'attachment; filename=captures.zip'})
+            fname = 'captures_verified.zip' if filter_mode == 'verified' else 'captures.zip'
+            return Response(buf.read(), mimetype='application/zip', headers={'Content-Disposition': f'attachment; filename={fname}'})
 
         if request.method == 'GET' and path == '/api/logs':
             try:
@@ -1354,6 +1600,10 @@ input:checked+.slider:before{transform:translateX(22px)}
 .rate-btns{display:flex;gap:8px;margin-top:8px}
 .rate-btn{flex:1;padding:14px 0;border:2px solid #0f3460;border-radius:10px;background:transparent;color:#e0e0e0;font-size:18px;font-weight:bold;font-family:inherit;cursor:pointer;text-align:center;transition:.2s}
 .rate-btn.active{background:#0f3460;color:#00d4aa;border-color:#00d4aa}
+.rate-btn.risky{border-color:#e67e22;color:#e67e22}
+.rate-btn.risky.active{background:#5a3000;color:#e67e22;border-color:#e67e22}
+.switch-risky .slider{background:#e67e22 !important}
+.switch-risky .slider:before{background:#fff !important}
 .rate-btn:active{transform:scale(0.95)}
 .channel-row{display:flex;align-items:center;gap:10px;margin-top:10px}
 .channel-row label{font-size:13px;color:#888;white-space:nowrap}
@@ -1424,9 +1674,9 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div style="color:#555;font-size:10px;margin-top:4px">Refreshes every 3 seconds</div>
 </div>
 
-<div class="card">
+<div class="card" id="nearby-networks-card" style="display:none">
 <div class="card-title">Nearby Networks <span id="ap-count" style="color:#888;font-size:12px;font-weight:normal"></span></div>
-<div style="color:#888;font-size:11px;margin-bottom:8px">Access points detected by the WiFi interface. Sorted by signal strength. Updates every 10 seconds.</div>
+<div style="color:#888;font-size:11px;margin-bottom:8px">Access points discovered by bettercap. This card is only available in PWN mode &#8212; AngryOxide does its own target discovery internally and doesn&#39;t expose a live AP list.</div>
 <div style="overflow-x:auto">
 <table id="ap-table" style="width:100%;border-collapse:collapse;font-size:11px">
 <thead><tr style="color:#00d4aa;border-bottom:1px solid #0f3460;text-align:left">
@@ -1447,8 +1697,13 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card">
 <div class="card-title">Recent Captures</div>
 <div style="color:#888;font-size:11px;margin-bottom:8px">AO validates every capture before saving &#8212; no junk pcaps. &#10003; verified = .22000 hashcat-ready hash exists. Click to download individual files or use Download All for a ZIP.</div>
-<div style="display:flex;gap:8px;margin-bottom:8px">
-<a href="" id="dl-all-btn" class="action-btn btn-restart" style="text-decoration:none;text-align:center;padding:8px;font-size:11px;flex:1">Download All Captures (ZIP)</a>
+<div style="display:flex;gap:8px;margin-bottom:8px;align-items:center">
+<a href="" id="dl-all-btn" class="action-btn btn-restart" style="text-decoration:none;text-align:center;padding:8px;font-size:11px;flex:1">Download All (ZIP)</a>
+<a href="" id="dl-verified-btn" class="action-btn btn-restart" style="text-decoration:none;text-align:center;padding:8px;font-size:11px;flex:1">Download Verified (ZIP)</a>
+<select id="capture-filter" onchange="refreshCaptures()" style="background:#1a1a2e;color:#e0e0e0;border:1px solid #333;border-radius:4px;padding:6px 8px;font-size:11px;font-family:inherit">
+<option value="all">Show All</option>
+<option value="verified">Verified Only</option>
+</select>
 </div>
 <div class="captures-list" id="captures-list"><div style="color:#555;font-size:12px">Loading...</div></div>
 </div>
@@ -1459,7 +1714,20 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div id="cracked-list"><div style="color:#555;font-size:12px">No cracked passwords yet</div></div>
 </div>
 
-<div class="card">
+<div class="card" id="pwn-attacks-card" style="display:none">
+<div class="card-title">Bettercap Attacks</div>
+<div style="color:#888;font-size:11px;margin-bottom:8px">Bettercap&#39;s built-in attack methods. These are the only 2 attack types available in PWN mode. Changes apply immediately &#8212; no restart needed.</div>
+<div class="toggle-row">
+<div class="toggle-info"><div class="toggle-label">Deauth</div><div class="toggle-desc">Kick clients off networks to capture reconnection handshakes</div></div>
+<label class="switch"><input type="checkbox" id="pwn-deauth" onchange="togglePwnAttack('deauth',this.checked)"><span class="slider"></span></label>
+</div>
+<div class="toggle-row" style="border-bottom:none">
+<div class="toggle-info"><div class="toggle-label">Associate</div><div class="toggle-desc">Send association frames to capture PMKID hashes from routers</div></div>
+<label class="switch"><input type="checkbox" id="pwn-associate" onchange="togglePwnAttack('associate',this.checked)"><span class="slider"></span></label>
+</div>
+</div>
+
+<div class="card" id="ao-attacks-card">
 <div class="card-title">Attack Types</div>
 <div style="color:#00d4aa;font-size:11px;margin-bottom:10px;padding:8px;background:#0f346033;border-radius:6px">&#9889; All 6 ON is the sweet spot &#8212; they complement each other, not interfere. Only turn one off if you have a specific reason (stealth, debugging, fragile target).</div>
 <div class="toggle-row">
@@ -1488,7 +1756,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 </div>
 
-<div class="card">
+<div class="card ao-only-card">
 <div class="card-title">Smart Skip</div>
 <div style="color:#888;font-size:11px;margin-bottom:8px">When enabled, AO will skip networks you already have handshakes for. Saves time and focuses on new targets.</div>
 <div class="toggle-row" style="border-bottom:none">
@@ -1497,33 +1765,35 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 </div>
 
-<div class="card">
+<div class="card ao-only-card">
 <div class="card-title">Attack Rate</div>
 <div style="color:#888;font-size:11px;margin-bottom:8px">How fast to send attack frames. Higher = more captures but more visible. Rate 2 is recommended for general use.</div>
 <div class="rate-btns">
 <button class="rate-btn" id="rate-1" onclick="setRate(1)">1<br><span style="font-size:10px;font-weight:normal;color:#888">Quiet</span><br><span style="font-size:9px;font-weight:normal;color:#555">Low profile, fewer frames</span></button>
-<button class="rate-btn active" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal;color:#888">Normal</span><br><span style="font-size:9px;font-weight:normal;color:#555">Best balance</span></button>
-<button class="rate-btn" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal;color:#888">Aggressive</span><br><span style="font-size:9px;font-weight:normal;color:#555">Max speed, easy to detect</span></button>
+<button class="rate-btn risky" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span><br><span style="font-size:9px;font-weight:normal">&#9888; May crash built-in WiFi</span></button>
+<button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Aggressive</span><br><span style="font-size:9px;font-weight:normal">&#9888; Will crash built-in WiFi</span></button>
 </div>
 </div>
 
-<div class="card">
+<div class="card ao-only-card">
 <div class="card-title">Channels</div>
 <div style="color:#888;font-size:11px;margin-bottom:4px">Which WiFi channels to scan. Leave empty for default (1,6,11). Autohunt scans all channels then locks onto ones with targets. Dwell = how long to stay on each channel.</div>
+<div style="color:#e67e22;font-size:11px;margin-bottom:4px">&#9888; <b>Built-in WiFi warning:</b> Scanning many channels (especially all 13) increases firmware crash risk on the BCM43436B0 chip. Stick to 1,6,11 for stability. External dongles (e.g. Alfa) are not affected.</div>
 <div class="channel-row">
 <label>Channels:</label>
 <input type="text" id="ch-input" placeholder="e.g. 1,6,11 (empty=default)">
 </div>
 <div class="autohunt-row">
 <label>Autohunt:</label>
-<label class="switch"><input type="checkbox" id="ch-autohunt" onchange="applyChannels()"><span class="slider"></span></label>
-<span style="font-size:11px;color:#888;margin-left:4px">Auto-scan all channels</span>
+<label class="switch switch-risky"><input type="checkbox" id="ch-autohunt" onchange="applyChannels()"><span class="slider"></span></label>
+<span style="font-size:11px;color:#e67e22;margin-left:4px">&#9888; Scans ALL channels first — will likely crash built-in WiFi. Safe with external dongle only.</span>
 </div>
 <div class="dwell-row">
 <label>Dwell:</label>
 <input type="range" id="ch-dwell" min="1" max="30" value="2" oninput="document.getElementById('dwell-val').textContent=this.value+'s'">
 <span class="dwell-val" id="dwell-val">2s</span>
 </div>
+<div style="color:#e67e22;font-size:11px;margin-top:6px">&#9888; <b>Dwell warning:</b> Very fast hopping (1-2s) across many channels stresses the BCM43436B0 firmware and can cause crashes. This is a hardware limitation that cannot be patched further. For stable operation, use channels 1,6,11 with dwell 2s+. If you need fast hopping across all channels, use an external USB dongle (e.g. Alfa AWUS036ACH).</div>
 <button class="action-btn btn-restart" style="margin-top:10px;width:100%" onclick="applyChannels()">Apply Channel Settings</button>
 </div>
 
@@ -1688,6 +1958,13 @@ function toggleAttack(name, val) {
     data[name] = val;
     api('POST', '/api/attacks', data).then(function(r){
         toast('Attack ' + name + (val ? ' ON' : ' OFF'));
+    });
+}
+function togglePwnAttack(name, val) {
+    var data = {};
+    data[name] = val;
+    api('POST', '/api/pwn-attacks', data).then(function(r){
+        toast(name + (val ? ' ON' : ' OFF'));
     });
 }
 function setRate(r) {
@@ -1872,6 +2149,8 @@ function refreshHealth() {
     }).catch(function(){});
 }
 function refreshAPs() {
+    var nnCard = document.getElementById('nearby-networks-card');
+    if (nnCard && nnCard.style.display === 'none') return;
     api('GET', '/api/aps').then(function(aps){
         var el = document.getElementById('ap-tbody');
         document.getElementById('ap-count').textContent = '(' + aps.length + ')';
@@ -1894,8 +2173,29 @@ function refreshAPs() {
 }
 function refreshMode() {
     api('GET', '/api/mode').then(function(d){
+        var isPwn = d.mode === 'pwn';
         document.getElementById('mode-ao').classList.toggle('active', d.mode === 'ao');
-        document.getElementById('mode-pwn').classList.toggle('active', d.mode === 'pwn');
+        document.getElementById('mode-pwn').classList.toggle('active', isPwn);
+        // Show/hide mode-specific cards
+        var nnCard = document.getElementById('nearby-networks-card');
+        if (nnCard) nnCard.style.display = isPwn ? '' : 'none';
+        var aoAtk = document.getElementById('ao-attacks-card');
+        if (aoAtk) aoAtk.style.display = isPwn ? 'none' : '';
+        var pwnAtk = document.getElementById('pwn-attacks-card');
+        if (pwnAtk) pwnAtk.style.display = isPwn ? '' : 'none';
+        // Hide all AO-only cards in PWN mode
+        document.querySelectorAll('.ao-only-card').forEach(function(el){ el.style.display = isPwn ? 'none' : ''; });
+        // Load PWN attack state from config
+        if (isPwn) {
+            api('GET', '/api/config').then(function(c){
+                if (c.personality) {
+                    var d = document.getElementById('pwn-deauth');
+                    if (d) d.checked = c.personality.deauth !== false;
+                    var a = document.getElementById('pwn-associate');
+                    if (a) a.checked = c.personality.associate !== false;
+                }
+            }).catch(function(){});
+        }
     }).catch(function(){});
 }
 function toggleBTVisible(val) {
@@ -1917,28 +2217,28 @@ function refreshBT() {
     }).catch(function(){});
 }
 function refreshCaptures() {
-    api('GET', '/api/captures').then(function(list){
+    var filterEl = document.getElementById('capture-filter');
+    var filterVal = filterEl ? filterEl.value : 'all';
+    api('GET', '/api/captures?filter=' + filterVal).then(function(list){
         var el = document.getElementById('captures-list');
         if (!list || !list.length) { el.innerHTML = '<div style="color:#555;font-size:12px">No captures yet</div>'; return; }
         el.innerHTML = list.map(function(c){
             var d = new Date(c.mtime * 1000);
             var ts = d.toLocaleString();
-            var fname = c.file.replace('.pcapng','').replace('.pcap','').replace('.failed','');
-            var label = fname;
-            var mac = '';
-            var ssid = '';
-            // AO format: -YYYY-MM-DD_HH-MM-SS (starts with dash, no AP info)
-            if (fname.match(/^-?\d{4}-\d{2}-\d{2}/)) {
-                var dateStr = fname.replace(/^-/, '').replace(/_/g, ' ').replace(/-/g, function(m,o) { return o > 10 ? ':' : '-'; });
-                label = 'Capture ' + dateStr;
-            }
-            // Bettercap format: AA-BB-CC-DD-EE-FF_NetworkName
-            else {
+            var fname = c.file.replace('.pcapng','').replace('.pcap','').replace('.failed','').replace('.22000','');
+            var mac = c.ap_mac || '';
+            var ssid = c.ssid || '';
+            if (!ssid && mac) ssid = 'HIDDEN';
+            var label = ssid || mac || fname;
+            // If no SSID/MAC from API, try parsing filename (bettercap format)
+            if (!mac && !ssid) {
                 var parts = fname.split('_');
                 if (parts[0] && parts[0].split('-').length === 6) {
                     mac = parts[0].replace(/-/g, ':');
                     ssid = parts.length > 1 ? parts.slice(1).join('_') : '';
                     label = ssid || mac;
+                } else {
+                    label = fname;
                 }
             }
             var typeBadge = '';
@@ -1946,7 +2246,20 @@ function refreshCaptures() {
             else if (c.type === '4-way') typeBadge = '<span style="background:#0f3460;color:#f0c040;padding:1px 4px;border-radius:3px;font-size:9px;margin-left:4px">4-WAY</span>';
             else if (c.type === 'hashcat') typeBadge = '<span style="background:#0f3460;color:#e0e0e0;padding:1px 4px;border-radius:3px;font-size:9px;margin-left:4px">HC22000</span>';
             var verifiedBadge = c.verified ? '<span style="color:#00d4aa;font-size:9px;margin-left:4px" title="Hashcat-ready .22000 file exists">&#10003; verified</span>' : '<span style="color:#e94560;font-size:9px;margin-left:4px" title="No .22000 hash file found">&#10007; unverified</span>';
-            return '<div class="capture-item"><a href="'+BASE+'/api/download/capture/'+encodeURIComponent(c.file)+'" style="color:#00d4aa;text-decoration:none" download>'+esc(label)+'</a>'+typeBadge+verifiedBadge+' <span style="color:#555;font-size:10px">' + (ssid ? esc(mac) + ' ' : '') + ts+'</span></div>';
+            var macLine = mac ? ' <span style="color:#666;font-size:10px">['+esc(mac)+']</span>' : '';
+            return '<div class="capture-item"><a href="'+BASE+'/api/download/capture/'+encodeURIComponent(c.file)+'" style="color:#00d4aa;text-decoration:none" download>'+esc(label)+'</a>'+macLine+typeBadge+verifiedBadge+' <span style="color:#555;font-size:10px">'+ts+'</span></div>';
+        }).join('');
+    }).catch(function(){});
+}
+function refreshCracked() {
+    api('GET', '/api/cracked').then(function(list){
+        var el = document.getElementById('cracked-list');
+        if (!list || !list.length) { el.innerHTML = '<div style="color:#555;font-size:12px">No cracked passwords yet</div>'; return; }
+        el.innerHTML = list.map(function(c){
+            return '<div style="padding:4px 0;border-bottom:1px solid #0f346022">' +
+                '<span style="color:#00d4aa;font-weight:bold">' + esc(c.ssid || c.bssid) + '</span>' +
+                (c.bssid ? ' <span style="color:#666;font-size:10px">['+esc(c.bssid)+']</span>' : '') +
+                '<br><span style="color:#f0c040;font-family:monospace;font-size:12px">' + esc(c.password) + '</span></div>';
         }).join('');
     }).catch(function(){});
 }
@@ -2019,15 +2332,17 @@ function saveConfig() {
 }
 // Initial load — stagger to avoid hammering Pi Zero CPU
 document.getElementById('dl-all-btn').href = BASE + '/api/download/all';
+document.getElementById('dl-verified-btn').href = BASE + '/api/download/all?filter=verified';
 refreshStatus();
 setTimeout(refreshHealth, 1000);
-setTimeout(refreshAPs, 2000);
-setTimeout(refreshMode, 3000);
+setTimeout(refreshMode, 2000);
+setTimeout(refreshAPs, 3000);
 setTimeout(refreshCaptures, 4000);
 setTimeout(refreshBT, 5000);
 setTimeout(refreshLogs, 6000);
 setTimeout(loadConfig, 7000);
 setTimeout(refreshPlugins, 8000);
+setTimeout(refreshCracked, 9000);
 // Auto-refresh — stagger intervals to avoid simultaneous requests
 setInterval(refreshDisplay, 3000);
 setInterval(refreshStatus, 5000);
@@ -2037,11 +2352,15 @@ setInterval(refreshCaptures, 30000);
 setInterval(refreshMode, 30000);
 setInterval(refreshBT, 30000);
 setInterval(refreshLogs, 30000);
+setInterval(refreshCracked, 60000);
 </script>
 </body>
 </html>'''
 
     def on_unload(self, ui):
+        # Flush any pending state to disk
+        if getattr(self, '_state_dirty', False):
+            self._save_state(force=True)
         # Fast boot: save plugin states before shutdown
         self._save_delayed_plugins()
 

@@ -181,6 +181,12 @@ FILE_MAP = {
         "/etc/systemd/system/oxagotchi-splash.service",
         None,
     ),
+    "splash_delay": (
+        os.path.join(SCRIPT_DIR, "..", "services", "pwnagotchi-splash-delay.conf"),
+        "splash-delay.conf",
+        "/etc/systemd/system/pwnagotchi.service.d/splash-delay.conf",
+        None,
+    ),
     "tweak_view": (
         os.path.join(SCRIPT_DIR, "tweak_view.json"),
         "tweak_view.json",
@@ -555,15 +561,20 @@ def step13_upload_tweak_view(ssh, sftp):
 
 
 def step14_deploy_splash(ssh, sftp):
-    """Deploy boot/shutdown splash service."""
+    """Deploy boot/shutdown splash service and pwnagotchi startup delay drop-in."""
     step(14, "Deploy boot splash service")
 
     _upload_and_install(ssh, sftp, "splash_script")
     _upload_and_install(ssh, sftp, "splash_service")
 
+    # Deploy pwnagotchi.service drop-in that delays startup by 3s so the
+    # splash image is visible before pwnagotchi reinitializes the e-ink display.
+    run(ssh, "sudo mkdir -p /etc/systemd/system/pwnagotchi.service.d")
+    _upload_and_install(ssh, sftp, "splash_delay")
+
     run(ssh, "sudo systemctl daemon-reload")
     run(ssh, "sudo systemctl enable oxagotchi-splash.service")
-    ok("oxagotchi-splash.service enabled")
+    ok("oxagotchi-splash.service enabled + splash-delay drop-in installed")
 
 
 def step15_bt_keepalive(ssh):
