@@ -1,5 +1,36 @@
 # Changelog
 
+## [2.1.0] - 2026-03-17
+
+### Added
+- **AO mode display overhaul** — complete e-ink layout redesign for AngryOxide mode:
+  - Top bar: `AO: {session}/{total} | {uptime} | CH:{channels}` replaces PWND counter
+  - Bottom bar: `CRASH:0` (firmware crash counter) replaces CH indicator
+  - CH and AP indicators hidden (useless in AO mode — AO manages its own)
+  - No name label, no cursor blink — bull face gets full middle zone
+  - Bull face positioned at Y=16, almost touching top bar line
+- **StubClient** (`stub_client.py`): bettercap API replacement for AO-only mode
+- **Frame padding** (`frame_padding.py`): pads injection frames to 650+ bytes to prevent BCM43436B0 PSM watchdog crashes
+- **WalkBy plugin** (`walkby.py`): concurrent blitz attack for walk-by handshake capture (PWN mode only)
+- **Synthetic blind epoch fix**: injects heartbeat AP when monitor interface is up, preventing false "blind" restarts in AO mode
+- **Display spec document** (`docs/DISPLAY_SPEC.md`): 600+ line comprehensive spec covering every pixel position, every event-to-face mapping, boot/shutdown sequences, error states, and mode switching
+- **SD card image builder** (`tools/build_image.py`): SSH to Pi, strip personal data, zero free space, stream dd, gzip compress
+
+### Fixed
+- **Bull faces in PWN mode boot**: splash service now checks for AO overlay before rendering bull face — PWN mode gets clean Korean faces from start
+- **[unknown] in PWND counter**: removed last-captured AP hostname from display in AO mode (AO indicator shows capture count instead)
+- **Misleading attack messages**: `associate()` and `deauth()` now early-return in AO mode — no more "Associating to AP_NAME" when AO handles attacks
+- **Rate 2 recommendation**: dashboard description fixed to warn that rate 1 is maximum safe for BCM43436B0 (rate 2 causes firmware crash at 0x204CA)
+- **Blind epoch hack**: `mon_max_blind_epochs` can stay at default 5 instead of 9999 — synthetic AP heartbeat keeps pwnagotchi alive in AO mode
+- **Agent.py idempotency**: patch script now checks for all sub-patches (`ao_active` + `AO handles attacks`) before skipping
+
+### Changed
+- **AO indicator position**: moved from (0, 85) to (0, 0) — top-left of display, replacing PWND
+- **AO indicator format**: now shows `AO: {captures}/{total} | {uptime} | CH:{channels}` — captures, total unique, uptime, and active channel list in one line
+- **Bottom bar in AO mode**: `CRASH:0` (firmware health) + BT + CHG + AUTO — all AO-relevant
+- **apply_patches.sh**: expanded from 5 to 10 patches — adds __init__.py, agent.py (AO mode + blind epoch + attack skip + PWND skip), view.py (hide name, face near top), cli.py (empty name), components.py (PNG fallback)
+- **Nexmon upstream**: submitted ndev_global dangling pointer fix to seemoo-lab/nexmon#677
+
 ## [2.0.0] - 2026-03-15
 
 ### Added
