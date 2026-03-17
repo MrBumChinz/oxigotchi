@@ -380,3 +380,196 @@ These are hardware/system indicators that are mode-independent:
 - **UP** (uptime) — system uptime
 - **PWND** (handshake count) — total captures, relevant in both modes
 - **AUTO/MANU** (mode) — pwnagotchi operating mode
+
+---
+
+## Error & Crash States
+
+### AO Mode Error Faces
+
+The angryoxide plugin handles diagnostic face states beyond normal moods:
+
+| Condition | Face | Detection | Recovery |
+|-----------|------|-----------|----------|
+| **WiFi down** | `wifi_down.png` | Monitor interface missing from `/sys/class/net/` | Plugin polls, shows wifi_down until interface returns |
+| **Firmware crash** | `fw_crash.png` | journalctl pattern: "-110 Set Channel failed" or "firmware has halted" | Plugin runs modprobe -r/modprobe cycle, shows fw_crash for up to 120s |
+| **AO process died** | `ao_crashed.png` | `process.poll() != None` (AO exited) | Exponential backoff restart: 5s, 10s, 20s, 40s... up to 300s. Face shows until restart. |
+| **AO stopped permanently** | `ao_crashed.png` | Crash count exceeds `max_crashes` (default 10) | Shows "AO: ERR" in indicator. No more restarts. Manual reset via webhook. |
+| **Battery low** | `battery_low.png` | PiSugar reports < 20% via `/tmp/pisugar-battery` | Face overrides mood face on each epoch |
+| **Battery critical** | `battery_critical.png` | PiSugar reports < 5% | Face overrides mood face, takes priority over battery_low |
+| **SDIO bus death** | `broken.png` | wlan0/wlan0mon disappears AND modprobe reload fails | Unrecoverable without power cycle. Display stuck on last face. |
+
+**Face priority** (highest wins): battery_critical > fw_crash > ao_crashed > wifi_down > battery_low > normal mood
+
+### PWN Mode Error States
+
+PWN mode uses standard pwnagotchi error handling:
+
+| Condition | Face | Detection |
+|-----------|------|-----------|
+| **Bettercap unreachable** | `(☓‿‿☓)` BROKEN | API timeout during `_wait_bettercap()` |
+| **Monitor mode failed** | `(☓‿‿☓)` BROKEN | Interface not found after mon_start_cmd |
+| **Blind (no APs)** | `(╥☁╥ )` SAD → restart | `blind_for >= mon_max_blind_epochs` (default 5) triggers service restart |
+| **Rebooting** | `(☓‿‿☓)` BROKEN | `on_rebooting()` called |
+
+---
+
+## Manual Mode (MANU)
+
+Triggered by starting pwnagotchi with `--manual` flag. Applies to both AO and PWN.
+
+**Display differences from AUTO:**
+- Mode indicator shows **"MANU"** instead of "AUTO" at (225, 109)
+- Face: SAD if last session had >3 epochs and 0 handshakes, else HAPPY
+- Channel shows "-" (no scanning)
+- APS shows last session's associated count
+- Status shows last session summary text
+- Uptime shows last session duration
+- PWND shows last session handshakes + total unique
+
+**No automatic scanning or attacking in MANU mode.** Display is static until manually switched to AUTO.
+
+---
+
+## Display Configuration
+
+### Rotation
+
+```toml
+[ui.display]
+rotation = 180    # degrees: 0, 90, 180, 270
+```
+
+- **Default for Oxigotchi: 180°** — Pi Zero 2W mounted upside-down with PiSugar battery underneath
+- Rotation is applied in `display.py` via `canvas.rotate()` before sending to EPD
+- The splash service also rotates 180° via `canvas.transpose(Image.ROTATE_180)`
+- If rotation is 90° or 270°, width/height swap (portrait mode — not recommended for 2.13")
+
+### Invert Mode
+
+```toml
+[ui]
+invert = false    # false = black on white (default), true = white on black
+```
+
+- **false (default):** White background, black text/art — standard e-ink appearance
+- **true:** Black background, white text/art — higher contrast in bright light
+- When inverted: `BLACK = 0x00`, `WHITE = 0xFF` (swapped)
+- PNG faces are colorized via `ImageOps.colorize()` when `self.color == 255`
+- All plugin elements inherit the global BLACK/WHITE values
+
+### FPS (Refresh Rate)
+
+```toml
+[ui]
+fps = 0.0    # 0 = manual updates only, >0 = continuous refresh
+```
+
+- **0.0 (default):** Display only updates on major state changes (face, status, handshakes). Uptime and name are in the `_ignore_changes` list — they don't trigger refreshes.
+- **>0 (e.g., 1.0):** `_refresh_handler` thread runs at this rate. Enables cursor blink on name. Uptime updates live. More e-ink wear.
+- Recommended: `0.0` for AO mode (no cursor needed), `1.0` for PWN mode (cursor blink)
+
+### tweak_view.json (Position Overrides)
+
+Deployed to `/etc/pwnagotchi/custom-plugins/tweak_view.json`. Overrides default element positions for the Waveshare V4 layout. Used by the VSS (Volts/Sats/Status) plugin framework.
+
+Current overrides on the Pi:
+
+```json
+{
+    "VSS.shakes.xy": "0,0",
+    "VSS.uptime.xy": "187,0",
+    "VSS.channel.xy": "0,109",
+    "VSS.channel.label_font": "Small",
+    "VSS.aps.xy": "40,109",
+    "VSS.aps.label": "AP",
+    "VSS.aps.label_font": "Small",
+    "VSS.connection_status.xy": "85,109",
+    "VSS.bluetooth.xy": "120,109",
+    "VSS.bluetooth.label": "BT",
+    "VSS.bat.xy": "155,109",
+    "VSS.bat.label": "",
+    "VSS.mode.xy": "220,109"
+}
+```
+
+**Effect:** Moves PWND to top-left (0,0), pushes CH/AP/BT/BAT/MODE to the bottom bar (Y=109) with Small fonts. This frees up more vertical space in the middle zone for the face and status text.
+
+**Note:** tweak_view.json positions take priority over hardcoded layout positions. If a plugin reads from `self._layout`, it gets the hardware default. The VSS framework applies JSON overrides on top.
+
+---
+
+## Web UI Display Preview
+
+### `/ui` Endpoint
+
+```
+GET http://10.12.194.1:8080/ui
+```
+
+Returns the current e-ink display as a **PNG image** (250×122, 1-bit).
+
+- Updated on every `view.update()` call via `web.update_frame(canvas)`
+- Served by `handler.py` with `send_file(web.frame_path, mimetype="image/png")`
+- Frame is saved to a temp file with lock protection (`web.frame_lock`)
+- The main web page (`/`) includes this as `<img src="/ui">` with auto-refresh
+
+### `/` Main Page
+
+Shows the e-ink preview image at the top, with navigation to plugins page. This is stock pwnagotchi — works in both modes.
+
+### AO Dashboard (`/plugins/angryoxide/`)
+
+Full-featured web dashboard (only meaningful in AO mode). Shows live status, nearby networks, attack controls, capture history. Auto-refreshes every 5 seconds.
+
+---
+
+## Friend Face & Peer Display
+
+### Format
+
+```
+▌▌▌│ buddy 3 (15) of 4
+```
+
+- **Signal bars:** 1-4 filled bars based on peer RSSI
+  - ≥ -67 dBm: 4 bars (▌▌▌▌)
+  - ≥ -70 dBm: 3 bars (▌▌▌│)
+  - ≥ -80 dBm: 2 bars (▌▌││)
+  - < -80 dBm: 1 bar (▌│││)
+- **Name:** Peer's advertised name
+- **Numbers:** `pwnd_run (pwnd_total)` — handshakes this session (lifetime)
+- **"of N":** Total peers visible (shown if >1, "of over 9000" if >9000)
+
+### Position
+
+- `friend_name` at (0, 92) — BoldSmall 9pt
+- Only visible when a peer is in range
+- Set to `None` (hidden) when no peers detected
+- Works identically in both AO and PWN modes
+
+---
+
+## E-Ink Display Properties
+
+### Image Persistence
+
+E-ink displays retain their last image **indefinitely** without power. When the Pi shuts down:
+- **AO mode:** Last image is the shutdown bull face (from splash ExecStop)
+- **PWN mode:** Last image is the Korean sleep face (from `view.on_shutdown()`)
+- The display will show this face for hours/days until next power-on
+
+### Partial vs Full Refresh
+
+| Refresh Type | Speed | Flicker | Used By |
+|-------------|-------|---------|---------|
+| **Full** (`epd.display()`) | ~2-3s | Full screen flash | Splash service only (boot/shutdown) |
+| **Partial** (`epd.displayPartial()`) | ~0.3-0.5s | None (in-place update) | All pwnagotchi UI updates |
+
+- Full refresh writes to both EPD RAM banks — image survives a subsequent `Clear()` + `displayPartBaseImage()`
+- Partial refresh only updates changed pixels — faster but can accumulate ghosting over time
+- Pwnagotchi calls `displayPartBaseImage()` once during init, then `displayPartial()` for all updates
+
+### Ghosting
+
+After extended use (hours), partial refresh can leave ghost artifacts. The splash service's full refresh on boot/shutdown helps clear ghosting. No automatic ghost-clearing cycle is implemented.
