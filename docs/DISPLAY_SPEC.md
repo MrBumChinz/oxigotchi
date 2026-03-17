@@ -325,6 +325,39 @@ should only ever see clean faces and status text.
 - The Text widget must silently suppress any value containing `/` rather than rendering it
 - If a PNG face file is missing, the display should show nothing (blank) rather than the path
 
+### Status Text — Mode-Appropriate Content
+
+In AO mode, pwnagotchi's voice messages about individual AP names are **irrelevant** because
+AO handles all attacks internally. Pwnagotchi doesn't send deauths or assocs — it only runs
+the epoch loop and observes. Showing "Deauthenticating aa:bb:cc..." or "Hey AP_NAME let's
+be friends!" is misleading because those actions aren't happening.
+
+**AO mode status text should show:**
+- Boot/init messages: "Initializing...", version info (normal, from `on_starting()`)
+- AO-specific status: "AO: {captures} captures | {uptime}" (set by angryoxide plugin overriding BT-tether bleeds)
+- Mood messages: "Sniffing around...", "Zzz...", "Looking around..." (from voice.py, still relevant)
+- Handshake messages: "Cool, we got N new handshakes!" (relevant — AO captures trigger this)
+- Peer messages: friend/lost peer (relevant — mesh peers are mode-independent)
+
+**AO mode status text should NOT show:**
+- `on_assoc(ap)`: "Associating to {AP_NAME}" — AO does its own assocs, pwnagotchi doesn't
+- `on_deauth(sta)`: "Deauthenticating {MAC}" — AO does its own deauths, pwnagotchi doesn't
+- `on_miss(who)`: "Missed {who}" — pwnagotchi isn't attacking, so it can't miss
+
+**PWN mode status text:** All messages are appropriate — pwnagotchi is doing the attacks via bettercap.
+
+**Implementation note:** The `associate()` and `deauth()` methods in agent.py still run in AO mode
+(the main epoch loop calls them), but they go through StubClient which no-ops the commands. The
+voice messages still fire though. To suppress them in AO mode, the angryoxide plugin should override
+the status text on `on_ui_update()` when it detects bettercap-style attack messages. Currently the
+plugin only overrides BT-tether status bleeds — it should also suppress assoc/deauth messages.
+
+**TODO:** Suppress `on_assoc()` and `on_deauth()` status text in AO mode. Either:
+1. Have the angryoxide plugin override status on every `on_ui_update()` with AO-relevant text
+2. Or patch agent.py to skip `associate()` and `deauth()` calls entirely when `_ao_mode=True`
+
+Option 2 is cleaner — if AO handles attacks, pwnagotchi shouldn't attempt them at all.
+
 ### No Overlap Rule
 - **AO mode:** No name rendered. Face at Y=16. Status at (125, 20). No conflict.
 - **PWN mode:** Name at Y=20 (ends ~Y=32). Face at Y=34. 2px gap. No overlap.

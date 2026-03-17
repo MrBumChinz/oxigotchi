@@ -292,8 +292,8 @@ patch_agent() {
     local f="$SITE_PKG/agent.py"
     [ -f "$f" ] || { log "SKIP agent.py: $f not found"; SKIPPED=$((SKIPPED+1)); return; }
 
-    if grep -q 'ao_active' "$f" 2>/dev/null; then
-        log "OK   agent.py: already patched (full, with blind epoch fix)"
+    if grep -q 'ao_active' "$f" 2>/dev/null && grep -q 'AO handles attacks' "$f" 2>/dev/null; then
+        log "OK   agent.py: already patched (full, with blind epoch + attack skip)"
         SKIPPED=$((SKIPPED+1))
     else
         python3 - "$f" <<'PYEOF'
@@ -414,6 +414,25 @@ new_gap = '''        # AO mode: if monitor interface is up, inject a synthetic A
         return self.set_access_points(aps)'''
 if old_gap in code:
     code = code.replace(old_gap, new_gap, 1)
+
+# Skip associate/deauth in AO mode — AO handles attacks internally
+old_assoc = '''    def associate(self, ap, throttle=-1):
+        if self.is_stale():'''
+new_assoc = '''    def associate(self, ap, throttle=-1):
+        if self._ao_mode:
+            return  # AO handles attacks internally
+        if self.is_stale():'''
+if old_assoc in code and 'AO handles attacks' not in code:
+    code = code.replace(old_assoc, new_assoc, 1)
+
+old_deauth = '''    def deauth(self, ap, sta, throttle=-1):
+        if self.is_stale():'''
+new_deauth = '''    def deauth(self, ap, sta, throttle=-1):
+        if self._ao_mode:
+            return  # AO handles attacks internally
+        if self.is_stale():'''
+if old_deauth in code and 'AO handles attacks' not in code.split('def deauth')[1] if 'def deauth' in code else True:
+    code = code.replace(old_deauth, new_deauth, 1)
 
 with open(f, 'w') as fh:
     fh.write(code)
