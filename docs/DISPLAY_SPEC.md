@@ -41,7 +41,7 @@ Both modes share the same hardware layout grid:
 | Status | `status` | (125, 20) | Medium custom (status_font) | Wrapping text, max 20 chars/line | Both |
 | Face | `face` | (0, 16) AO / (0, 34) PWN | Huge 35pt text / PNG paste | Bull PNG 120×66 / Korean text | Both |
 | WalkBy | `walkby_status` | (0, 82) | Small 9pt | "BLITZ 5atk 2cap" / empty | PWN only |
-| AO Status | `angryoxide` | (0, 0) | Small 9pt label + Small 9pt value | "AO: 5/302 \| 1h23m" / empty | AO only (top bar, left) |
+| AO Status | `angryoxide` | (0, 0) | Small 9pt label + Small 9pt value | "AO: 5/302 \| 1h23m \| CH:1,6,11" / empty | AO only (top bar, left) |
 | Friend face | `friend_face` | (0, 92) | Bold 10pt | Peer's face text | Both (hidden if no peer) |
 | Friend name | `friend_name` | (40, 94) | BoldSmall 9pt | "▌▌▌│ buddy 3 (15) of 4" | Both (hidden if no peer) |
 | Line 2 | — | (0, 108) → (250, 108) | — | Horizontal divider, 1px | Both |
@@ -461,17 +461,18 @@ The `angryoxide` element at (75, 0) in the top bar shows AO process health at a 
 
 | Display | Meaning | When |
 |---------|---------|------|
-| `AO: 0/297 \| 0m` | AO running, 0 session captures / 297 total unique, 0 min uptime | Normal startup |
-| `AO: 5/302 \| 1h23m` | AO running, 5 session / 302 total, 1h 23m uptime | Normal operation |
+| `AO: 0/297 \| 0m \| CH:1,6,11` | AO running, 0 session / 297 total, 0 min uptime, channels 1,6,11 | Normal startup |
+| `AO: 5/302 \| 1h23m \| CH:AH` | AO running, 5 session / 302 total, 1h 23m uptime, autohunt | Normal with autohunt |
 | `AO: off` | AO process not started | Plugin loaded but AO binary not launched yet |
 | `AO: ERR` | AO permanently stopped | Crash count exceeded `max_crashes` (default 10). Manual reset needed via `/plugins/angryoxide/reset` webhook. |
 | *(empty)* | Hidden | PWN mode — indicator set to `''` |
 
-Format: `AO: {session}/{total} | {formatted_uptime}`
+Format: `AO: {session}/{total} | {uptime} | CH:{channels}`
 
 - **session**: handshakes captured by AO this session (resets on restart)
 - **total**: total unique handshakes on disk (from `utils.total_unique_handshakes()`)
-- **formatted_uptime**: AO process uptime as `Ns`, `Nm`, `NhNm` depending on duration
+- **uptime**: AO process uptime as `Ns`, `Nm`, `NhNm` depending on duration
+- **channels**: AO channel list from runtime state (e.g., `1,6,11`) or `AH` for autohunt
 
 **PWND element is hidden in AO mode** — both the label and value are suppressed.
 The AO indicator replaces it with a more informative format. In PWN mode, PWND
@@ -485,7 +486,7 @@ isn't scanning — AO handles it. These elements are repurposed:
 | Position | PWN mode | AO mode | Data source |
 |----------|----------|---------|-------------|
 | (0, 109) | `CH 06` (current channel) | `FW 0` or `FW 3!` (firmware crash count) | `self._fw_crash_count` — climbs when firmware faults detected |
-| (40, 109) | `AP 5 (18)` (AP count) | `1,6,11` or `auto` (AO channel config) | `self.options.get('channels')` from config |
+| (40, 109) | `AP 5 (18)` (AP count) | **hidden** (channels moved to AO indicator in top bar) | — |
 | (85, 109) | conn status | conn status (unchanged) | bt-tether plugin |
 | (120, 109) | `BT-` / `BT C` | unchanged | bt-tether plugin |
 | (155, 109) | `CHG100%` | unchanged | pisugarx plugin |
@@ -496,9 +497,8 @@ isn't scanning — AO handles it. These elements are repurposed:
 - Shows `FW 3!` with `!` suffix when crashes detected — user should check web dashboard
 - Resets when AO plugin resets crash state
 
-**AO channels:**
-- Shows the channel list from AO config (e.g., `1,6,11`)
-- Shows `auto` if no channel list configured (AO uses autohunt)
+**AO channels:** Moved to AO indicator in top bar as `CH:1,6,11` or `CH:AH` (autohunt).
+The AP slot in the bottom bar is hidden in AO mode.
 
 ### Cross-Mode Indicator Hiding
 

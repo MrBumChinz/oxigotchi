@@ -978,15 +978,12 @@ class AngryOxide(plugins.Plugin):
                     ch_elem.value = str(self._fw_crash_count) + ('!' if self._fw_crash_count > 0 else '')
             except Exception:
                 pass
-            # Replace AP slot with AO channel list
+            # Hide AP slot (AO channels shown in AO indicator instead)
             try:
                 ap_elem = ui._state._state.get('aps')
                 if ap_elem:
-                    channels = self.options.get('channels', '')
-                    if not channels:
-                        channels = 'auto'
                     ap_elem.label = None
-                    ap_elem.value = str(channels)
+                    ap_elem.value = ''
             except Exception:
                 pass
 
@@ -999,7 +996,8 @@ class AngryOxide(plugins.Plugin):
                     tot = _u.total_unique_handshakes(self.options.get('output_dir', '/etc/pwnagotchi/handshakes/'))
                 except Exception:
                     tot = '?'
-                ui.set('angryoxide', 'AO: %d/%s | %s' % (self._captures, tot, uptime))
+                channels = self._channels if self._channels else ('AH' if self._autohunt else '1,6,11')
+                ui.set('angryoxide', 'AO: %d/%s | %s | CH:%s' % (self._captures, tot, uptime, channels))
                 # Override status text that bt-tether/other plugins write
                 try:
                     cur_status = ui.get('status')
@@ -1827,7 +1825,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 
 <div class="card ao-only-card">
 <div class="card-title">Attack Rate</div>
-<div style="color:#888;font-size:11px;margin-bottom:8px">How fast to send attack frames. Higher = more captures but more visible. Rate 2 is recommended for general use.</div>
+<div style="color:#888;font-size:11px;margin-bottom:8px">Attack frame injection speed. Rate 1 is the maximum safe rate for BCM43436B0 — higher rates cause firmware crashes. Do not increase above 1.</div>
 <div class="rate-btns">
 <button class="rate-btn" id="rate-1" onclick="setRate(1)">1<br><span style="font-size:10px;font-weight:normal;color:#888">Quiet</span><br><span style="font-size:9px;font-weight:normal;color:#555">Low profile, fewer frames</span></button>
 <button class="rate-btn risky" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span><br><span style="font-size:9px;font-weight:normal">&#9888; May crash built-in WiFi</span></button>
