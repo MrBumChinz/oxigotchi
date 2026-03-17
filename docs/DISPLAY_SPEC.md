@@ -302,3 +302,81 @@ All faces are Korean Unicode text rendered with Huge 35pt font:
 - Max 20 characters per line, wrapping enabled
 - In AO mode, status text has the full width since no name is at (5, 20)
 - In PWN mode, name "Pwnagotchi> █" occupies ~(5-120, 20), status starts at (125, 20)
+
+---
+
+## Plugin Indicators
+
+### Indicator Positions (Pixel Map)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ CH 00  APS 0 (00)  [BT -]  [BAT 0%]        UP 00:00:00  │  Y=0 (top bar)
+│  (0,0)  (28,0)    (115,0) (140,0)           (185,0)      │
+├──────────────────────────────────────────────────────────┤  Y=14 (line1)
+│  [NAME]  (5,20)    [STATUS] (125,20)                     │  Y=20
+│  [FACE]  (0,16 AO / 0,34 PWN)                           │  Y=16-80
+│                                                          │
+│  [WALKBY]  (0,82)                                        │  Y=82
+│  [AO STATUS]  (0,85)                                     │  Y=85
+│  [FRIEND]  (0,92)                                        │  Y=92
+├──────────────────────────────────────────────────────────┤  Y=108 (line2)
+│  PWND 0 (00)  (0,109)                     AUTO (225,109) │  Y=109
+└──────────────────────────────────────────────────────────┘
+```
+
+### All Indicators by Zone
+
+**Top Bar (Y=0..13) — Mode-independent, always visible:**
+
+| Element | Key | Position | Font | Source | Shows in |
+|---------|-----|----------|------|--------|----------|
+| Channel | `channel` | (0, 0) | Bold+Medium | Core | Both |
+| APs | `aps` | (28, 0) | Bold+Medium | Core | Both |
+| Bluetooth | `bluetooth` | (115, 0) | Bold+Medium | bt-tether plugin | Both |
+| Battery | `bat` | (140, 0) | Bold+Medium | pisugarx plugin | Both |
+| Uptime | `uptime` | (185, 0) | Bold+Medium | Core | Both |
+
+**Middle Zone (Y=14..107) — Mode-dependent:**
+
+| Element | Key | Position | Font | Source | Shows in |
+|---------|-----|----------|------|--------|----------|
+| Name | `name` | (5, 20) | Bold 10pt | Core | **PWN only** (empty in AO) |
+| Status | `status` | (125, 20) | Medium custom | Core | Both |
+| Face | `face` | (0, 16) or (0, 34) | Huge 35pt / PNG | Core | Both (PNG in AO, text in PWN) |
+| WalkBy status | `walkby_status` | (0, 82) | Small 9pt | walkby plugin | **PWN only** (disabled in AO config) |
+| AO status | `angryoxide` | (0, 85) | Small 9pt | angryoxide plugin | **AO only** (hidden in PWN) |
+| Friend | `friend_name` | (0, 92) | BoldSmall 9pt | Core | Both |
+
+**Bottom Bar (Y=108+) — Mode-independent, always visible:**
+
+| Element | Key | Position | Font | Source | Shows in |
+|---------|-----|----------|------|--------|----------|
+| line2 | — | Y=108 | — | Core | Both |
+| Handshakes | `shakes` | (0, 109) | Bold+Medium | Core | Both |
+| Mode | `mode` | (225, 109) | Bold 10pt | Core | Both |
+
+### Cross-Mode Indicator Hiding
+
+The angryoxide plugin actively manages indicator visibility in `on_ui_update()`:
+
+**When AO mode is active:**
+- Hides: `name`, `walkby`, `blitz`, `walkby_status` (set to `''`)
+- Shows: `angryoxide` indicator with "AO: {captures} | {uptime}"
+- Overrides BT-tether status text that bleeds into status area
+
+**When PWN mode is active:**
+- Hides: `angryoxide` indicator (set to `''`)
+- Shows: `name` with "Pwnagotchi>" + cursor blink
+- WalkBy plugin manages its own `walkby_status` visibility
+
+### Indicators That Are Always Visible (Both Modes)
+
+These are hardware/system indicators that are mode-independent:
+- **BT** (bluetooth tether status) — connectivity, not attack-related
+- **BAT** (battery percentage) — hardware monitoring
+- **CH** (current channel) — shows `*` during recon in both modes
+- **APS** (access point count) — from session data (StubClient in AO, bettercap in PWN)
+- **UP** (uptime) — system uptime
+- **PWND** (handshake count) — total captures, relevant in both modes
+- **AUTO/MANU** (mode) — pwnagotchi operating mode
