@@ -41,7 +41,7 @@ Both modes share the same hardware layout grid:
 | Status | `status` | (125, 20) | Medium custom (status_font) | Wrapping text, max 20 chars/line | Both |
 | Face | `face` | (0, 16) AO / (0, 34) PWN | Huge 35pt text / PNG paste | Bull PNG 120×66 / Korean text | Both |
 | WalkBy | `walkby_status` | (0, 82) | Small 9pt | "BLITZ 5atk 2cap" / empty | PWN only |
-| AO Status | `angryoxide` | (75, 0) | Small 9pt label + Small 9pt value | "AO: 5 \| 01:23" / empty | AO only (top bar, after PWND) |
+| AO Status | `angryoxide` | (0, 0) | Small 9pt label + Small 9pt value | "AO: 5/302 \| 1h23m" / empty | AO only (top bar, left) |
 | Friend face | `friend_face` | (0, 92) | Bold 10pt | Peer's face text | Both (hidden if no peer) |
 | Friend name | `friend_name` | (40, 94) | BoldSmall 9pt | "▌▌▌│ buddy 3 (15) of 4" | Both (hidden if no peer) |
 | Line 2 | — | (0, 108) → (250, 108) | — | Horizontal divider, 1px | Both |
@@ -416,7 +416,7 @@ AO handles its own concurrent attacks natively.
 │  [FACE]  (0,16 AO / 0,34 PWN)                           │  Y=16-80
 │                                                          │
 │  [WALKBY]  (0,82)                                        │  Y=82
-│  [AO STATUS]  (75,0) — in top bar after PWND              │  Y=0
+│  [AO STATUS]  (0,0) — top bar left (replaces PWND)        │  Y=0
 │  [FRIEND FACE]  (0,92)   [FRIEND NAME]  (40,94)         │  Y=92-94
 ├──────────────────────────────────────────────────────────┤  Y=108 (line2)
 │  PWND 0 (00)  (0,109)                     AUTO (225,109) │  Y=109

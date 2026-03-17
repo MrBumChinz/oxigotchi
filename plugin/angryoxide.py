@@ -932,7 +932,7 @@ class AngryOxide(plugins.Plugin):
             if pos:
                 pos = [int(x.strip()) for x in pos.split(',')]
             else:
-                pos = (75, 0)
+                pos = (0, 0)
             ui.add_element('angryoxide', LabeledValue(
                 color=BLACK,
                 label='',
