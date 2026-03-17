@@ -455,6 +455,23 @@ AO handles its own concurrent attacks natively.
 | Handshakes | `shakes` | (0, 109) | Bold+Medium | Core | Both |
 | Mode | `mode` | (225, 109) | Bold 10pt | Core | Both |
 
+### AO Indicator States
+
+The `angryoxide` element at (75, 0) in the top bar shows AO process health at a glance:
+
+| Display | Meaning | When |
+|---------|---------|------|
+| `AO: 0 \| 0m` | AO running, 0 captures, 0 min uptime | Normal startup |
+| `AO: 5 \| 1h23m` | AO running, 5 captures, 1h 23m uptime | Normal operation |
+| `AO: off` | AO process not started | Plugin loaded but AO binary not launched yet |
+| `AO: ERR` | AO permanently stopped | Crash count exceeded `max_crashes` (default 10). Manual reset needed via `/plugins/angryoxide/reset` webhook. |
+| *(empty)* | Hidden | PWN mode — indicator set to `''` |
+
+Format: `AO: {session_captures} | {formatted_uptime}`
+
+- **session_captures**: handshakes captured by AO this session (resets on restart)
+- **formatted_uptime**: AO process uptime as `Ns`, `Nm`, `NhNm` depending on duration
+
 ### Cross-Mode Indicator Hiding
 
 The angryoxide plugin actively manages indicator visibility in `on_ui_update()`:
