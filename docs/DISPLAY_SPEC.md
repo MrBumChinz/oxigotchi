@@ -429,8 +429,8 @@ AO handles its own concurrent attacks natively.
 
 | Element | Key | Position | Font | Source | Shows in |
 |---------|-----|----------|------|--------|----------|
-| Channel | `channel` | (0, 0) | Bold+Medium | Core | Both |
-| APs | `aps` | (28, 0) | Bold+Medium | Core | Both |
+| Channel | `channel` | (0, 0) | Bold+Medium | Core | PWN: "CH 06" / AO: replaced with "FW 0" (firmware crash count) |
+| APs | `aps` | (28, 0) | Bold+Medium | Core | PWN: "APS 5 (18)" / AO: replaced with AO channel list "1,6,11" |
 | Bluetooth | `bluetooth` | (115, 0) | Bold+Medium | bt-tether plugin | Both |
 | Battery | `bat` | (140, 0) | Bold+Medium | pisugarx plugin | Both |
 | Uptime | `uptime` | (185, 0) | Bold+Medium | Core | Both |
@@ -476,6 +476,29 @@ Format: `AO: {session}/{total} | {formatted_uptime}`
 **PWND element is hidden in AO mode** — both the label and value are suppressed.
 The AO indicator replaces it with a more informative format. In PWN mode, PWND
 renders normally as `"N (total) [hostname]"`.
+
+### Bottom Bar Replacements in AO Mode
+
+In AO mode, the CH and AP elements show useless data (`*` and `0`) because pwnagotchi
+isn't scanning — AO handles it. These elements are repurposed:
+
+| Position | PWN mode | AO mode | Data source |
+|----------|----------|---------|-------------|
+| (0, 109) | `CH 06` (current channel) | `FW 0` or `FW 3!` (firmware crash count) | `self._fw_crash_count` — climbs when firmware faults detected |
+| (40, 109) | `AP 5 (18)` (AP count) | `1,6,11` or `auto` (AO channel config) | `self.options.get('channels')` from config |
+| (85, 109) | conn status | conn status (unchanged) | bt-tether plugin |
+| (120, 109) | `BT-` / `BT C` | unchanged | bt-tether plugin |
+| (155, 109) | `CHG100%` | unchanged | pisugarx plugin |
+| (220, 109) | `AUTO` | unchanged | core |
+
+**FW crash counter:**
+- Shows `FW 0` when stable (no crashes)
+- Shows `FW 3!` with `!` suffix when crashes detected — user should check web dashboard
+- Resets when AO plugin resets crash state
+
+**AO channels:**
+- Shows the channel list from AO config (e.g., `1,6,11`)
+- Shows `auto` if no channel list configured (AO uses autohunt)
 
 ### Cross-Mode Indicator Hiding
 

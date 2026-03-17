@@ -961,12 +961,32 @@ class AngryOxide(plugins.Plugin):
                     ui.set(elem, '')
                 except Exception:
                     pass
-            # Hide PWND completely (label + value) — AO indicator replaces it
+            # Hide PWND, CH, AP completely (label + value) — replaced by AO indicators
+            for hide_key in ('shakes', 'channel', 'aps'):
+                try:
+                    el = ui._state._state.get(hide_key)
+                    if el and hasattr(el, 'label'):
+                        el.label = None
+                        el.value = ''
+                except Exception:
+                    pass
+            # Replace CH slot with FW crash counter
             try:
-                shakes_elem = ui._state._state.get('shakes')
-                if shakes_elem and hasattr(shakes_elem, 'label'):
-                    shakes_elem.label = None
-                    shakes_elem.value = ''
+                ch_elem = ui._state._state.get('channel')
+                if ch_elem:
+                    ch_elem.label = 'FW'
+                    ch_elem.value = str(self._fw_crash_count) + ('!' if self._fw_crash_count > 0 else '')
+            except Exception:
+                pass
+            # Replace AP slot with AO channel list
+            try:
+                ap_elem = ui._state._state.get('aps')
+                if ap_elem:
+                    channels = self.options.get('channels', '')
+                    if not channels:
+                        channels = 'auto'
+                    ap_elem.label = None
+                    ap_elem.value = str(channels)
             except Exception:
                 pass
 
