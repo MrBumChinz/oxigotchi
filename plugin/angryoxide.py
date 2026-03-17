@@ -955,18 +955,31 @@ class AngryOxide(plugins.Plugin):
                     pass
                 return
 
-            # AO mode: always hide name and bettercap elements
+            # AO mode: hide name and bettercap elements
             for elem in ('name', 'walkby', 'blitz', 'walkby_status'):
                 try:
                     ui.set(elem, '')
                 except Exception:
                     pass
+            # Hide PWND completely (label + value) — AO indicator replaces it
+            try:
+                shakes_elem = ui._state._state.get('shakes')
+                if shakes_elem and hasattr(shakes_elem, 'label'):
+                    shakes_elem.label = None
+                    shakes_elem.value = ''
+            except Exception:
+                pass
 
             if self._stopped_permanently:
                 ui.set('angryoxide', 'AO: ERR')
             elif self._running:
                 uptime = self._format_uptime()
-                ui.set('angryoxide', 'AO: %d | %s' % (self._captures, uptime))
+                try:
+                    import pwnagotchi.utils as _u
+                    tot = _u.total_unique_handshakes(self.options.get('output_dir', '/etc/pwnagotchi/handshakes/'))
+                except Exception:
+                    tot = '?'
+                ui.set('angryoxide', 'AO: %d/%s | %s' % (self._captures, tot, uptime))
                 # Override status text that bt-tether/other plugins write
                 try:
                     cur_status = ui.get('status')

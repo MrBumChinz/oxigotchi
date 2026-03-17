@@ -45,7 +45,7 @@ Both modes share the same hardware layout grid:
 | Friend face | `friend_face` | (0, 92) | Bold 10pt | Peer's face text | Both (hidden if no peer) |
 | Friend name | `friend_name` | (40, 94) | BoldSmall 9pt | "▌▌▌│ buddy 3 (15) of 4" | Both (hidden if no peer) |
 | Line 2 | — | (0, 108) → (250, 108) | — | Horizontal divider, 1px | Both |
-| Handshakes | `shakes` | (0, 109) | Bold 10pt label + Medium 10pt value | AO: "PWND 1 (294)" / PWN: "PWND 1 (294) [AP_NAME]" | Both (format differs) |
+| Handshakes | `shakes` | (0, 109) | Bold 10pt label + Medium 10pt value | PWN: "PWND 1 (294) [AP_NAME]" / AO: **hidden** (AO indicator replaces it) | PWN only |
 | Mode | `mode` | (225, 109) | Bold 10pt | "AUTO" or "MANU" | Both |
 
 ### Font Sizes (Waveshare V4 override)
@@ -461,16 +461,21 @@ The `angryoxide` element at (75, 0) in the top bar shows AO process health at a 
 
 | Display | Meaning | When |
 |---------|---------|------|
-| `AO: 0 \| 0m` | AO running, 0 captures, 0 min uptime | Normal startup |
-| `AO: 5 \| 1h23m` | AO running, 5 captures, 1h 23m uptime | Normal operation |
+| `AO: 0/297 \| 0m` | AO running, 0 session captures / 297 total unique, 0 min uptime | Normal startup |
+| `AO: 5/302 \| 1h23m` | AO running, 5 session / 302 total, 1h 23m uptime | Normal operation |
 | `AO: off` | AO process not started | Plugin loaded but AO binary not launched yet |
 | `AO: ERR` | AO permanently stopped | Crash count exceeded `max_crashes` (default 10). Manual reset needed via `/plugins/angryoxide/reset` webhook. |
 | *(empty)* | Hidden | PWN mode — indicator set to `''` |
 
-Format: `AO: {session_captures} | {formatted_uptime}`
+Format: `AO: {session}/{total} | {formatted_uptime}`
 
-- **session_captures**: handshakes captured by AO this session (resets on restart)
+- **session**: handshakes captured by AO this session (resets on restart)
+- **total**: total unique handshakes on disk (from `utils.total_unique_handshakes()`)
 - **formatted_uptime**: AO process uptime as `Ns`, `Nm`, `NhNm` depending on duration
+
+**PWND element is hidden in AO mode** — both the label and value are suppressed.
+The AO indicator replaces it with a more informative format. In PWN mode, PWND
+renders normally as `"N (total) [hostname]"`.
 
 ### Cross-Mode Indicator Hiding
 
