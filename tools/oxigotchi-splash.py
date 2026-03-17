@@ -13,6 +13,7 @@ import os
 import time
 
 SENTINEL = "/tmp/.oxigotchi-splash-done"
+AO_OVERLAY = "/etc/pwnagotchi/conf.d/angryoxide-v5.toml"
 
 def main():
     if len(sys.argv) < 2:
@@ -20,6 +21,12 @@ def main():
         sys.exit(1)
 
     png_path = sys.argv[1]
+
+    # Only show bull faces in AO mode — in PWN mode, let pwnagotchi
+    # handle its own display init with Korean faces
+    if not os.path.exists(AO_OVERLAY):
+        print("PWN mode active (overlay disabled) — skipping bull splash")
+        sys.exit(0)
 
     if not os.path.exists(png_path):
         print(f"File not found: {png_path}")
