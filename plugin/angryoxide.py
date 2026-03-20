@@ -1040,31 +1040,16 @@ class AngryOxide(plugins.Plugin):
                     ui.set(elem, '')
                 except Exception:
                     pass
-            # Hide PWND, CH, AP, UP completely (label + value) — replaced by AO indicators
+            # Move bettercap elements off-screen (blanking doesn't work — bettercap
+            # rewrites them after our plugin runs). Position (300, 300) is off the
+            # 250x122 display so they render but are invisible.
             for hide_key in ('shakes', 'channel', 'aps', 'uptime'):
                 try:
                     el = ui._state._state.get(hide_key)
-                    if el and hasattr(el, 'label'):
-                        el.label = None
-                        el.value = ''
+                    if el and hasattr(el, 'xy'):
+                        el.xy = (300, 300)
                 except Exception:
                     pass
-            # Replace CH slot with FW crash counter
-            try:
-                ch_elem = ui._state._state.get('channel')
-                if ch_elem:
-                    ch_elem.label = None
-                    ch_elem.value = 'CRASH:%d' % self._fw_crash_count
-            except Exception:
-                pass
-            # Hide AP slot (AO channels shown in AO indicator instead)
-            try:
-                ap_elem = ui._state._state.get('aps')
-                if ap_elem:
-                    ap_elem.label = None
-                    ap_elem.value = ''
-            except Exception:
-                pass
 
             if self._stopped_permanently:
                 ui.set('angryoxide', 'AO: ERR')
