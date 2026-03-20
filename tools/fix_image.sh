@@ -50,6 +50,7 @@ echo "=== 6. Disable unnecessary services ==="
 sudo rm -f $PI/etc/systemd/system/multi-user.target.wants/ModemManager.service
 sudo rm -f $PI/etc/systemd/system/multi-user.target.wants/systemd-networkd.service
 sudo rm -f $PI/etc/systemd/system/multi-user.target.wants/usb0-ip.service
+sudo rm -f $PI/etc/systemd/system/multi-user.target.wants/rpi-usb-gadget-ics.service
 sudo rm -f $PI/etc/systemd/network/10-usb0.network 2>/dev/null
 
 echo "=== 7. Neutralize rc.local ==="
