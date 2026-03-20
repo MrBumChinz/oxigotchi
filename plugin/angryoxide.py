@@ -1017,6 +1017,14 @@ class AngryOxide(plugins.Plugin):
 
     def on_ui_update(self, ui):
         with ui._lock:
+            # Move mode indicator to bottom-right every update
+            try:
+                mode_elem = ui._state._state.get('mode')
+                if mode_elem:
+                    mode_elem.xy = (222, 112)
+            except Exception:
+                pass
+
             # In PWN mode, don't show any AO indicators — let bettercap plugins
             # manage their own UI elements (walkby, blitz, etc.)
             if not self._is_ao_mode():
