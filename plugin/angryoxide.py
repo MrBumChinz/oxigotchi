@@ -1034,22 +1034,32 @@ class AngryOxide(plugins.Plugin):
                     pass
                 return
 
-            # AO mode: hide name and bettercap elements
+            # AO mode: hide name, bettercap elements, and PWN-mode plugins
             for elem in ('name', 'walkby', 'blitz', 'walkby_status'):
                 try:
                     ui.set(elem, '')
                 except Exception:
                     pass
-            # Move bettercap elements off-screen (blanking doesn't work — bettercap
-            # rewrites them after our plugin runs). Position (300, 300) is off the
-            # 250x122 display so they render but are invisible.
-            for hide_key in ('shakes', 'channel', 'aps', 'uptime'):
+            # Move bettercap + PWN-mode plugin elements off-screen (blanking doesn't
+            # work — bettercap rewrites them after our plugin runs). Position (300, 300)
+            # is off the 250x122 display so they render but are invisible.
+            for hide_key in ('shakes', 'channel', 'aps', 'uptime', 'display-password'):
                 try:
                     el = ui._state._state.get(hide_key)
                     if el and hasattr(el, 'xy'):
                         el.xy = (300, 300)
                 except Exception:
                     pass
+
+            # Show CRASH counter at bottom-left (0, 109) where PWND was
+            try:
+                shakes_elem = ui._state._state.get('shakes')
+                if shakes_elem:
+                    shakes_elem.xy = (0, 109)
+                    shakes_elem.label = ''
+                    shakes_elem.value = 'CRASH:%d' % self._fw_crash_count
+            except Exception:
+                pass
 
             if self._stopped_permanently:
                 ui.set('angryoxide', 'AO: ERR')
