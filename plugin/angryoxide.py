@@ -177,7 +177,7 @@ class AngryOxide(plugins.Plugin):
                 state = json.load(f)
             self._targets = state.get('targets', [])
             self._whitelist_entries = state.get('whitelist', [])
-            self._rate = state.get('rate', 2)
+            self._rate = state.get('rate', 1)
             self._attacks = state.get('attacks', self._attacks)
             self._channels = state.get('channels', '')
             self._autohunt = state.get('autohunt', False)
