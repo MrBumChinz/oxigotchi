@@ -18,9 +18,9 @@ import pwnagotchi.ui.fonts as fonts
 
 class AngryOxide(plugins.Plugin):
     __author__ = 'pwnoxide'
-    __version__ = '2.0.0'
+    __version__ = '2.1.0'
     __license__ = 'GPL3'
-    __description__ = 'Integrates AngryOxide as the attack engine for v5 firmware. No nexmon throttle needed.'
+    __description__ = 'Oxigotchi v2 attack engine — integrates AngryOxide with v5 firmware. No nexmon throttle needed.'
     __name__ = 'angryoxide'
     csrf_exempt = True
     __help__ = """
@@ -1136,6 +1136,22 @@ class AngryOxide(plugins.Plugin):
 
         if request.method == 'GET' and path == '/api/status':
             uptime_secs = int(time.time() - self._start_time) if self._start_time else None
+            # Fetch tether IPs for usb0 and bnep0
+            def _get_iface_ip(iface):
+                try:
+                    out = subprocess.check_output(
+                        ['ip', '-4', 'addr', 'show', iface],
+                        stderr=subprocess.DEVNULL, timeout=3
+                    ).decode()
+                    for line in out.splitlines():
+                        line = line.strip()
+                        if line.startswith('inet '):
+                            return line.split()[1].split('/')[0]
+                except Exception:
+                    pass
+                return None
+            usb0_ip = _get_iface_ip('usb0')
+            bnep0_ip = _get_iface_ip('bnep0')
             # Count cracked passwords from potfile (not from captures)
             cracked_count = 0
             for pf in ['/home/pi/handshakes/wpa-sec.cracked.potfile',
@@ -1165,6 +1181,8 @@ class AngryOxide(plugins.Plugin):
                 'whitelist': self._whitelist_entries,
                 'skip_captured': self._skip_captured,
                 'config_whitelist': self._agent._config.get('main', {}).get('whitelist', []) if self._agent else [],
+                'usb0_ip': usb0_ip,
+                'bnep0_ip': bnep0_ip,
                 'discord_webhook': self._discord_webhook or '',
                 # Override cumulative to prevent theme from showing false cracked count
                 # (fix_exp.py on Pi injected total_crackable counting .22000 files as "cracked")
@@ -1643,7 +1661,7 @@ class AngryOxide(plugins.Plugin):
                 with open(overlay_path, 'w') as f:
                     f.write('\\n'.join(lines))
                 logging.info("[angryoxide] config saved via web dashboard")
-                return jsonify({'status': 'ok', 'message': 'Saved. Restart pwnagotchi to apply.'})
+                return jsonify({'status': 'ok', 'message': 'Saved. Restart oxigotchi to apply.'})
             except Exception as e:
                 return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -1659,6 +1677,18 @@ class AngryOxide(plugins.Plugin):
             threading.Timer(2.0, lambda: os.system('sudo reboot')).start()
             return jsonify({'status': 'ok', 'message': 'Restarting in 2 seconds...'})
 
+        if request.method == 'POST' and path == '/api/restart-ssh':
+            logging.info("[angryoxide] SSH restart requested via web")
+            try:
+                subprocess.run(['sudo', 'systemctl', 'restart', 'ssh'], capture_output=True, text=True, timeout=10, check=True)
+                return jsonify({'status': 'ok', 'message': 'SSH restarted'})
+            except subprocess.CalledProcessError as e:
+                logging.error("[angryoxide] SSH restart failed: %s", e.stderr)
+                return jsonify({'status': 'error', 'message': 'SSH restart failed: ' + (e.stderr or str(e))}), 500
+            except Exception as e:
+                logging.error("[angryoxide] SSH restart error: %s", e)
+                return jsonify({'status': 'error', 'message': str(e)}), 500
+
         return jsonify({'error': 'not found'}), 404
 
     def _dashboard_html(self):
@@ -1667,7 +1697,7 @@ class AngryOxide(plugins.Plugin):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>AngryOxide Dashboard</title>
+<title>Oxigotchi Dashboard</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#1a1a2e;color:#e0e0e0;font-family:'SF Mono','Fira Code','Cascadia Code',monospace;font-size:14px;padding:12px;max-width:600px;margin:0 auto;-webkit-tap-highlight-color:transparent}
@@ -1737,8 +1767,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 </style>
 </head>
 <body>
-<h1>AngryOxide Control Panel</h1>
-<div style="text-align:center;color:#888;font-size:11px;margin:-12px 0 14px">WiFi attack engine for Pwnagotchi</div>
+<h1>Oxigotchi Control Panel</h1>
+<div style="text-align:center;color:#888;font-size:11px;margin:-12px 0 14px">Oxigotchi v2 &mdash; WiFi attack engine</div>
 <div id="stopped-banner" class="stopped-banner" style="display:none">AO STOPPED - Max crashes reached. Hit "Reset Crashes" below to retry.</div>
 
 <div class="card">
@@ -1763,6 +1793,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="label">Verified / Total</div><div class="value" id="s-captures">--</div>
 <div class="label">Crashes</div><div class="value" id="s-crashes">--</div>
 <div class="label">FW Crashes</div><div class="value" id="s-fwcrashes">--</div>
+<div class="label">USB Tether</div><div class="value" id="s-usb0-ip">--</div>
+<div class="label">BT Tether</div><div class="value" id="s-bnep0-ip">--</div>
 </div>
 </div>
 
@@ -1958,6 +1990,9 @@ input:checked+.slider:before{transform:translateX(22px)}
 <button class="action-btn" style="flex:1;background:#e94560;color:#fff" onclick="if(confirm('Shut down the Pi?'))doAction('shutdown-pi')">Shutdown Pi</button>
 <button class="action-btn" style="flex:1;background:#f0c040;color:#1a1a2e" onclick="if(confirm('Restart the Pi?'))doAction('restart-pi')">Restart Pi</button>
 </div>
+<div style="margin-top:8px;display:flex;gap:8px">
+<button class="action-btn btn-restart" style="flex:1" onclick="doAction('restart-ssh')">Restart SSH</button>
+</div>
 </div>
 
 <div style="margin-top:12px;padding-top:10px;border-top:1px solid #0f3460">
@@ -1980,7 +2015,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card">
 <div class="card-title" onclick="document.getElementById('config-panel').style.display=document.getElementById('config-panel').style.display==='none'?'block':'none'" style="cursor:pointer">Settings &#9656;</div>
 <div id="config-panel" style="display:none">
-<div style="color:#888;font-size:11px;margin-bottom:10px">Pwnagotchi configuration. Changes save to an overlay file and take effect after restart.</div>
+<div style="color:#888;font-size:11px;margin-bottom:10px">Oxigotchi configuration. Changes save to an overlay file and take effect after restart.</div>
 
 <div style="font-size:13px;color:#00d4aa;font-weight:bold;margin:12px 0 6px">General</div>
 <div class="toggle-row">
@@ -2031,7 +2066,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card">
 <div class="card-title" onclick="document.getElementById('plugins-panel').style.display=document.getElementById('plugins-panel').style.display==='none'?'block':'none'" style="cursor:pointer">Installed Plugins &#9656;</div>
 <div id="plugins-panel" style="display:none">
-<div style="color:#888;font-size:11px;margin-bottom:8px">All pwnagotchi plugins. Green = enabled and running.</div>
+<div style="color:#888;font-size:11px;margin-bottom:8px">All installed plugins. Green = enabled and running.</div>
 <div id="plugins-list"></div>
 </div>
 </div>
@@ -2205,6 +2240,10 @@ function refreshStatus() {
         document.getElementById('s-crashes').style.color = d.crash_count > 0 ? '#f0c040' : '#e0e0e0';
         document.getElementById('s-fwcrashes').textContent = d.fw_crash_count;
         document.getElementById('s-fwcrashes').style.color = d.fw_crash_count > 0 ? '#e94560' : '#e0e0e0';
+        document.getElementById('s-usb0-ip').textContent = d.usb0_ip || 'down';
+        document.getElementById('s-usb0-ip').style.color = d.usb0_ip ? '#00d4aa' : '#666';
+        document.getElementById('s-bnep0-ip').textContent = d.bnep0_ip || 'down';
+        document.getElementById('s-bnep0-ip').style.color = d.bnep0_ip ? '#00d4aa' : '#666';
         document.getElementById('stopped-banner').style.display = d.stopped_permanently ? 'block' : 'none';
         // sync attacks
         var attacks = d.attacks || {};

@@ -98,12 +98,14 @@ fonts.setup(10, 9, 10, 35, 25, 9)
 └──────────────────────────────────────────────────────────┘
 ```
 
-**Key differences from PWN mode:**
-- **No name label** — the `name` element is empty (`''`), nothing renders at (5, 20)
-- **No cursor blink** — cursor animation disabled
-- **Face at Y=16** — 2px below line1, almost touching the top bar. Bull PNG gets more vertical space.
+**Key differences from PWN mode (all driven by plugins, not hardcoded):**
+- **No name label** — `ao_layout` plugin sets `name` to `''`, nothing renders at (5, 20)
+- **No cursor blink** — `ao_cursor` plugin sets `ui._cursor_enabled = False`
+- **Face at Y=16** — `ao_layout` plugin repositions face to line1+2, almost touching the top bar
 - **Face is PNG** — 120×66 pixel 1-bit bull head, rendered at (0, 16) via `canvas.paste()`
-- **AO capture count** — plugin adds a LabeledValue showing capture count (bottom area)
+- **PWND hidden** — `ao_pwnd` plugin suppresses the PWND counter (AO indicator shows captures)
+- **Blind restart prevention** — `ao_compat` plugin injects synthetic AP when AP list is empty
+- **AO capture count** — `angryoxide` plugin adds a LabeledValue showing capture count
 
 ### Face → Mood Mapping (AO Mode)
 
@@ -352,8 +354,10 @@ voice messages still fire though. To suppress them in AO mode, the angryoxide pl
 the status text on `on_ui_update()` when it detects bettercap-style attack messages. Currently the
 plugin only overrides BT-tether status bleeds — it should also suppress assoc/deauth messages.
 
-**IMPLEMENTED:** `associate()` and `deauth()` in agent.py early-return when `_ao_mode=True`.
-No attack messages, no bettercap commands, no misleading status text.
+**IMPLEMENTED:** The angryoxide config overlay sets `personality.associate = false` and
+`personality.deauth = false`, which prevents attack commands and misleading status text.
+The previous `_ao_mode` early-return guards in `associate()`/`deauth()` have been removed
+as redundant — the personality config is the canonical control.
 
 ### PWND Counter Format — Mode-Dependent
 
@@ -392,14 +396,33 @@ AO handles its own concurrent attacks natively.
 - Splash full refresh ensures image survives pwnagotchi's `epd.Clear()` + `displayPartBaseImage()`
 
 ### Cursor Behavior
-- **AO mode:** Cursor disabled (`_ao_mode` check in `_refresh_handler`)
+- **AO mode:** Cursor disabled by `ao_cursor` plugin (sets `ui._cursor_enabled = False`)
 - **PWN mode:** Cursor blinks at `ui.fps` rate — toggles " █" suffix on name
+- Core uses `self._cursor_enabled` flag (default `True`), checked in `_refresh_handler`
 
 ### Status Text Position
 - Always at (125, 20) in both modes
 - Max 20 characters per line, wrapping enabled
 - In AO mode, status text has the full width since no name is at (5, 20)
 - In PWN mode, name "Pwnagotchi> █" occupies ~(5-120, 20), status starts at (125, 20)
+
+---
+
+## AO Display Plugins
+
+AO mode display changes are implemented as 4 toggleable plugins (not hardcoded in core).
+Each can be independently enabled/disabled from the plugins page or config.
+
+| Plugin | File | Responsibility | Hook |
+|--------|------|---------------|------|
+| `ao_layout` | `plugins/default/ao_layout.py` | Moves face to Y=16, hides name label | `on_ui_setup`, `on_ui_update`, `on_unload` |
+| `ao_cursor` | `plugins/default/ao_cursor.py` | Disables cursor blink (`_cursor_enabled = False`) | `on_ui_setup`, `on_unload` |
+| `ao_pwnd` | `plugins/default/ao_pwnd.py` | Suppresses PWND counter (AO indicator replaces it) | `on_ui_setup`, `on_ui_update`, `on_unload` |
+| `ao_compat` | `plugins/default/ao_compat.py` | Injects synthetic AP to prevent blind restart | `on_wifi_update` |
+
+**Config defaults** (`defaults.toml`): all 4 disabled by default.
+**AO overlay** (`angryoxide-v5.toml`): all 4 enabled.
+Each plugin checks `bettercap.disabled` at setup time — if False, the plugin no-ops.
 
 ---
 

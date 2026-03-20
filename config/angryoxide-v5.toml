@@ -8,6 +8,19 @@
 [bettercap]
 disabled = true
 
+# AO display plugins — extract hardcoded AO indicators into toggleable plugins
+[main.plugins.ao_layout]
+enabled = true
+
+[main.plugins.ao_cursor]
+enabled = true
+
+[main.plugins.ao_pwnd]
+enabled = true
+
+[main.plugins.ao_compat]
+enabled = true
+
 [main.plugins.angryoxide]
 enabled = true
 binary_path = "/usr/local/bin/angryoxide"
@@ -15,6 +28,7 @@ interface = "wlan0mon"
 no_setup = true
 nexmon_mode = false
 output_dir = "/etc/pwnagotchi/handshakes/"
+whitelist = ["Alpha", "Alpha 5G"]
 
 # Disable plugins that are redundant or conflict in AO mode
 [main.plugins.walkby]

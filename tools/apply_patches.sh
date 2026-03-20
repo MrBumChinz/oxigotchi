@@ -17,13 +17,13 @@ FAILED=0
 log() { logger -t "$LOG_TAG" "$1"; echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
 die() { log "FATAL: $1"; exit 1; }
 
-# ─── Patch 1: pwnlib — comment out reload_brcm in stop_monitor_interface ───
+# ─── Patch 1a: pwnlib — comment out reload_brcm in stop_monitor_interface ───
 patch_pwnlib() {
     local f="/usr/bin/pwnlib"
     [ -f "$f" ] || { log "SKIP pwnlib: $f not found"; SKIPPED=$((SKIPPED+1)); return; }
 
     if grep -q '#.*reload_brcm.*disabled.*SDIO' "$f" 2>/dev/null; then
-        log "OK   pwnlib: already patched"
+        log "OK   pwnlib: reload_brcm already patched"
         SKIPPED=$((SKIPPED+1))
     else
         # Comment out bare reload_brcm calls inside stop_monitor_interface
@@ -31,7 +31,35 @@ patch_pwnlib() {
             log "DONE pwnlib: commented out reload_brcm in stop_monitor_interface"
             PATCHED=$((PATCHED+1))
         else
-            log "FAIL pwnlib: sed failed"
+            log "FAIL pwnlib: sed failed (reload_brcm)"
+            FAILED=$((FAILED+1))
+        fi
+    fi
+}
+
+# ─── Patch 1b: pwnlib — force auto mode (is_auto_mode / is_auto_mode_no_delete) ───
+patch_pwnlib_auto_mode() {
+    local f="/usr/bin/pwnlib"
+    [ -f "$f" ] || { log "SKIP pwnlib auto_mode: $f not found"; SKIPPED=$((SKIPPED+1)); return; }
+
+    if grep -q 'return 0;.*oxigotchi.*force auto' "$f" 2>/dev/null; then
+        log "OK   pwnlib: auto mode already forced"
+        SKIPPED=$((SKIPPED+1))
+    else
+        local patched_any=0
+        # Insert 'return 0;' after the opening brace of is_auto_mode()
+        if grep -q 'is_auto_mode()' "$f"; then
+            sed -i '/^is_auto_mode()\s*{/a\    return 0;  # oxigotchi: force auto mode' "$f" && patched_any=1
+        fi
+        # Insert 'return 0;' after the opening brace of is_auto_mode_no_delete()
+        if grep -q 'is_auto_mode_no_delete()' "$f"; then
+            sed -i '/^is_auto_mode_no_delete()\s*{/a\    return 0;  # oxigotchi: force auto mode' "$f" && patched_any=1
+        fi
+        if [ "$patched_any" -eq 1 ]; then
+            log "DONE pwnlib: forced auto mode in is_auto_mode / is_auto_mode_no_delete"
+            PATCHED=$((PATCHED+1))
+        else
+            log "FAIL pwnlib: could not find is_auto_mode functions to patch"
             FAILED=$((FAILED+1))
         fi
     fi
@@ -379,7 +407,8 @@ new_start = '''    def _start_monitor_mode_direct(self):
         if not self._ao_mode:
             self._wait_bettercap()
             self.setup_events()
-        self.set_starting()
+        if not self._ao_mode:
+            self.set_starting()
         if self._ao_mode:
             self._start_monitor_mode_direct()
         else:
@@ -627,6 +656,7 @@ main() {
     fi
 
     patch_pwnlib
+    patch_pwnlib_auto_mode
     patch_cache
     patch_handler
     patch_server
