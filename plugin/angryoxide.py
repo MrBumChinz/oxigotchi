@@ -990,7 +990,7 @@ class AngryOxide(plugins.Plugin):
             if pos:
                 pos = [int(x.strip()) for x in pos.split(',')]
             else:
-                pos = (0, 0)
+                pos = (0, 109)
             # Start with empty value — on_ui_update will populate if in AO mode.
             # This prevents AO indicators from flashing on screen in PWN mode
             # before the first on_ui_update clears them.
@@ -1032,8 +1032,8 @@ class AngryOxide(plugins.Plugin):
                     ui.set(elem, '')
                 except Exception:
                     pass
-            # Hide PWND, CH, AP completely (label + value) — replaced by AO indicators
-            for hide_key in ('shakes', 'channel', 'aps'):
+            # Hide PWND, CH, AP, UP completely (label + value) — replaced by AO indicators
+            for hide_key in ('shakes', 'channel', 'aps', 'uptime'):
                 try:
                     el = ui._state._state.get(hide_key)
                     if el and hasattr(el, 'label'):
