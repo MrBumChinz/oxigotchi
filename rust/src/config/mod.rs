@@ -46,7 +46,7 @@ pub struct UiConfig {
     #[serde(default)]
     pub invert: bool,
     /// Target frames per second (0 = default).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_fps")]
     pub fps: u32,
     /// Display hardware settings.
     #[serde(default)]
@@ -101,6 +101,30 @@ fn default_main() -> MainConfig {
         name: default_name(),
         whitelist: Vec::new(),
     }
+}
+
+fn deserialize_fps<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+    struct FpsVisitor;
+    impl<'de> de::Visitor<'de> for FpsVisitor {
+        type Value = u32;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("an integer or float for fps")
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<u32, E> {
+            Ok(v as u32)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<u32, E> {
+            Ok(v.max(0) as u32)
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<u32, E> {
+            Ok(v as u32)
+        }
+    }
+    deserializer.deserialize_any(FpsVisitor)
 }
 
 fn default_name() -> String {
