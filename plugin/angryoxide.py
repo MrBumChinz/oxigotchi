@@ -18,7 +18,7 @@ import pwnagotchi.ui.fonts as fonts
 
 class AngryOxide(plugins.Plugin):
     __author__ = 'pwnoxide'
-    __version__ = '2.1.0'
+    __version__ = '2.2.0'
     __license__ = 'GPL3'
     __description__ = 'Oxigotchi v2 attack engine — integrates AngryOxide with v5 firmware. No nexmon throttle needed.'
     __name__ = 'angryoxide'
@@ -112,6 +112,13 @@ class AngryOxide(plugins.Plugin):
         self._mode_cache_time = 0
         # H2: monkey-patch flag for safe _update_peers wrapper
         self._peers_patched = False
+        # TDM cycle: time-division multiplexing AO (TX) and bettercap (RX)
+        # to prevent BCM43436B0 crashes from simultaneous TX+RX on wlan0mon
+        self._cycle_phase = 'attack'   # 'attack' (AO TX) or 'scan' (bettercap RX)
+        self._cycle_timer = time.time()
+        self._attack_duration = 25     # seconds of AO TX injection
+        self._scan_duration = 5        # seconds of bettercap passive RX
+        self._last_ap_scan_count = 0   # APs found during last scan phase
 
     def _face(self, name):
         """Return face path for PNG mode, or fall back to text faces."""
@@ -346,6 +353,15 @@ class AngryOxide(plugins.Plugin):
                          self._pwn_deauth, self._pwn_associate)
 
         self._start_ao(agent)
+
+        # TDM: start in attack phase with bettercap recon OFF
+        # (AO and bettercap must not use wlan0mon simultaneously)
+        if self._is_ao_mode() and self._running:
+            self._cycle_phase = 'attack'
+            self._cycle_timer = time.time()
+            self._disable_bettercap_recon(agent)
+            logging.info("[angryoxide] TDM cycle started: %ds attack / %ds scan",
+                         self._attack_duration, self._scan_duration)
 
         # Restore delayed plugins 30s after AO starts (don't slow down AO startup)
         if self._running:
@@ -938,6 +954,62 @@ class AngryOxide(plugins.Plugin):
 
         return aps
 
+    # ---- TDM (time-division multiplexing) cycle methods ----
+    # BCM43436B0 crashes when AO (TX injection) and bettercap (RX channel
+    # scanning) run simultaneously on wlan0mon.  Solution: alternate between
+    # 25 s of AO attack and 5 s of bettercap-only passive scanning.
+
+    def _enable_bettercap_recon(self, agent):
+        """Turn on bettercap wifi.recon for passive AP scanning."""
+        try:
+            agent.run('wifi.recon on')
+            logging.debug("[angryoxide] bettercap wifi.recon ON")
+        except Exception as e:
+            logging.warning("[angryoxide] could not enable wifi.recon: %s", e)
+
+    def _disable_bettercap_recon(self, agent):
+        """Turn off bettercap wifi.recon to free the radio for AO TX."""
+        try:
+            agent.run('wifi.recon off')
+            logging.debug("[angryoxide] bettercap wifi.recon OFF")
+        except Exception as e:
+            logging.warning("[angryoxide] could not disable wifi.recon: %s", e)
+
+    def _fetch_ap_count_from_bettercap(self, agent):
+        """Return the number of APs bettercap discovered during the scan window."""
+        try:
+            return self._fetch_ap_count()
+        except Exception:
+            return 0
+
+    def _cycle_tick(self, agent):
+        """Advance the TDM cycle.  Called once per epoch from on_epoch.
+        Returns True if we are currently in the scan phase (so the caller
+        knows to skip the AO health-check and capture scan)."""
+        elapsed = time.time() - self._cycle_timer
+
+        if self._cycle_phase == 'attack' and elapsed >= self._attack_duration:
+            # ---- switch to scan phase ----
+            self._stop_ao()                          # pause AO TX
+            self._enable_bettercap_recon(agent)       # passive RX on
+            self._cycle_phase = 'scan'
+            self._cycle_timer = time.time()
+            logging.info("[angryoxide] cycle: attack->scan (scanning APs)")
+            return True  # now in scan phase
+
+        elif self._cycle_phase == 'scan' and elapsed >= self._scan_duration:
+            # ---- switch to attack phase ----
+            self._disable_bettercap_recon(agent)      # passive RX off
+            self._last_ap_scan_count = self._fetch_ap_count_from_bettercap(agent)
+            self._start_ao(agent)                     # resume AO TX
+            self._cycle_phase = 'attack'
+            self._cycle_timer = time.time()
+            logging.info("[angryoxide] cycle: scan->attack (%d APs found)",
+                         self._last_ap_scan_count)
+            return False  # back in attack phase
+
+        return self._cycle_phase == 'scan'
+
     def on_epoch(self, agent, epoch, epoch_data):
         if self._stopped_permanently:
             return
@@ -969,12 +1041,14 @@ class AngryOxide(plugins.Plugin):
         if not self._is_ao_mode():
             return
 
-        # H1: Prevent blind epoch escalation — if AO is running with the
-        # monitor interface up, reset blind_for directly. The epoch.observe()
-        # call happens BEFORE on_epoch, so by the time we get here blind_for
-        # has already been incremented. We correct it here. The dummy AP
-        # injection below is a belt-and-suspenders backup.
-        if self._running and self._agent:
+        # H1: Prevent blind epoch escalation — if AO is running (or paused
+        # in TDM scan phase) with the monitor interface up, reset blind_for
+        # directly. The epoch.observe() call happens BEFORE on_epoch, so by
+        # the time we get here blind_for has already been incremented. We
+        # correct it here. The dummy AP injection below is a belt-and-
+        # suspenders backup.
+        ao_active = self._running or self._cycle_phase == 'scan'
+        if ao_active and self._agent:
             try:
                 iface = self.options.get('interface', 'wlan0mon')
                 if os.path.exists('/sys/class/net/%s' % iface):
@@ -983,7 +1057,7 @@ class AngryOxide(plugins.Plugin):
                 pass
 
         # Prevent blind epoch restart — report AO's AP count to pwnagotchi
-        if self._running and self._agent:
+        if ao_active and self._agent:
             try:
                 ao_aps = self._agent._access_points
                 if not ao_aps or len(ao_aps) == 0:
@@ -993,13 +1067,20 @@ class AngryOxide(plugins.Plugin):
             except Exception:
                 pass
 
+        # --- TDM cycle tick (AO mode only) ---
+        # Alternate between AO TX (attack) and bettercap RX (scan) phases
+        # to prevent BCM43436B0 crashes from simultaneous TX+RX on wlan0mon.
+        in_scan_phase = self._cycle_tick(agent)
+
         # Handle deferred restart from non-blocking backoff
         if self._next_restart_time > 0 and time.time() >= self._next_restart_time:
             self._next_restart_time = 0
             self._start_ao(agent)
+            self._cycle_phase = 'attack'
+            self._cycle_timer = time.time()
             return
 
-        if not self._running and os.path.isfile(self.options.get('binary_path', '/usr/local/bin/angryoxide')):
+        if not self._running and not in_scan_phase and os.path.isfile(self.options.get('binary_path', '/usr/local/bin/angryoxide')):
             # try to start if not running yet (e.g. binary was installed after boot)
             self._start_ao(agent)
             return
@@ -1039,12 +1120,26 @@ class AngryOxide(plugins.Plugin):
                 agent._view.set('status', 'WiFi recovered!')
                 agent._view.update()
                 self._start_ao(agent)
+                self._cycle_phase = 'attack'
+                self._cycle_timer = time.time()
             else:
                 agent._view.set('status', 'WiFi down! Recovery failed.')
                 agent._view.update()
             return
 
-        # --- AO health check ---
+        # During scan phase, AO is intentionally stopped — skip health check
+        # and capture scan (no new captures while AO is paused).
+        # But DO update AP count since bettercap is actively scanning.
+        if in_scan_phase:
+            try:
+                self._last_ap_scan_count = self._fetch_ap_count()
+                self._ap_count = self._last_ap_scan_count
+            except Exception:
+                pass
+            self._stable_epochs += 1
+            return
+
+        # --- AO health check (attack phase only) ---
         crashed = self._check_health(agent)
         if crashed:
             # Differentiate firmware crash vs AO crash
@@ -1234,6 +1329,9 @@ class AngryOxide(plugins.Plugin):
 
             if self._stopped_permanently:
                 ui.set('angryoxide', 'AO: ERR')
+            elif self._cycle_phase == 'scan':
+                # TDM scan phase: AO is paused, bettercap is scanning
+                ui.set('angryoxide', 'AO: scanning... (%d APs)' % self._last_ap_scan_count)
             elif self._running:
                 uptime = self._format_uptime()
                 try:
@@ -1405,6 +1503,11 @@ class AngryOxide(plugins.Plugin):
                 'bnep0_ip': bnep0_ip,
                 'discord_webhook': self._discord_webhook or '',
                 'wpasec_enabled': self._get_wpasec_status(),
+                'tdm_phase': self._cycle_phase,
+                'tdm_elapsed': int(time.time() - self._cycle_timer),
+                'tdm_attack_duration': self._attack_duration,
+                'tdm_scan_duration': self._scan_duration,
+                'tdm_ap_scan_count': self._last_ap_scan_count,
                 # Override cumulative to prevent theme from showing false cracked count
                 # (fix_exp.py on Pi injected total_crackable counting .22000 files as "cracked")
                 'cumulative': {
