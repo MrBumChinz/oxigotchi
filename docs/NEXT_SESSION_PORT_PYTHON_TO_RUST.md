@@ -53,6 +53,42 @@ The Python angryoxide plugin (`plugin/angryoxide.py` v2.3.0) has many features t
 - **Python**: Dashboard has WPA-SEC API key input field, saves to config.toml.
 - **Rust** (`rust/src/web/mod.rs`): Has API stubs but no WPA-SEC input in HTML.
 
+### 13. Firmware Crash Recovery (GPIO)
+- **Python**: `_try_fw_recovery()` detects brcmfmac crashes via journalctl pattern, does GPIO power cycle (WL_REG_ON pin 41), modprobe cycle, monstart.
+- **Rust** (`rust/src/recovery/mod.rs`): Has GPIO code but not wired to crash pattern detection from dmesg/journalctl.
+
+### 14. Capture Scanning + Verified Count
+- **Python**: `_scan_captures()` scans output dir for new .pcapng files, counts verified (.22000 companion exists), detects new captures per epoch, fires XP events.
+- **Rust** (`rust/src/capture/mod.rs`): Has the code but not wired into main epoch loop properly.
+
+### 15. Whitelist Filtering + Target Management
+- **Python**: Runtime whitelist/target add/remove via web API (`/api/whitelist/add`, `/api/targets/add`). Passes `--whitelist-entry` and `--target` flags to AO command. Skip-captured mode auto-whitelists captured APs.
+- **Rust**: AO command builder has whitelist support but no runtime add/remove via web API.
+
+### 16. Delayed Plugin Loading (Fast Boot)
+- **Python**: `_DELAY_PLUGINS` list defers non-essential plugins for 30s after AO starts. `_save_delayed_plugins()` / `_restore_delayed_plugins()`.
+- **Rust**: Not applicable (no plugin system), but the concept of deferring heavy init should be noted.
+
+### 17. Web Dashboard Full API (22 endpoints)
+- **Python**: 22 API endpoints including /api/aps (AP list with signal/channel), /api/cracked (cracked passwords), /api/captures (file list with download), /api/pwn-attacks (PWN mode attack toggles), /api/channels, /api/targets/add-remove, /api/whitelist/add-remove, /api/skip-captured, /api/stop, /api/reset, /api/wpasec, /api/discord-webhook, /api/bt-visibility.
+- **Rust** (`rust/src/web/mod.rs`): Has 14 endpoints. Missing: /api/aps detail, /api/pwn-attacks, /api/channels, /api/targets, /api/whitelist runtime, /api/skip-captured, /api/stop, /api/reset, /api/wpasec save, /api/discord-webhook, /api/bt-visibility.
+
+### 18. Discord Webhook Notifications
+- **Python**: `_notify_capture()` sends Discord webhook on new captures with capture details.
+- **Rust**: Not implemented.
+
+### 19. Monkey-patched update_peers Fix
+- **Python**: Patches `agent._update_peers` to suppress AttributeError from pwngrid.
+- **Rust**: Not applicable (no pwngrid), but note that peer discovery is planned for Sprint 14.
+
+### 20. Off-screen Element Hiding
+- **Python**: Moves pwnagotchi core elements (shakes, channel, aps, display-password) to (300,300) to hide them since bettercap rewrites them after plugin clears.
+- **Rust**: Not applicable (no pwnagotchi core), but display layout must match positions exactly.
+
+### 21. PiSugar Button Actions
+- **Python**: Button config in /etc/pisugar-server/config.json — single=toggle-bt.sh, double=toggle-mode.sh, long=toggle-ao-pwn.sh.
+- **Rust** (`rust/src/pisugar/mod.rs`): Has button detection and mapping but not wired to actual shell scripts or mode switching.
+
 ## Priority Order
 1. Fix display driver first (see NEXT_SESSION_PROMPT.md)
 2. Remove TDM cycling from ao.rs (simple deletion)
