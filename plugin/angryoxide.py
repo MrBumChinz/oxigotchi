@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import random
 import re
 import subprocess
 import signal
@@ -8,6 +9,7 @@ import time
 import glob
 import shutil
 import threading
+from datetime import datetime
 from threading import Lock
 
 import pwnagotchi.plugins as plugins
@@ -50,6 +52,226 @@ class AngryOxide(plugins.Plugin):
         'exp', 'tweak_view', 'webcfg', 'button-feedback',
     ]
     _DELAY_STATE_FILE = '/home/pi/delayed_plugins.json'
+
+    # Two-part bull jokes: (question, punchline)
+    # Question shows for 2 epochs, punchline for 3 epochs (5 total ~2.5 min)
+    BULL_JOKES = [
+        ("Why did the bull become a musician?", "...He had great horns!"),
+        ("What do you call a bull who tells jokes?", "...Laughing stock!"),
+        ("Why don't bulls use smartphones?", "...Too many bull-etins!"),
+        ("What's a bull's favorite subject?", "...Bull-gebra!"),
+        ("Why did the bull go to the gym?", "...To beef up his signal!"),
+        ("What do you call a sleeping bull?", "...A bulldozer!"),
+        ("Why did the bull cross the road?", "...To get to the udder side!"),
+        ("What do you call a bull in a china shop?", "...A bandwidth destroyer!"),
+        ("Why was the bull so good at WiFi?", "...He had great coverage!"),
+        ("What do bulls say at the rodeo?", "...Let's mooo-ve it!"),
+        ("Why was the bull so calm?", "...No beef today."),
+        ("What do you call a rich bull?", "...A stock broker!"),
+        ("Why did the bull sit down?", "...Pasture bedtime!"),
+        ("Why did the bull fail the test?", "...Kept charging ahead!"),
+        ("What do you call a bull in a china shop?", "...A demolition expert!"),
+        ("Why did the bull get promoted?", "...He really took charge!"),
+        ("What's a bull's least favorite weather?", "...A cowld front!"),
+        ("Why was the young bull bad at poker?", "...Too easy to read his tells!"),
+        ("What do bulls do on weekends?", "...Hit the moo-vies!"),
+        ("Why did the bull start a podcast?", "...Strong opinions and louder breathing!"),
+        ("What do you call a bull with style?", "...Fashionable beef!"),
+        ("Why did the bull cross the road?", "...To prove he wasn't chicken!"),
+        ("What's a bull's favorite workout?", "...Charge-io!"),
+        ("Why was the bull kicked out of the library?", "...Too much snorting!"),
+        ("Why did the bull bring a suitcase?", "...Ready to hoof it!"),
+        ("What do you call a bull that can sing?", "...A moo-sician's rival!"),
+        ("Why did the bull stare at the gate?", "...He hated being fenced in!"),
+        ("What's a bull's favorite app?", "...Anything with more followers!"),
+        ("Why was the bull bad at hide-and-seek?", "...Always stood out in the herd!"),
+        ("What do bulls order at breakfast?", "...Corn flakes and confidence!"),
+        ("Why did the bull join the gym?", "...To get beefier!"),
+        ("What do you call a polite bull?", "...Well-horned!"),
+        ("Why did the bull avoid arguments?", "...Didn't want any beef!"),
+        ("What's a bull's favorite job?", "...Anything in stock management!"),
+        ("Why did the bull wear a tie?", "...Big meeting in the pasture!"),
+        ("What do you call a bull that paints?", "...Pablo Picowso!"),
+        ("Why did the bull get a map?", "...He kept losing his herd!"),
+        ("What's a bull's favorite party move?", "...Charging in late!"),
+        ("Why did the bull become a chef?", "...He loved grilling!"),
+        ("What do you call a bull with no manners?", "...Rude beef!"),
+        ("Why was the bull always invited?", "...He brought the energy!"),
+        ("What's a bull's favorite game?", "...Truth or dairy!"),
+        ("Why did the bull go to school?", "...To improve his cow-culus!"),
+        ("What do you call a tiny bull?", "...A bulldot!"),
+        ("Why did the bull start gardening?", "...Wanted a better pasture!"),
+        ("What's a bull's favorite instrument?", "...The horn section!"),
+        ("Why was the bull so confident?", "...Outstanding in his field!"),
+        ("What do you call a bull detective?", "...Sherlock Horns!"),
+        ("Why did the bull get sunglasses?", "...Too much spotlight in the arena!"),
+        ("What's a bull's favorite snack?", "...Chips and dip... mostly dip!"),
+        ("Why did the bull open a gym?", "...To help others get shredded beef!"),
+        ("What do you call a bull who loves gossip?", "...A moo-s spreader!"),
+        ("Why did the bull get detention?", "...Too much bull in class!"),
+        ("What's a bull's dream car?", "...A Lamborghini!"),
+    ]
+
+    # Bull/cow themed status messages keyed by face name
+    BULL_MESSAGES = {
+        'bored': [
+            "This is bull...shit wifi coverage",
+            "Herd any good networks?",
+            "I'm not amoosed",
+            "Udderly bored",
+            "Chewing cud, waiting for packets",
+            "Standing in the pasture... alone",
+            "Not even a stale beacon out here",
+        ],
+        'happy': [
+            "That was legendairy!",
+            "Horns up! Got one!",
+            "No bull -- that was clean!",
+            "Moo-velous capture!",
+            "The herd eats tonight!",
+            "Grade-A handshake!",
+            "Cream of the crop catch!",
+        ],
+        'excited': [
+            "Holy cow! PMKID!",
+            "This is un-bull-ievable!",
+            "Steak dinner tonight!",
+            "The bull charges! Got a big one!",
+            "Stampede of packets!",
+            "Rare catch! Well done!",
+            "That's prime beef right there!",
+        ],
+        'lonely': [
+            "Where's the herd?",
+            "Feeling pasture prime",
+            "Grazing alone...",
+            "This bull needs company",
+            "Mooing into the void...",
+            "Echo... echo... moo...",
+            "One lonely bull in a big field",
+        ],
+        'angry': [
+            "Don't have a cow, man",
+            "Bull in a china shop mode",
+            "Seeing red!",
+            "These horns aren't just for show",
+            "Snorting and stamping!",
+            "Who moved my hay bale?!",
+            "This bull has HAD it!",
+        ],
+        'cool': [
+            "Too cool for the barn",
+            "Calf-way to greatness",
+            "Smooth as butter",
+            "Ice cold horns",
+            "The cool bull rides at night",
+            "No sweat, just hooves",
+            "Chillin' like a villain bull",
+        ],
+        'sleep': [
+            "Counting sheep... no wait, APs",
+            "Moo...zzz",
+            "Hay there, I'm sleeping",
+            "Dreaming of green pastures",
+            "Out to pasture for the night",
+            "Bull nap in progress",
+            "Do not disturb the bull",
+        ],
+        'awake': [
+            "Rise and grind!",
+            "The bull awakens",
+            "Time to stampede!",
+            "Morning dew on these horns",
+            "Fresh hooves, fresh start",
+            "Stretching the horns out",
+            "Another day, another hay bale",
+        ],
+        'motivated': [
+            "Let's moooove!",
+            "No horns barred!",
+            "Charge!",
+            "Full steam ahead!",
+            "This bull means business!",
+            "Hoofing it to victory!",
+            "Born to run, built to capture!",
+        ],
+        'smart': [
+            "Big brain bovine",
+            "The sage of the pasture",
+            "Calculated like a ruminating mind",
+            "400 IQ bull move",
+            "Outsmarting the whole barn",
+            "Thinking with both horns",
+        ],
+        'grateful': [
+            "You're the cream of the crop!",
+            "Thanks for the feed!",
+            "Best rancher ever!",
+            "Moo-ch appreciated!",
+            "This bull loves you!",
+            "You keep me well-fed!",
+        ],
+        'friend': [
+            "Herd mentality activated!",
+            "A fellow bull!",
+            "Two horns are better than one!",
+            "The herd grows!",
+            "Moo-tual respect!",
+            "Found my bovine buddy!",
+        ],
+        'upload': [
+            "Sending to the cloud... pasture",
+            "Uploading the goods",
+            "Beaming hay to the barn",
+            "Data mooo-ving upstream",
+            "Sharing the spoils with the herd",
+        ],
+        'debug': [
+            "Checking under the hood...",
+            "Running bull diagnostics",
+            "Inspecting the hooves",
+            "Veterinary self-check",
+            "Calibrating the horns",
+            "Bull system check in progress",
+        ],
+        'demotivated': [
+            "This pasture is dried up",
+            "Even the grass is gone",
+            "Moo...ving might help",
+            "The bull spirit is fading",
+            "Running on empty hay",
+            "Need greener pastures",
+        ],
+        'sad': [
+            "A bull with no field...",
+            "Milk me, I'm sad",
+            "These horns feel heavy",
+            "Rainy day at the ranch",
+            "Missing the golden pastures",
+            "Even the barn feels empty",
+        ],
+        'intense': [
+            "Locked on target!",
+            "The bull sees everything",
+            "Horns down, eyes forward",
+            "Full intensity stampede!",
+            "No AP escapes this bull",
+        ],
+        'look_r': [
+            "Something over there...",
+            "The bull glances right",
+            "Ears perked, eyes right",
+            "What's rustling in that bush?",
+            "Spotted something interesting",
+        ],
+        'look_l': [
+            "Movement to the left!",
+            "The bull peers leftward",
+            "Could be a new network...",
+            "Turning the horns that way",
+            "Left field action!",
+        ],
+    }
 
     def __init__(self):
         self.options = dict()
@@ -115,6 +337,32 @@ class AngryOxide(plugins.Plugin):
         self._peers_patched = False
         # Stdout reader thread for AO output parsing
         self._stdout_thread = None
+        # --- Face variety state ---
+        # Feature 1: Achievement milestones
+        self._milestone_epochs_left = 0   # countdown epochs to show milestone face
+        self._milestone_face = None       # face to show during milestone
+        self._milestone_status = None     # status to show during milestone
+        self._last_milestone = 0          # last milestone capture count triggered
+        # Feature 3: Time-of-day faces
+        self._morning_greeted = False     # True after morning greeting shown (once per boot)
+        # Feature 4: Idle face rotation
+        self._idle_epochs = 0             # epochs since last capture
+        # Feature 5: Friend face
+        self._friend_epochs_left = 0      # countdown to show friend face
+        # Feature 6: Upload face
+        self._upload_epochs_left = 0      # countdown to show upload face
+        self._last_upload_captures = 0    # captures count at last upload check
+        # Feature 7: Debug face on boot
+        self._debug_shown = False         # True after boot debug face shown
+        self._debug_epochs_left = 0       # countdown for debug face display
+        # Status text cycling (slower: hold for 3 epochs before changing)
+        self._status_display_epochs = 0   # how many epochs the current status has been shown
+        self._current_status = ""         # the currently displayed status text
+        self._current_status_priority = 0 # 0=idle/random, 1=timed, 2=event (capture/milestone/crash)
+        # Two-part joke state
+        self._joke_phase = 0         # 0 = question, 1 = punchline
+        self._joke_epochs_left = 0   # epochs remaining in current phase
+        self._joke_index = -1        # index into BULL_JOKES (-1 = no joke active)
 
     def _face(self, name):
         """Return face path for PNG mode, or fall back to text faces."""
@@ -134,8 +382,95 @@ class AngryOxide(plugins.Plugin):
             'wifi_down': faces.BROKEN, 'fw_crash': faces.BROKEN,
             'ao_crashed': faces.ANGRY, 'battery_low': faces.SAD,
             'battery_critical': faces.BROKEN, 'shutdown': faces.SLEEP,
+            'happy': faces.HAPPY, 'cool': faces.COOL,
+            'grateful': faces.GRATEFUL, 'excited': faces.EXCITED,
+            'intense': faces.INTENSE, 'smart': faces.SMART,
+            'motivated': faces.MOTIVATED, 'lonely': faces.LONELY,
+            'demotivated': faces.DEMOTIVATED, 'angry': faces.ANGRY,
+            'sad': faces.SAD, 'bored': faces.BORED,
+            'friend': faces.FRIEND, 'upload': faces.UPLOAD,
+            'debug': faces.DEBUG, 'sleep': faces.SLEEP,
+            'awake': faces.AWAKE, 'broken': faces.BROKEN,
+            'look_r': faces.LOOK_R, 'look_l': faces.LOOK_L,
+            'look_r_happy': faces.LOOK_R_HAPPY, 'look_l_happy': faces.LOOK_L_HAPPY,
         }
         return fallback.get(name, faces.AWAKE)
+
+    def _bull_status(self, face_name, priority=0):
+        """Pick a bull-themed status message for the given face.
+
+        Uses slow cycling: status text stays for at least 3 epochs before
+        changing, unless a higher-priority event forces an immediate change.
+
+        Priority levels:
+            0 = idle / random / time-of-day (low — respects 3-epoch hold)
+            1 = friend / upload / debug (medium — respects 3-epoch hold)
+            2 = capture / milestone / crash (high — forces immediate change)
+
+        Returns the status string to display.
+        """
+        messages = self.BULL_MESSAGES.get(face_name, None)
+        if not messages:
+            return "AO scanning..."
+
+        # High-priority events always force a new message immediately
+        force_change = (priority >= 2)
+
+        # Check if we should keep the current status (slow cycling)
+        if (not force_change
+                and self._current_status in messages
+                and self._status_display_epochs < 3
+                and priority <= self._current_status_priority):
+            self._status_display_epochs += 1
+            return self._current_status
+
+        # Time to pick a new message
+        new_status = random.choice(messages)
+        # Avoid repeating the same message back-to-back if possible
+        if len(messages) > 1 and new_status == self._current_status:
+            new_status = random.choice([m for m in messages if m != self._current_status])
+        self._current_status = new_status
+        self._status_display_epochs = 1
+        self._current_status_priority = priority
+        return new_status
+
+    def _bull_joke(self):
+        """Return the current part of a two-part bull joke.
+
+        Jokes cycle: question for 2 epochs, then punchline for 3 epochs.
+        Total = 5 epochs (~2.5 minutes). After the punchline finishes,
+        the next call picks a new joke.
+
+        Returns the joke text to display, or None if no jokes available.
+        """
+        if not self.BULL_JOKES:
+            return None
+
+        # If a joke is actively being displayed, continue it
+        if self._joke_epochs_left > 0:
+            self._joke_epochs_left -= 1
+            joke = self.BULL_JOKES[self._joke_index]
+            return joke[self._joke_phase]
+
+        # Current phase exhausted — advance
+        if self._joke_phase == 0 and self._joke_index >= 0:
+            # Question phase just ended, switch to punchline
+            self._joke_phase = 1
+            self._joke_epochs_left = 2  # 3 total: this epoch + 2 remaining
+            joke = self.BULL_JOKES[self._joke_index]
+            return joke[1]
+
+        # Punchline done (or no joke active yet) — pick a new joke
+        new_index = random.randrange(len(self.BULL_JOKES))
+        # Avoid repeating the same joke back-to-back
+        if len(self.BULL_JOKES) > 1 and new_index == self._joke_index:
+            new_index = random.choice(
+                [i for i in range(len(self.BULL_JOKES)) if i != self._joke_index]
+            )
+        self._joke_index = new_index
+        self._joke_phase = 0
+        self._joke_epochs_left = 1  # 2 total: this epoch + 1 remaining
+        return self.BULL_JOKES[new_index][0]
 
     def _get_battery_level(self):
         """Read battery percentage from PiSugar. Returns int or None."""
@@ -344,12 +679,14 @@ class AngryOxide(plugins.Plugin):
         if self._running:
             threading.Timer(30.0, self._restore_delayed_plugins).start()
 
-        # Set welcome message and face based on mode
+        # Feature 7: Show debug face briefly during boot
         if self._is_ao_mode():
             try:
-                agent._view.set('face', self._face('awake'))
-                agent._view.set('status', "Hi! I'm Oxigotchi! Starting v2.3.0...")
+                agent._view.set('face', self._face('debug'))
+                agent._view.set('status', "Running diagnostics...")
                 agent._view.update()
+                self._debug_shown = True
+                self._debug_epochs_left = 1  # show for 1 epoch then switch to awake
             except Exception:
                 pass
         else:
@@ -1114,15 +1451,174 @@ class AngryOxide(plugins.Plugin):
                     })
             agent.set_stub_aps(stub_aps)
 
-        # set pwnagotchi mood based on AO activity
+        # --- Face variety system (priority: battery > wifi > milestone > capture > friend > upload > time > idle > random > default) ---
         try:
             _view = agent._view
+            face_set = False
+
+            # Track idle epochs globally (before face selection so all paths see it)
             if self._captures_this_epoch > 0:
-                _view.set('face', faces.EXCITED)
-                agent.set_status("AO pwnd!")
-            elif self._stable_epochs > 30:
-                _view.set('face', faces.BORED)
-                agent.set_status("AO scanning...")
+                self._idle_epochs = 0
+                # Reset joke state so we don't resume a stale joke after activity
+                self._joke_phase = 0
+                self._joke_epochs_left = 0
+                self._joke_index = -1
+            else:
+                self._idle_epochs += 1
+
+            # Feature 7: Debug face on boot (1 epoch)
+            if self._debug_epochs_left > 0:
+                self._debug_epochs_left -= 1
+                if self._debug_epochs_left <= 0:
+                    _view.set('face', self._face('awake'))
+                    _view.set('status', self._bull_status('debug', priority=2))
+                # debug face already set in on_ready, just let it persist
+                face_set = True
+
+            # Feature 1: Achievement milestones (show for 2 epochs)
+            if not face_set and self._milestone_epochs_left > 0:
+                _view.set('face', self._milestone_face)
+                _view.set('status', self._milestone_status)
+                self._milestone_epochs_left -= 1
+                face_set = True
+
+            # Check for new milestones
+            if not face_set and self._captures > self._last_milestone:
+                milestone_hit = None
+                if self._captures >= 100 and self._last_milestone < 100:
+                    milestone_hit = (100, 'grateful', self._bull_status('grateful', priority=2))
+                elif self._captures >= 50 and self._last_milestone < 50:
+                    milestone_hit = (50, 'smart', self._bull_status('smart', priority=2))
+                elif self._captures >= 25 and self._last_milestone < 25:
+                    milestone_hit = (25, 'intense', self._bull_status('intense', priority=2))
+                elif self._captures >= 10 and self._last_milestone < 10:
+                    milestone_hit = (10, 'cool', self._bull_status('cool', priority=2))
+                elif self._captures >= 1 and self._last_milestone < 1:
+                    milestone_hit = (1, 'excited', self._bull_status('excited', priority=2))
+
+                if milestone_hit:
+                    self._last_milestone = milestone_hit[0]
+                    self._milestone_face = self._face(milestone_hit[1])
+                    self._milestone_status = milestone_hit[2]
+                    self._milestone_epochs_left = 2
+                    _view.set('face', self._milestone_face)
+                    _view.set('status', self._milestone_status)
+                    face_set = True
+                    logging.info("[angryoxide] milestone: %d captures — %s", milestone_hit[0], milestone_hit[2])
+
+                # Level-up milestone (every 10 captures after 10, not overlapping other milestones)
+                if not face_set:
+                    level = self._captures // 10
+                    prev_level = self._last_milestone // 10 if self._last_milestone > 0 else 0
+                    if level > prev_level and self._captures not in (10, 25, 50, 100):
+                        self._last_milestone = self._captures
+                        self._milestone_face = self._face('motivated')
+                        self._milestone_status = self._bull_status('motivated', priority=2)
+                        self._milestone_epochs_left = 2
+                        _view.set('face', self._milestone_face)
+                        _view.set('status', self._milestone_status)
+                        face_set = True
+                        logging.info("[angryoxide] level up: level %d at %d captures", level, self._captures)
+
+            # Feature 2: Capture variety (rotate faces on capture)
+            if not face_set and self._captures_this_epoch > 0:
+                capture_faces = ['happy', 'cool', 'grateful', 'excited']
+                chosen_face = random.choice(capture_faces)
+                _view.set('face', self._face(chosen_face))
+                _view.set('status', self._bull_status(chosen_face, priority=2))
+                face_set = True
+
+            # Feature 5: Friend face (peers detected)
+            if not face_set and self._friend_epochs_left > 0:
+                _view.set('face', self._face('friend'))
+                _view.set('status', self._bull_status('friend', priority=1))
+                self._friend_epochs_left -= 1
+                face_set = True
+
+            if not face_set:
+                try:
+                    peers = getattr(agent, '_peers', None)
+                    if peers and len(peers) > 0:
+                        self._friend_epochs_left = 1
+                        _view.set('face', self._face('friend'))
+                        _view.set('status', self._bull_status('friend', priority=1))
+                        face_set = True
+                except Exception:
+                    pass
+
+            # Feature 6: Upload face (WPA-SEC upload happening)
+            if not face_set and self._upload_epochs_left > 0:
+                _view.set('face', self._face('upload'))
+                _view.set('status', self._bull_status('upload', priority=1))
+                self._upload_epochs_left -= 1
+                face_set = True
+
+            if not face_set:
+                try:
+                    if self._get_wpasec_status() and self._captures > self._last_upload_captures and self._captures > 0:
+                        self._upload_epochs_left = 1
+                        self._last_upload_captures = self._captures
+                        _view.set('face', self._face('upload'))
+                        _view.set('status', self._bull_status('upload', priority=1))
+                        face_set = True
+                except Exception:
+                    pass
+
+            # Feature 3: Time-of-day faces (low priority, only if nothing else triggered)
+            if not face_set:
+                hour = datetime.now().hour
+                if 2 <= hour <= 5 and self._captures_this_epoch == 0:
+                    _view.set('face', self._face('sleep'))
+                    _view.set('status', self._bull_status('sleep', priority=0))
+                    face_set = True
+                elif 6 <= hour <= 8 and not self._morning_greeted:
+                    self._morning_greeted = True
+                    _view.set('face', self._face('motivated'))
+                    _view.set('status', self._bull_status('motivated', priority=1))
+                    face_set = True
+                elif hour >= 22 or hour <= 1:
+                    _view.set('face', self._face('cool'))
+                    _view.set('status', self._bull_status('cool', priority=0))
+                    face_set = True
+
+            # Feature 4: Idle face rotation (no captures for many epochs)
+            if not face_set:
+                idle = self._idle_epochs % 50  # cycle resets at 50
+                if self._idle_epochs > 0:
+                    if idle <= 10:
+                        _view.set('face', self._face('bored'))
+                        _view.set('status', self._bull_status('bored', priority=0))
+                        face_set = True
+                    elif idle <= 20:
+                        _view.set('face', self._face('lonely'))
+                        _view.set('status', self._bull_status('lonely', priority=0))
+                        face_set = True
+                    elif idle <= 30:
+                        _view.set('face', self._face('demotivated'))
+                        _view.set('status', self._bull_status('demotivated', priority=0))
+                        face_set = True
+                    elif idle <= 40:
+                        _view.set('face', self._face('angry'))
+                        _view.set('status', self._bull_status('angry', priority=0))
+                        face_set = True
+                    else:
+                        _view.set('face', self._face('sad'))
+                        _view.set('status', self._bull_status('sad', priority=0))
+                        face_set = True
+
+            # Feature 8: Random rare face (5% chance per epoch)
+            if not face_set and random.random() < 0.05:
+                rare_faces = ['cool', 'intense', 'smart', 'grateful', 'motivated']
+                chosen_rare = random.choice(rare_faces)
+                _view.set('face', self._face(chosen_rare))
+                _view.set('status', self._bull_status(chosen_rare, priority=0))
+                face_set = True
+
+            # Default mood fallback
+            if not face_set:
+                _view.set('face', self._face('awake'))
+                _view.set('status', self._bull_status('awake', priority=0))
+
         except Exception:
             pass
 
