@@ -347,7 +347,7 @@ impl Daemon {
         s.blind_epochs = m.blind_epochs;
         s.mood = self.epoch_loop.personality.mood.value();
         s.face = self.epoch_loop.current_face().as_str().to_string();
-        s.status_message = self.epoch_loop.status_message();
+        s.status_message = self.epoch_loop.personality.status_msg();
 
         s.total_attacks = self.attacks.total_attacks;
         s.total_handshakes_attacks = self.attacks.total_handshakes;
@@ -556,7 +556,7 @@ impl Daemon {
             blind_epochs: m.blind_epochs,
             mood: self.epoch_loop.personality.mood.value(),
             face: self.epoch_loop.current_face().as_str(),
-            status_message: &self.epoch_loop.status_message(),
+            status_message: &self.epoch_loop.personality.status_msg(),
             mode: "AO",
         })
     }
