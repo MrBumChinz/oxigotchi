@@ -1,11 +1,11 @@
 pub mod buffer;
 pub mod driver;
+pub mod fonts;
 
 use crate::config::DisplayConfig;
 use crate::personality::Face;
 use buffer::FrameBuffer;
 use embedded_graphics::{
-    mono_font::{ascii::FONT_6X10, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::*,
     text::Text,
@@ -40,46 +40,44 @@ impl Screen {
         self.fb.clear();
     }
 
-    /// Draw a kaomoji face at the Python-matching position.
-    /// Python spec: face at (0, 34) in PWN mode, (0, 16) in AO mode.
-    /// We use (0, 34) as default — embedded-graphics y is baseline, so add font height.
+    /// Draw a kaomoji face (24pt font, matches Python's huge face area).
+    /// Python spec: face at (0, 40) in AO mode.
     pub fn draw_face(&mut self, face: &Face) {
         let text = face.as_str();
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        // Python layout: face at (0, 34). Font baseline offset: +10.
-        let _ = Text::new(text, Point::new(0, 44), style).draw(&mut self.fb);
+        let style = fonts::face();
+        // 24pt ProFont: ~20px ascent. Visual top at y=40, baseline ~y=60.
+        let _ = Text::new(text, Point::new(0, 60), style).draw(&mut self.fb);
     }
 
-    /// Draw the device name. Python spec: name at (5, 20), bold, "name> ".
+    /// Draw the device name (12pt bold font). Python spec: name at (5, 20).
     pub fn draw_name(&mut self, name: &str) {
         let label = format!("{}>", name);
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        // Python layout: (5, 20). Font baseline offset: +10.
+        let style = fonts::bold();
+        // 12pt: ~10px ascent. Visual top y=20, baseline ~y=30.
         let _ = Text::new(&label, Point::new(5, 30), style).draw(&mut self.fb);
     }
 
-    /// Draw a status message. Python spec: status at (125, 20).
+    /// Draw a status message (10pt font). Python spec: status at (125, 20).
     pub fn draw_status(&mut self, text: &str) {
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        // Python layout: (125, 20). Font baseline offset: +10.
-        let _ = Text::new(text, Point::new(125, 30), style).draw(&mut self.fb);
+        let style = fonts::medium();
+        // 10pt: ~8px ascent. Visual top y=20, baseline ~y=28.
+        let _ = Text::new(text, Point::new(125, 28), style).draw(&mut self.fb);
     }
 
-    /// Draw raw text (no label prefix) at a given (x, y) pixel position.
-    /// The y coordinate is the visual top of the text; baseline offset is added.
+    /// Draw raw text at (x, y) using small font (9pt).
+    /// y is the visual top of the text.
     pub fn draw_text(&mut self, text: &str, x: i32, y: i32) {
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        // FONT_6X10 baseline offset ~8px above baseline.
-        // y param is visual top, so baseline = y + 8.
-        let _ = Text::new(text, Point::new(x, y + 8), style).draw(&mut self.fb);
+        let style = fonts::small();
+        // 9pt: ~7px ascent.
+        let _ = Text::new(text, Point::new(x, y + 7), style).draw(&mut self.fb);
     }
 
-    /// Draw a "LABEL: value" pair at a given (x, y) pixel position.
-    /// The y coordinate is the visual top of the text; baseline offset is added.
+    /// Draw a "LABEL: value" pair using small font (9pt).
+    /// y is the visual top of the text.
     pub fn draw_labeled_value(&mut self, label: &str, value: &str, x: i32, y: i32) {
         let combined = format!("{}: {}", label, value);
-        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-        let _ = Text::new(&combined, Point::new(x, y + 8), style).draw(&mut self.fb);
+        let style = fonts::small();
+        let _ = Text::new(&combined, Point::new(x, y + 7), style).draw(&mut self.fb);
     }
 
     /// Draw a horizontal line (1px tall) for layout dividers.

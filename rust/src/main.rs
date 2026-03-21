@@ -403,41 +403,53 @@ impl Daemon {
     }
 
     /// Update the e-ink display with current state.
+    /// Layout matches Python angryoxide.py plugin display.
     fn update_display(&mut self) {
         self.screen.clear();
 
-        // ---- TOP BAR (y=0) ----
         let m = &self.epoch_loop.metrics;
-        self.screen.draw_labeled_value("CH", &m.channel.to_string(), 0, 0);
-        self.screen.draw_labeled_value("APS", &m.total_aps.to_string(), 28, 0);
-        self.screen.draw_labeled_value("BT", self.bluetooth.status_short(), 115, 0);
-        let bat_str = self.battery.display_str();
-        self.screen.draw_labeled_value("", &bat_str, 140, 0);
+
+        // ---- TOP BAR (y=0) — small 9pt font ----
+        self.screen.draw_labeled_value("CH", &format!("{:02}", m.channel), 0, 0);
+        self.screen.draw_labeled_value("APS", &m.total_aps.to_string(), 55, 0);
         self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 185, 0);
 
         // ---- LINE 1 (y=14) ----
         self.screen.draw_hline(0, 14, display::DISPLAY_WIDTH);
 
-        // ---- NAME + STATUS (y=20) ----
+        // ---- NAME (y=20, 12pt bold) ----
         self.screen.draw_name(&self.config.name);
-        let status = self.epoch_loop.personality.status_msg();
+
+        // ---- STATUS (y=20 right side, 10pt medium) ----
+        let status = self.epoch_loop.status_message();
         self.screen.draw_status(&status);
 
-        // ---- FACE (y=34) ----
+        // ---- FACE (y=40, 24pt large kaomoji) ----
         let face = self.epoch_loop.current_face();
         self.screen.draw_face(&face);
+
+        // ---- IP DISPLAY (y=95) ----
+        let ip_str = self.network.display_ip_str(
+            self.bluetooth.ip_address.as_deref()
+        );
+        self.screen.draw_text(&ip_str, 0, 95);
 
         // ---- LINE 2 (y=108) ----
         self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
 
-        // ---- BOTTOM BAR (y=109+) ----
-        self.screen.draw_labeled_value(
-            "PWND",
-            &m.handshakes.to_string(),
-            0,
-            109,
-        );
-        self.screen.draw_labeled_value("", "AUTO", 222, 112);
+        // ---- BOTTOM BAR (y=109) — small 9pt ----
+        let pwnd_str = format!("PWND: {}", m.handshakes);
+        self.screen.draw_text(&pwnd_str, 0, 109);
+
+        // Mode indicator at right edge
+        let mode = if self.ao.config.rate > 1 { "RAGE" } else { "AUTO" };
+        self.screen.draw_text(mode, 222, 109);
+
+        // AO crash indicator (only if crashes)
+        if self.ao.crash_count > 0 {
+            let crash_str = format!("AO:{}", self.ao.crash_count);
+            self.screen.draw_text(&crash_str, 120, 109);
+        }
 
         self.screen.flush();
     }
