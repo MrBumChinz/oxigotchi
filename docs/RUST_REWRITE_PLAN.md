@@ -1,4 +1,8 @@
-# Oxigotchi Rust Rewrite Plan
+# Rusty Oxigotchi — Rust Rewrite Plan
+
+> The bull is getting forged in Rust. Codename: **Rusty**.
+
+Rusty Oxigotchi (v3.0) is the full Rust rewrite of Oxigotchi. One static binary replaces Python, bettercap, and pwngrid. The GitHub repo stays `oxigotchi`, the binary stays `oxigotchi`, but internally this is **Rusty** — leaner, faster, and built to last.
 
 ## Why Rewrite
 
@@ -11,28 +15,28 @@
 | Dependencies | Python 3.13 + venv + pip + PIL + flask | Single static binary |
 | SD card wear | Constant tmpfs I/O from Python | Minimal |
 
-AngryOxide already proves Rust works for WiFi tooling on Pi Zero 2W. The rewrite extends AngryOxide into a full oxigotchi daemon.
+AngryOxide already proves Rust works for WiFi tooling on Pi Zero 2W. Rusty extends AngryOxide into a full oxigotchi daemon — no more Python glue, no more bettercap overhead.
 
 ## Architecture
 
 ```
-oxigotchi (single Rust binary)
+oxigotchi (single Rust binary — "Rusty Oxigotchi")
 ├── core/           - Main loop, epoch tracking, config
-├── display/        - E-ink driver (waveshare v4, SPI)
+├── display/        - E-ink driver (waveshare v4, SPI direct)
 ├── wifi/           - Monitor mode, channel hopping (reuse AO)
 ├── attacks/        - Deauth, PMKID, CSA (reuse AO engine)
 ├── capture/        - Pcapng management, hashcat conversion
 ├── web/            - Dashboard (axum + htmx, no JS framework)
 ├── bluetooth/      - BT PAN tether (standalone)
 ├── pisugar/        - Battery monitoring (I2C)
-├── personality/    - Faces, status messages, mood
+├── personality/    - Faces, status messages, mood (the bull's soul)
 ├── plugins/        - WASM or Lua plugin system (optional)
 └── recovery/       - WiFi recovery, watchdog, self-healing
 ```
 
 ### Key Decisions
 
-1. **Single binary** — no Python, no venv, no bettercap, no pwngrid
+1. **Single binary** — Rusty ships as one `oxigotchi` binary. No Python, no venv, no bettercap, no pwngrid
 2. **AngryOxide as library** — import AO's WiFi/attack code as a Rust crate, not a subprocess
 3. **No bettercap** — saves 52MB RAM; channel scanning done natively
 4. **E-ink via SPI** — direct GPIO/SPI using `rppal` crate, no Python PIL
@@ -41,7 +45,7 @@ oxigotchi (single Rust binary)
 7. **Cross-compile** — build on x86 with `cross` for `aarch64-unknown-linux-gnu`
 8. **Plugin system** — optional, Phase 3. WASM (wasmtime) or Lua (mlua) for user scripts
 
-## Sprint Plan
+## Sprint Plan — Building Rusty
 
 ### Phase 1: Core + Display (Sprints 1-3)
 
@@ -159,7 +163,7 @@ chrono = "0.4"
 
 ## SD Card Wear Reduction
 
-One of the biggest benefits of the rewrite. Python pwnagotchi constantly writes to the SD card, killing it in 1-2 years of continuous use.
+One of the biggest benefits of Rusty. Python pwnagotchi constantly writes to the SD card, killing it in 1-2 years of continuous use.
 
 | Factor | Python (now) | Rust (after) |
 |--------|-------------|--------------|
@@ -176,7 +180,7 @@ One of the biggest benefits of the rewrite. Python pwnagotchi constantly writes 
 
 ## Plugin Rewrite Strategy
 
-All current plugins rewritten as native Rust modules compiled into the binary:
+In Rusty Oxigotchi, all current plugins are rewritten as native Rust modules compiled into the binary:
 
 | Python Plugin | Rust Module | Notes |
 |--------------|-------------|-------|
@@ -201,7 +205,7 @@ All current plugins rewritten as native Rust modules compiled into the binary:
 | tweak_view.py | `display/layout.rs` | Custom UI layout |
 | button-feedback.py | `pisugar/buttons.rs` | Button action feedback on display |
 
-**No Python plugin system needed.** All plugins become compile-time Rust modules. This means:
+**No Python plugin system needed in Rusty.** All plugins become compile-time Rust modules. This means:
 - Zero runtime overhead from plugin loading
 - No plugin crashes from bad Python code
 - Type-safe configuration
@@ -220,10 +224,11 @@ For users who want custom behavior, a Lua scripting layer (`mlua` crate) can be 
 | Feature parity takes too long | Ship incrementally — display-only first, then attacks |
 | Plugin ecosystem loss | WASM plugins in Phase 3, or accept native-only |
 
-## Success Criteria
+## Success Criteria — When Rusty Ships
 
-- [ ] Single 5MB static binary replaces pwnagotchi + bettercap + pwngrid
+- [ ] Single ~5MB `oxigotchi` binary replaces pwnagotchi + bettercap + pwngrid
 - [ ] RAM usage < 10MB (vs 170MB+ today)
 - [ ] Boot to scanning < 5s (vs 20s+ today)
-- [ ] All current features: AO/PWN modes, display, web UI, BT tether, PiSugar
+- [ ] All current Oxigotchi v2.x features: AO mode, display, web UI, BT tether, PiSugar
 - [ ] SD card image < 2GB (vs 13GB today)
+- [ ] Startup banner reads "Rusty Oxigotchi v3.0" — the bull has arrived

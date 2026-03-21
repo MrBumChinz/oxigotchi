@@ -4,6 +4,7 @@
 **Source:** `/c/msys64/home/user/pwnagotchi/pwnagotchi/`
 **Installed:** `/home/pi/.pwn/lib/python3.13/site-packages/pwnagotchi/` (26 MB)
 **Pi service status:** Failed (start-limit-hit) at time of audit
+**End goal:** **Rusty Oxigotchi v3.0** — replace this entire Python codebase with a single Rust binary. This audit maps the dead weight that Rusty eliminates entirely.
 
 ---
 
@@ -197,3 +198,5 @@ The entire mood state machine (sad, bored, angry, excited, grateful, lonely) is 
 **Start with P1** -- all are safe, surgical removals with zero risk of breaking functionality.
 The display dict refactor (P2) is the biggest code quality win.
 Locale pruning (P2) is the biggest disk space win.
+
+**Ultimate fix:** Rusty Oxigotchi v3.0 makes this entire audit moot. Every line of dead Python code, every unused locale, every bloated display driver — all gone. Replaced by a single ~5MB Rust binary with zero dead code, zero runtime overhead, and zero SD card wear from Python artifacts. The P1-P3 cleanups are worth doing for Oxigotchi v2.x stability, but Rusty is the real answer.

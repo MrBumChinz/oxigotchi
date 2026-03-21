@@ -6,6 +6,20 @@
 
 ---
 
+## Rusty Oxigotchi — The Next Evolution
+
+**Oxigotchi v2.x** is the battle-tested Python version you're reading about below. It works, it's stable, and it's already light-years ahead of stock pwnagotchi.
+
+But the bull is getting an upgrade.
+
+**Rusty Oxigotchi v3.0** is the full Rust rewrite — a single static binary that replaces Python, bettercap, and pwngrid entirely. ~5MB binary, ~10MB RAM, boot to scanning in under 5 seconds. No Python interpreter, no venv, no pip, no garbage collector. Just a lean, mean, handshake-capturing machine.
+
+The codename is **Rusty** — because even an ox gets stronger with age, and this one is forged in Rust. Everything that makes Oxigotchi great (patched firmware, 6 attack types, bull faces, web dashboard, self-healing) gets rebuilt from scratch as native Rust modules compiled into one binary. Your SD card will last a decade.
+
+Development is tracked in [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md). The `rust/` directory has the initial scaffold.
+
+---
+
 ## The Problem with Stock Pwnagotchi
 
 Stock pwnagotchi on a Pi Zero 2W is barely functional. Here's what's actually happening under the hood:
@@ -46,17 +60,19 @@ Then I integrated [AngryOxide](https://github.com/Ragnt/AngryOxide) — a Rust-b
 
 ## The Numbers
 
-| Metric | Stock Pwnagotchi | Oxigotchi (AO mode) | Oxigotchi (PWN mode) |
-|--------|-----------------|--------------------|--------------------|
-| **WiFi crashes** | Every 2-5 minutes | Zero (v6 firmware, 27,982 frames tested) | Zero (same firmware patch) |
-| **Attack types** | 2 (deauth, PMKID) | 6 (+ CSA, disassoc, anon reassoc, rogue M2) | 2 (stock bettercap, but stable) |
-| **Memory usage** | ~80 MB (bettercap) | ~15 MB (AO) | ~80 MB (bettercap) |
-| **Capture quality** | Raw pcaps, often incomplete | Validated .pcapng + .22000 hashcat-ready | Raw pcaps (stock behavior) |
-| **Boot time** | 2-3 min (parses full log) | ~20 sec (optimized boot) | ~20 sec (optimized boot) |
-| **Channel strategy** | Fixed hop | Smart autohunt with dwell | Fixed hop |
-| **Language** | Go | Rust | Go |
-| **Web dashboard** | Basic status page | Full control panel (15 cards, 22 API endpoints) | Basic status page |
-| **Faces** | Korean text emoticons | 28 bull face PNGs | Korean text emoticons |
+| Metric | Stock Pwnagotchi | Oxigotchi v2.x (AO mode) | Oxigotchi v2.x (PWN mode) | Rusty Oxigotchi v3.0 (target) |
+|--------|-----------------|--------------------|--------------------|-------------------------------|
+| **WiFi crashes** | Every 2-5 minutes | Zero (v6 firmware, 27,982 frames tested) | Zero (same firmware patch) | Zero (same firmware patch) |
+| **Attack types** | 2 (deauth, PMKID) | 6 (+ CSA, disassoc, anon reassoc, rogue M2) | 2 (stock bettercap, but stable) | 6 (AO as native Rust crate) |
+| **Memory usage** | ~80 MB (bettercap) | ~15 MB (AO) | ~80 MB (bettercap) | ~5-10 MB (single binary) |
+| **Capture quality** | Raw pcaps, often incomplete | Validated .pcapng + .22000 hashcat-ready | Raw pcaps (stock behavior) | Validated (same as AO mode) |
+| **Boot time** | 2-3 min (parses full log) | ~20 sec (optimized boot) | ~20 sec (optimized boot) | <5 sec (no Python, no venv) |
+| **Channel strategy** | Fixed hop | Smart autohunt with dwell | Fixed hop | Smart autohunt with dwell |
+| **Language** | Go | Rust (AO) + Python (glue) | Go | 100% Rust |
+| **Web dashboard** | Basic status page | Full control panel (15 cards, 22 API endpoints) | Basic status page | Full control panel (axum + htmx) |
+| **Faces** | Korean text emoticons | 28 bull face PNGs | Korean text emoticons | 28 bull face PNGs (SPI direct) |
+| **SD card lifespan** | ~1-2 years | ~5-10 years | ~1-2 years | 10+ years (near-zero writes) |
+| **Binary size** | 150MB+ (Python venv) | 150MB+ (Python venv) | 150MB+ (Python venv) | ~5 MB static binary |
 
 **Key point:** Even if you never use AngryOxide, the firmware patch alone makes stock pwnagotchi dramatically more stable. Switch to PWN mode and enjoy a bettercap that actually works.
 
@@ -87,8 +103,8 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **PiSugar 3 button controls** — Single press toggles Bluetooth tethering. Double press toggles AUTO/MANU mode. Long press switches AO/PWN mode. No SSH needed for basic control.
 - **WiFi self-healing** — `wlan_keepalive` daemon sends probe frames to prevent SDIO bus idle crashes. `wifi-recovery.service` GPIO power-cycles the WiFi chip on boot if it fails to appear. No more dead radios.
 - **Standalone Bluetooth tethering** — Decoupled from pwnagotchi's bt-tether plugin (which threw errors). Independent daemon, toggled via PiSugar button.
-- **Reproducible image builds** — `tools/bake_v2.sh` builds a complete SD card image from the repo in one pass with full verification.
-- **SD card saver** — Python pwnagotchi constantly writes logs, __pycache__, state files, and journal entries, killing SD cards in 1-2 years. Oxigotchi minimizes disk I/O with RAM-based logging, tmpfs mounts, and no Python overhead. Estimated 80-90% reduction in SD card wear — your card lasts 5-10+ years instead of 1-2. The upcoming Rust rewrite will eliminate Python entirely for near-zero disk wear.
+- **Reproducible image builds** — `tools/bake_v2.sh` builds a complete SD card image from the repo in one pass with full verification. (Rusty Oxigotchi v3.0 will ship with `bake_v3.sh` — a single binary flash, no venv, no pip.)
+- **SD card saver** — Python pwnagotchi constantly writes logs, __pycache__, state files, and journal entries, killing SD cards in 1-2 years. Oxigotchi v2.x minimizes disk I/O with RAM-based logging, tmpfs mounts, and no Python overhead. Estimated 80-90% reduction in SD card wear — your card lasts 5-10+ years instead of 1-2. Rusty Oxigotchi v3.0 will eliminate Python entirely for near-zero disk wear — your SD card will outlive the Pi itself.
 - **Backwards compatible** — All existing plugins work. Switch to PWN mode anytime for stock bettercap (now stable with our firmware patch). Your handshakes, config, and plugins are untouched.
 - **Firmware rollback** — One command to restore original firmware.
 - **Safe updates** — `apt upgrade` works without breaking anything. Kernel and firmware packages are held, apt hooks protect the patched firmware.

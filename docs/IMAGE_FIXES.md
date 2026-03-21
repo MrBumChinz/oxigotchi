@@ -1,7 +1,9 @@
 # Oxigotchi v2.0 Image Fixes
 
-All fixes and self-healing mechanisms applied to the oxigotchi v2.0 SD card image.
+All fixes and self-healing mechanisms applied to the Oxigotchi v2.0 SD card image.
 These transforms are baked into the image — they run once during image prep, not on every boot.
+
+> **Note:** Most of these fixes exist to work around Python/pwnagotchi/bettercap quirks. **Rusty Oxigotchi v3.0** eliminates the root causes entirely — no Python venv to manage, no bettercap to fight with, no pwnagotchi service to rate-limit. The Rusty image will be drastically simpler: flash a ~2GB image, boot in under 5 seconds, done.
 
 ---
 
@@ -88,7 +90,7 @@ These mechanisms keep the Pi recoverable without physical access.
 | Change | Why |
 |--------|-----|
 | `/tmp` mounted as `tmpfs` | Reduces SD card write wear — temp files live in RAM |
-| Swap configured to 100 MB at `/var/swap` | Small swap prevents OOM kills without thrashing the SD card |
+| Swap configured to 100 MB at `/var/swap` | Small swap prevents OOM kills without thrashing the SD card (Rusty won't need swap at all — ~10MB RSS) |
 
 ---
 
@@ -96,8 +98,8 @@ These mechanisms keep the Pi recoverable without physical access.
 
 | Change | Why |
 |--------|-----|
-| Font changed from `"oxigotchi"` (missing) to `"DejaVuSansMono"` | The custom font file was never shipped; DejaVuSansMono is available system-wide and renders Korean face text correctly |
-| pwnlib patched: `is_auto_mode()` forced to return `0` | Ensures pwnagotchi always runs in auto mode — prevents accidental manual mode on boot |
+| Font changed from `"oxigotchi"` (missing) to `"DejaVuSansMono"` | The custom font file was never shipped; DejaVuSansMono is available system-wide and renders Korean face text correctly (Rusty will use `embedded-graphics` fonts — no system font dependency) |
+| pwnlib patched: `is_auto_mode()` forced to return `0` | Ensures pwnagotchi always runs in auto mode — prevents accidental manual mode on boot (Rusty has no manual mode concept — always scanning) |
 
 ---
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.0.0-dev] — Rusty Oxigotchi (in development)
+
+The Rust rewrite has a name: **Rusty Oxigotchi** (codename: **Rusty**). This is the full-stack Rust replacement for Python pwnagotchi + bettercap + pwngrid — a single static binary that does everything. The bull is being forged in Rust.
+
+See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint plan and architecture. Initial scaffold lives in `rust/`.
+
 ## [2.2.0] - 2026-03-21
 
 ### Added

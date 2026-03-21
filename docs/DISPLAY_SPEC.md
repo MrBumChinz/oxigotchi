@@ -1,8 +1,10 @@
 # Oxigotchi E-Ink Display Specification
 
-**Hardware:** Waveshare 2.13" V4 (250×122 pixels, 1-bit, partial refresh)
-**Orientation:** Landscape, 250px wide × 122px tall
+**Hardware:** Waveshare 2.13" V4 (250x122 pixels, 1-bit, partial refresh)
+**Orientation:** Landscape, 250px wide x 122px tall
 **Colors:** Black (0xFF rendered) on white (0x00 rendered) — inverted internally
+
+> **Rusty Oxigotchi v3.0** will drive this display directly via SPI using the `rppal` crate — no Python PIL, no PIL ImageDraw, no framebuffer abstraction. The display driver will be a native Rust module (`display/`) that writes SPI commands directly to the Waveshare V4 controller. Same 250x122 canvas, same bull faces, but rendered in microseconds instead of milliseconds. The current Python-based rendering pipeline documented here serves as the reference spec for the Rusty display driver.
 
 ---
 
