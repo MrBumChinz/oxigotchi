@@ -678,24 +678,10 @@ class AngryOxide(plugins.Plugin):
         except Exception:
             return True  # default to AO mode if status check fails
 
-    def _on_render(self, canvas):
-        """Render callback — draws WiFi icon on every frame."""
-        if self._is_ao_mode():
-            try:
-                from PIL import ImageDraw
-                draw = ImageDraw.Draw(canvas)
-                self._draw_wifi_icon(draw, 140, 0)
-            except Exception:
-                pass
+    # Render callback removed — WiFi icon didn't work on e-ink
 
     def on_ready(self, agent):
         self._agent = agent
-
-        # Register render callback for WiFi icon drawing
-        try:
-            agent._view._render_cbs.append(self._on_render)
-        except Exception:
-            pass
 
         binary = self.options.get('binary_path', '/usr/local/bin/angryoxide')
         if not os.path.isfile(binary):
@@ -1712,7 +1698,7 @@ class AngryOxide(plugins.Plugin):
                 color=BLACK,
                 label='',
                 value='',
-                position=(0, 95),
+                position=(60, 112),
                 label_font=fonts.Small,
                 text_font=fonts.Small
             ))
@@ -1721,7 +1707,7 @@ class AngryOxide(plugins.Plugin):
                 color=BLACK,
                 label='',
                 value='',
-                position=(0, 109),
+                position=(0, 112),
                 label_font=fonts.Small,
                 text_font=fonts.Small
             ))
@@ -1745,18 +1731,7 @@ class AngryOxide(plugins.Plugin):
             except Exception:
                 pass
 
-    def _draw_wifi_icon(self, canvas, x, y, color=0):
-        """Draw a tiny WiFi icon (3 arcs + dot) at (x, y) on a PIL ImageDraw canvas.
-        Icon is roughly 10x8 pixels. Color 0=black on white background."""
-        try:
-            # Dot at bottom center
-            canvas.rectangle([x + 4, y + 6, x + 5, y + 7], fill=color)
-            # Small arc
-            canvas.arc([x + 2, y + 3, x + 8, y + 9], start=225, end=315, fill=color)
-            # Medium arc
-            canvas.arc([x + 0, y + 1, x + 10, y + 11], start=225, end=315, fill=color)
-        except Exception:
-            pass
+    # WiFi pixel icon removed — render callback approach didn't work on e-ink
 
     def on_ui_update(self, ui):
         with ui._lock:
@@ -1817,7 +1792,7 @@ class AngryOxide(plugins.Plugin):
 
             # Show AP count in top bar (WiFi icon drawn via render callback)
             try:
-                ui.set('ao_aps', '  %d' % self._ao_ap_count)
+                ui.set('ao_aps', 'APs:%d' % self._ao_ap_count)
             except Exception:
                 pass
 
