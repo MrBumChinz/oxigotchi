@@ -58,6 +58,12 @@ The result: **27,982 injected frames in a 5-minute stress test, zero crashes.** 
 
 Then I integrated [AngryOxide](https://github.com/Ragnt/AngryOxide) — a Rust-based attack engine the community has been asking for. Nobody could get it running on the built-in WiFi because the firmware crashes were even worse under AO's heavier injection load. With the patched firmware, it runs flawlessly.
 
+## How It Works
+
+In **Full AO Mode** (the default), AngryOxide replaces bettercap for both scanning and attacking. Only one program touches the WiFi chip at a time — no TX/RX conflicts, no SDIO bus contention. Bettercap still runs but with `wifi.recon` off; it is just a dummy API so pwnagotchi's core does not crash. A self-healing stack (keepalive daemon, WiFi watchdog, boot-time recovery, hardware watchdog) ensures the system recovers from any remaining firmware edge cases without manual intervention.
+
+For the full technical deep dive — firmware crash vectors, the self-healing stack, component architecture, and how to hack on Oxigotchi — see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+
 ## The Numbers
 
 | Metric | Stock Pwnagotchi | Oxigotchi v2.x (AO mode) | Oxigotchi v2.x (PWN mode) | Rusty Oxigotchi v3.0 (target) |
