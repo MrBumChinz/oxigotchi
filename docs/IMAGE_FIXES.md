@@ -101,6 +101,98 @@ These mechanisms keep the Pi recoverable without physical access.
 
 ---
 
+## Sprint Fixes (2026-03-21)
+
+All fixes applied in the v2.1 sprint, baked into the image via `tools/bake_v2.sh`.
+
+### Blind Epoch Fix
+
+| Change | Why |
+|--------|-----|
+| AO plugin feeds captures to pwnagotchi AI epoch tracker | In AO mode, bettercap doesn't see handshakes, so the AI reported blind epochs and negative rewards. The AO plugin now emits `association`, `deauth`, and `handshake` events for every AO capture, feeding the RL model accurate data. |
+| Synthetic AP heartbeat injected when AP list empty | Prevents `blind_for` counter from incrementing to `mon_max_blind_epochs` and triggering a false restart. A dummy AP (`AO-active`) is injected into `_access_points` when the monitor interface is up. |
+
+### Peer Error Fix
+
+| Change | Why |
+|--------|-----|
+| `update_peers` AttributeError suppressed | The `'Array' object has no attribute 'read'` error was a bettercap/pwngrid API response format mismatch. Patched in agent.py to catch the error gracefully. Peer discovery is non-critical. |
+
+### Capture Filename Prefix
+
+| Change | Why |
+|--------|-----|
+| AO `--name` flag set to `hostname` (defaults to `oxigotchi`) | Captures were named `-DATETIME.pcapng` (empty prefix). Now named `oxigotchi-DATETIME.pcapng` for easy identification. Falls back to `oxigotchi` if hostname lookup fails. |
+
+### Boot Time Optimization
+
+| Change | Before | After | Why |
+|--------|--------|-------|-----|
+| `usb0-fallback.service` timeout reduced | 30.5s blocking | Non-blocking | Was the single biggest boot bottleneck |
+| `fix-ndev.service` merged with wifi-recovery | 10.6s + 5.2s | ~5s combined | Two services both waiting for wlan0 |
+| `bt-agent.service` race fixed | 7.5s (includes restart) | ~2s | Eliminated retry loop |
+| `bootlog.service` made async | 4.7s blocking | Background | Diagnostic collection doesn't need to block boot |
+| Disabled services | Various | Removed | ModemManager, rpi-eeprom-update, cloud-init, etc. |
+| **Total boot time** | **~65s** | **~20s** | 3x faster boot |
+
+### Kernel Module Blacklist
+
+| Change | Why |
+|--------|-----|
+| `blacklist bcm2835_v4l2` in `/etc/modprobe.d/blacklist-camera.conf` | Prevents camera/video kernel modules from loading. Eliminates VCHI service initialization errors in the journal and saves RAM. |
+
+### Handshake Directory Consolidation
+
+| Change | Why |
+|--------|-----|
+| `/root/handshakes` symlinked to `/etc/pwnagotchi/handshakes/` | AO and bettercap were writing to different directories (17 vs 16 files, 179MB total). Single canonical directory eliminates duplication and confusion. |
+
+### BT-Tether Decoupling
+
+| Change | Why |
+|--------|-----|
+| Standalone bt-tether daemon, independent of pwnagotchi plugin | The pwnagotchi bt-tether plugin threw "Error with mac address" even when disabled. The standalone daemon handles Bluetooth tethering without any pwnagotchi dependency. Toggled via PiSugar button (single press). |
+| bt-tether plugin disabled in config.toml | Eliminates the plugin load error. The standalone daemon handles all BT functionality. |
+
+### WiFi Stability Services
+
+| Service | Type | Purpose |
+|---------|------|---------|
+| `wlan-keepalive.service` | Persistent daemon | Native C binary (`wlan_keepalive`) sends probe frames every 100ms on wlan0mon to prevent BCM43436B0 SDIO bus idle crashes. Replaced the previous tcpdump-based approach. |
+| `wifi-recovery.service` | Boot oneshot | GPIO power-cycles the BCM43436B0 via WL_REG_ON (GPIO 41) if wlan0 fails to appear within 4 seconds of boot. Recovers from SDIO bus death without full power cycle. |
+
+### Image Builder
+
+| Tool | Purpose |
+|------|---------|
+| `tools/bake_v2.sh` | Reproducible image build script. Mounts a base image via loopback, applies all 20 build steps (plugins, config, faces, tools, services, hostname, dual-IP, blacklists, cleanup), runs full verification, and unmounts. Produces a deterministic image from the repo. |
+
+### Disabled Services
+
+| Service | Why |
+|---------|-----|
+| `rpi-usb-gadget-ics` | Caused NetworkManager-dispatcher spam in logs |
+| `ModemManager` | No cellular modem; wasted CPU probing USB |
+| `systemd-networkd` | Conflicts with NetworkManager on usb0 |
+| `usb0-ip` | Redundant with NM managing usb0 |
+| `cloud-init` | Slow first-boot provisioning not needed |
+| `userconfig` | First-boot console wizard not needed headless |
+| `pi-helper` | Not needed for headless operation |
+| `rpi-eeprom-update` | Zero 2W has no updatable EEPROM |
+
+### Miscellaneous Fixes
+
+| Change | Why |
+|--------|-----|
+| `/var/lib/.rootfs-expanded` sentinel created | Silences resize-rootfs.service failure on every boot |
+| `chmod 644` on all service files | Fixes systemd executable permission warnings |
+| `personality.associate = false`, `personality.deauth = false` in AO overlay | Prevents misleading "Associating to AP_NAME" status text when AO handles attacks |
+| AO default rate set to 1 | Rate 2 crashes BCM43436B0 in ~68 seconds under load. Rate 1 is the safe maximum. |
+| Whitelist: `["Alpha", "Alpha 5G"]` | Home network whitelist in both config.toml and angryoxide-v5.toml overlay |
+| rpi-usb-gadget-ics disabled | Causes NM-dispatcher spam in logs |
+
+---
+
 ## Windows Side
 
 | File | Purpose |

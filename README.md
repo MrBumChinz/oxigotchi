@@ -52,7 +52,7 @@ Then I integrated [AngryOxide](https://github.com/Ragnt/AngryOxide) — a Rust-b
 | **Attack types** | 2 (deauth, PMKID) | 6 (+ CSA, disassoc, anon reassoc, rogue M2) | 2 (stock bettercap, but stable) |
 | **Memory usage** | ~80 MB (bettercap) | ~15 MB (AO) | ~80 MB (bettercap) |
 | **Capture quality** | Raw pcaps, often incomplete | Validated .pcapng + .22000 hashcat-ready | Raw pcaps (stock behavior) |
-| **Boot time** | 2-3 min (parses full log) | ~60 sec (fast boot, session cache) | ~60 sec (fast boot, session cache) |
+| **Boot time** | 2-3 min (parses full log) | ~20 sec (optimized boot) | ~20 sec (optimized boot) |
 | **Channel strategy** | Fixed hop | Smart autohunt with dwell | Fixed hop |
 | **Language** | Go | Rust | Go |
 | **Web dashboard** | Basic status page | Full control panel (15 cards, 22 API endpoints) | Basic status page |
@@ -83,7 +83,11 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **Auto-crack integration** — Captures automatically upload to wpa-sec for cloud cracking. Cracked passwords appear in the dashboard. Whitelisted networks are never uploaded — your home WiFi stays private.
 - **Unified XP system** — The EXP plugin works in both AO and PWN modes with persistent stats across reboots. In AO mode, a parser reads AngryOxide's capture files and emits the same association/deauth/handshake events that bettercap produces, so XP and leveling work identically in both modes. No captures lost, no stats reset when switching.
 - **Smart Skip** — Auto-whitelists APs with existing captures, focusing on new targets.
-- **Fast boot** — Session data cached, fix_services disabled, skips the 30-60 second log parsing phase that slows stock pwnagotchi.
+- **Fast boot** — ~20 seconds from power-on to scanning (down from ~65s). Session cache, disabled bloat services, async diagnostics, merged WiFi services.
+- **PiSugar 3 button controls** — Single press toggles Bluetooth tethering. Double press toggles AUTO/MANU mode. Long press switches AO/PWN mode. No SSH needed for basic control.
+- **WiFi self-healing** — `wlan_keepalive` daemon sends probe frames to prevent SDIO bus idle crashes. `wifi-recovery.service` GPIO power-cycles the WiFi chip on boot if it fails to appear. No more dead radios.
+- **Standalone Bluetooth tethering** — Decoupled from pwnagotchi's bt-tether plugin (which threw errors). Independent daemon, toggled via PiSugar button.
+- **Reproducible image builds** — `tools/bake_v2.sh` builds a complete SD card image from the repo in one pass with full verification.
 - **Backwards compatible** — All existing plugins work. Switch to PWN mode anytime for stock bettercap (now stable with our firmware patch). Your handshakes, config, and plugins are untouched.
 - **Firmware rollback** — One command to restore original firmware.
 - **Safe updates** — `apt upgrade` works without breaking anything. Kernel and firmware packages are held, apt hooks protect the patched firmware.
@@ -112,8 +116,8 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 3. **Insert the SD card** into your Pi Zero 2W.
 4. **Windows users: install the USB gadget driver** — Download and run [rpi-usb-gadget-driver-setup.exe](https://github.com/jayofelony/pwnagotchi/releases) before connecting. macOS and Linux don't need this.
 5. **Connect the Pi** via the micro USB **data** port (the one closest to the center, not the edge).
-6. **Power on.** Wait about 2 minutes for the first boot.
-7. **That's it.** The bull appears on the e-ink display and AngryOxide begins scanning automatically.
+6. **Power on.** Wait about 30 seconds for the first boot.
+7. **That's it.** The bull appears on the e-ink display and AngryOxide begins scanning automatically in AO mode (the default).
 
 > **Default credentials** (change these after first boot):
 > - SSH: `pi` / `raspberry`
@@ -134,14 +138,13 @@ The deployer is an 18-step automated installer. It backs up your existing firmwa
 ## First Boot
 
 1. **0:00** — Power LED lights up. Boot splash shows the bull on e-ink.
-2. **0:30** — Linux finishes booting.
-3. **0:40** — Session data loads from cache (stock pwnagotchi spends 30-60s here parsing logs).
-4. **1:00** — Pwnagotchi initializes. Bull face changes to "awake."
-5. **1:30** — AngryOxide launches.
-6. **2:00** — Scanning begins. Bull looks left and right. APs appear in dashboard.
-7. **2:00+** — Attacks begin automatically.
+2. **0:05** — Kernel loaded, splash visible.
+3. **0:10** — Pwnagotchi initializes. Session data loads from cache.
+4. **0:15** — Bull face changes to "awake." AngryOxide launches.
+5. **0:20** — Scanning begins. Bull looks left and right. APs appear in dashboard.
+6. **0:20+** — Attacks begin automatically. AO mode is the default.
 
-> First boot after flashing takes ~30s extra (no session cache yet). Every boot after is faster.
+> Boot time is ~20 seconds. First boot after flashing takes ~10s extra (no session cache yet).
 
 ## Web Dashboard
 
@@ -162,7 +165,9 @@ sudo pwnoxide-mode status   # Show current mode
 sudo pwnoxide-mode rollback-fw  # Restore original firmware
 ```
 
-Your mode persists across reboots. Switching takes ~30 seconds.
+Or **long-press the PiSugar 3 button** to toggle AO/PWN mode without SSH.
+
+Your mode persists across reboots. AO mode is the default. Switching takes ~20 seconds.
 
 **Both modes benefit from the firmware patch.** PWN mode gives you a stock pwnagotchi experience that's actually stable — no more constant WiFi crashes.
 
@@ -203,25 +208,27 @@ Every mood has its own bull. Here are all 28:
 
 - **Firmware rollback** — `pwnoxide-mode rollback-fw` restores original firmware at any time.
 - **GPIO self-heal** — When the WiFi firmware crashes and the SDIO bus dies (error -22), the plugin automatically power-cycles the BCM43436B0 chip via GPIO 41 (WL_REG_ON), rebinds the MMC controller, reloads the driver, and restarts AO. No manual power cycle needed — even with PiSugar battery connected. This is the first pwnagotchi plugin that can recover from a dead SDIO bus without physical intervention.
+- **WiFi keepalive** — `wlan_keepalive` daemon sends probe frames on wlan0mon to prevent SDIO bus idle crashes. Native C binary, minimal CPU overhead.
+- **WiFi recovery on boot** — `wifi-recovery.service` GPIO power-cycles the WiFi chip if wlan0 doesn't appear within 4 seconds of boot.
 - **AO watchdog** — Restarts crashed AO process with exponential backoff (5s → 5min).
 - **Restart rate limiting** — Pwnagotchi capped at 3 restarts per 5 minutes.
-- **USB lifeline** — SSH always available at `10.0.0.2`, even when WiFi is dead.
-- **Mode escape hatch** — `pwnoxide-mode pwn` returns to stock pwnagotchi instantly.
+- **USB lifeline** — SSH always available at `10.0.0.2` (or `192.168.137.2` with Windows ICS), even when WiFi is dead.
+- **Mode escape hatch** — `pwnoxide-mode pwn` returns to stock pwnagotchi instantly. Or long-press PiSugar button.
 - **Safe apt upgrades** — Kernel and firmware packages held, apt hooks auto-protect the patched firmware binary.
 
-## Bluetooth Tether — Easy but Read This
+## Bluetooth Tethering
 
-This image ships with an **older bt-tether plugin that auto-pairs without PIN confirmation**:
+Bluetooth tethering is handled by a **standalone daemon** (not the pwnagotchi bt-tether plugin, which has been disabled). Toggle it with the PiSugar button:
 
-- **For you**: Enable Bluetooth tethering on your phone and the Pi connects automatically. No pairing codes.
-- **The catch**: Anyone nearby could potentially pair if left unattended.
+- **Single press** — Toggle BT tethering ON/OFF
+- **Dashboard** — Controls section has a BT Visible toggle
+
+The daemon auto-pairs without PIN confirmation for ease of use.
 
 **To stay safe:**
 
-1. **Toggle BT visibility from the dashboard** — Controls section has a BT Visible toggle. Turn OFF in public.
-2. Replace bt-tether with the latest version from the pwnagotchi repo (uses secure PIN pairing).
-3. Or disable bt-tether entirely in config.toml.
-4. Or use USB tethering only (`ssh pi@10.0.0.2`).
+1. **Toggle BT off in public** — Single-press the PiSugar button or use the dashboard toggle.
+2. Or use USB tethering only (`ssh pi@10.0.0.2` or `ssh pi@192.168.137.2`).
 
 ## FAQ
 
@@ -253,7 +260,7 @@ Oxigotchi uses the EXP plugin to track your progress. XP works in both AO and PW
 Yes — with Smart Skip ON, AO won't re-attack networks you already captured, so you won't earn duplicate XP from the same networks. Turn Smart Skip OFF if you want to maximize XP by farming the same APs repeatedly. Turn it ON if you want to focus on capturing new unique networks. You can toggle it anytime from the dashboard.
 
 **Can I change the attack rate?**
-The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive). **Rate 1 is recommended.** Rate 2 works well at home or in low-density areas, but in busy environments (walking through a city, near many APs) the heavy TX load can overwhelm the BCM43436B0 firmware — WiFi freezes and needs a reboot. This isn't a hard hardware limit — it's a firmware timing issue under high AP density + rapid channel hopping + movement. Rate 1 still uses all 6 attack types, just sends fewer frames per second. Rate 3 is experimental and will likely crash in most environments. If you plug in an external WiFi dongle (Alfa, RT5370, etc.) and configure AO to use it instead of the built-in chip, rate 2 and 3 work perfectly — the limitation is specific to the BCM43436B0.
+The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive). **Rate 1 is the default and recommended.** Rate 2 works well at home or in low-density areas, but in busy environments (walking through a city, near many APs) the heavy TX load can overwhelm the BCM43436B0 firmware — WiFi freezes and needs a reboot. This isn't a hard hardware limit — it's a firmware timing issue under high AP density + rapid channel hopping + movement. Rate 1 still uses all 6 attack types, just sends fewer frames per second. Rate 3 is experimental and will likely crash in most environments. If you plug in an external WiFi dongle (Alfa, RT5370, etc.) and configure AO to use it instead of the built-in chip, rate 2 and 3 work perfectly — the limitation is specific to the BCM43436B0.
 
 **Does scanning more channels help?**
 Not on the built-in WiFi. The BCM43436B0 firmware is more likely to crash when hopping across many channels — scanning all 13 with a short dwell time stresses the TX path and triggers the same firmware trap (EPC 0x204CA) as high rates. **Stick to channels 1, 6, 11** (the non-overlapping 2.4 GHz channels where 95% of APs live). You won't miss much, and your WiFi won't die mid-walk. If you use an external dongle (Alfa, etc.), scan all channels freely — external chips don't have this limitation.
@@ -263,7 +270,7 @@ With PiSugar 3 (1200mAh): 3-4 hours active. The bull face warns at 20% and 15%.
 
 ## Maintenance & Support
 
-This project is provided **as-is**. It's stable, tested (262 unit tests, overnight soak test, 28,000-frame injection stress test), and production-ready.
+This project is provided **as-is**. It's stable, tested (263 unit tests passing, overnight soak test, 28,000-frame injection stress test), and production-ready.
 
 **I will not be maintaining this project actively.** No issue tracking, no PR reviews. The code is GPL-3.0 — fork it, modify it, make it yours.
 

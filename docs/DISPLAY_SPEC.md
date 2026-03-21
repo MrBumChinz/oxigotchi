@@ -73,11 +73,13 @@ fonts.setup(10, 9, 10, 35, 25, 9)
 | Time | Display State | What Happens |
 |------|--------------|--------------|
 | T=0 | **Black screen** | Pi powers on, kernel loading |
-| T=5-8s | **Bull AWAKE face (centered, full refresh)** | `oxigotchi-splash.service` runs before pwnagotchi. Renders `awake.png` centered on display via full EPD refresh. Writes to both RAM banks so image persists through partial refreshes. |
-| T=8-11s | Bull face persists | `pwnagotchi-splash-delay.conf` adds 3s `ExecStartPre=/bin/sleep 3` before pwnagotchi starts. Splash stays visible. |
-| T=11-15s | **Bull SLEEP face + "Initializing..."** | Pwnagotchi starts, `view.on_starting()` sets SLEEP face + version text. EPD partial refresh begins. |
-| T=15-45s | **Bull SLEEP face + "Reading logs..."** | `LastSession.parse()` runs (or loads from cache in ~1s). Face = SLEEP or SMART. |
-| T=45-60s | **Bull AWAKE face + "Ready"** | Monitor mode up, AO started, first epoch begins. |
+| T=3-5s | **Bull AWAKE face (centered, full refresh)** | `oxigotchi-splash.service` runs before pwnagotchi. Renders `awake.png` centered on display via full EPD refresh. Writes to both RAM banks so image persists through partial refreshes. |
+| T=5-8s | Bull face persists | `pwnagotchi-splash-delay.conf` adds 3s `ExecStartPre=/bin/sleep 3` before pwnagotchi starts. Splash stays visible. |
+| T=8-12s | **Bull SLEEP face + "Initializing..."** | Pwnagotchi starts, `view.on_starting()` sets SLEEP face + version text. EPD partial refresh begins. |
+| T=12-15s | **Bull SLEEP face + "Reading logs..."** | `LastSession.parse()` runs (loads from cache in ~1s). Face = SLEEP or SMART. |
+| T=15-20s | **Bull AWAKE face + "Ready"** | Monitor mode up, AO started, first epoch begins. |
+
+> **Boot time: ~20 seconds** (optimized from ~65s by disabling unused services, fixing usb0-fallback, and eliminating boot ordering delays).
 
 ### Steady State Display
 
@@ -181,10 +183,10 @@ All faces are bull head PNGs at `/etc/pwnagotchi/custom-plugins/faces/`:
 | Time | Display State | What Happens |
 |------|--------------|--------------|
 | T=0 | **Black screen** | Pi powers on, kernel loading |
-| T=5-8s | **Nothing** | `oxigotchi-splash.service` detects no AO overlay → exits immediately. No splash shown. |
-| T=8-15s | **Korean SLEEP face + "Pwnagotchi>" + "Initializing..."** | Pwnagotchi starts, `view.on_starting()`. EPD Clear() → fresh white canvas → partial refresh begins. |
-| T=15-45s | **Korean SLEEP/SMART face + "Reading logs..."** | `LastSession.parse()` runs. |
-| T=45-60s | **Korean AWAKE face + "Pwnagotchi>" + "Ready"** | Bettercap API ready, monitor mode up, first epoch. |
+| T=3-5s | **Nothing** | `oxigotchi-splash.service` detects no AO overlay → exits immediately. No splash shown. |
+| T=5-10s | **Korean SLEEP face + "Pwnagotchi>" + "Initializing..."** | Pwnagotchi starts, `view.on_starting()`. EPD Clear() → fresh white canvas → partial refresh begins. |
+| T=10-15s | **Korean SLEEP/SMART face + "Reading logs..."** | `LastSession.parse()` runs. |
+| T=15-20s | **Korean AWAKE face + "Pwnagotchi>" + "Ready"** | Bettercap API ready, monitor mode up, first epoch. |
 
 ### Steady State Display
 
@@ -529,6 +531,7 @@ The angryoxide plugin actively manages indicator visibility in `on_ui_update()`:
 
 **When AO mode is active:**
 - Hides: `name`, `walkby`, `blitz`, `walkby_status` (set to `''`)
+- Moves off-screen: `shakes`, `channel`, `aps`, `display-password` (position set to (300, 300), outside the 250x122 display — blanking doesn't work because bettercap rewrites them after plugin runs)
 - Shows: `angryoxide` indicator with "AO: {captures} | {uptime}"
 - Overrides BT-tether status text that bleeds into status area
 
@@ -595,6 +598,22 @@ Triggered by starting pwnagotchi with `--manual` flag. Applies to both AO and PW
 - PWND shows last session handshakes + total unique
 
 **No automatic scanning or attacking in MANU mode.** Display is static until manually switched to AUTO.
+
+---
+
+## PiSugar 3 Button Controls
+
+The PiSugar 3 battery HAT has a single physical button that supports three press types.
+These are configured via the PiSugar daemon and mapped to oxigotchi actions:
+
+| Press Type | Action | Display Feedback |
+|------------|--------|-----------------|
+| **Single press** | Toggle Bluetooth tethering ON/OFF | BT indicator changes: `BT C` (connected) / `BT -` (off) |
+| **Double press** | Toggle AUTO/MANU mode | Mode indicator changes: `AUTO` / `MANU` at (222, 112) |
+| **Long press** | Toggle AO/PWN mode | Full mode switch — bull faces ↔ Korean faces, ~20s restart |
+
+The standalone bt-tether daemon (decoupled from pwnagotchi's bt-tether plugin) handles
+Bluetooth connectivity. Single-press toggles the daemon without restarting pwnagotchi.
 
 ---
 

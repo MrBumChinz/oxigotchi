@@ -1,5 +1,38 @@
 # Changelog
 
+## [2.2.0] - 2026-03-21
+
+### Added
+- **PiSugar 3 button controls**: single press = toggle BT tethering, double press = toggle AUTO/MANU mode, long press = toggle AO/PWN mode
+- **Standalone bt-tether daemon**: Bluetooth tethering decoupled from pwnagotchi's bt-tether plugin (which threw "Error with mac address" even when disabled). Independent daemon toggled via PiSugar button.
+- **wlan_keepalive native daemon**: C binary replaces tcpdump-based keepalive. Sends probe frames on wlan0mon every 100ms to prevent BCM43436B0 SDIO bus idle crashes. Cross-compiled for aarch64 in bake_v2.sh.
+- **wifi-recovery.service**: GPIO power-cycles BCM43436B0 via WL_REG_ON (GPIO 41) on boot if wlan0 fails to appear within 4 seconds. Recovers dead SDIO bus without full power cycle.
+- **bake_v2.sh image builder**: 20-step reproducible image build script. Mounts base image via loopback, applies all fixes (plugins, config, faces, tools, services, hostname, dual-IP, blacklists, cleanup), runs full verification, unmounts. One command produces a deterministic image.
+- **Kernel module blacklist**: `blacklist bcm2835_v4l2` in `/etc/modprobe.d/blacklist-camera.conf` prevents camera/video modules from loading, eliminating VCHI errors and saving RAM.
+- **Handshake directory consolidation**: `/root/handshakes` symlinked to `/etc/pwnagotchi/handshakes/` — single canonical directory for all captures.
+- **Rootfs sentinel**: `/var/lib/.rootfs-expanded` created to silence resize-rootfs.service false failures.
+- **263/263 tests passing** (up from 262)
+
+### Fixed
+- **Blind epochs (H1)**: AO plugin now emits `association`, `deauth`, and `handshake` events for every AO capture, feeding the pwnagotchi AI accurate reward signals. Synthetic AP heartbeat (`AO-active`) injected when AP list empty prevents false blind restart.
+- **Peer error (H2)**: `update_peers` AttributeError (`'Array' object has no attribute 'read'`) suppressed in patched agent.py. Peer discovery is non-critical.
+- **Capture filenames (H3)**: AO plugin passes `--name` flag with hostname (defaults to `oxigotchi`). Captures now named `oxigotchi-DATETIME.pcapng` instead of `-DATETIME.pcapng`.
+- **Boot time**: Reduced from ~65s to ~20s. Fixed usb0-fallback blocking (30.5s), merged fix-ndev + wifi-recovery, fixed bt-agent race, made bootlog async, disabled unused services.
+- **BT-Tether errors (M3)**: Plugin disabled in config.toml. Standalone daemon replaces it.
+- **resize-rootfs failure (M2)**: Sentinel file prevents every-boot failure.
+- **Service file permissions (M8)**: All service files set to `chmod 644` in bake_v2.sh.
+- **AO default rate**: Set to 1 (rate 2 crashes BCM43436B0 in ~68 seconds under load).
+- **Zombie process**: Fixed in pwnagotchi agent reap logic.
+- **rpi-usb-gadget-ics disabled**: Was causing NM-dispatcher spam in logs.
+- **Mode indicator position**: Fixed in PWN mode UI.
+
+### Changed
+- **AO mode is now the default**: Ships as oxigotchi (not pwnagotchi) with AO mode enabled, rate 1, bull faces.
+- **Dual-IP networking**: USB gadget configured with both `10.0.0.2/24` and `192.168.137.2/24` for Windows ICS compatibility.
+- **Whitelist**: Set to `["Alpha", "Alpha 5G"]` in both config.toml and angryoxide-v5.toml overlay.
+- **Documentation updated**: DISPLAY_SPEC.md, IMAGE_FIXES.md, DEEP_ANALYSIS.md, README.md, CHANGELOG.md all updated to reflect current state.
+- **No security hardening (intentional)**: This is a toy for beginners. USB-only access mitigates risk.
+
 ## [2.1.0] - 2026-03-17
 
 ### Added
