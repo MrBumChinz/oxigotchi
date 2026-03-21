@@ -101,6 +101,10 @@ class AngryOxide(plugins.Plugin):
         self._pwn_associate = True
         # Non-blocking restart scheduling (avoids sleeping the main thread)
         self._next_restart_time = 0
+        # Task 21: IP display indicator (rotating USB/BT addresses)
+        self._ip_cycle_counter = 0  # increments each ui_update, rotates every 5s
+        # Task 22: WiFi AP count indicator
+        self._ap_count = 0  # cached AP count, updated on_epoch
         # Cache for expensive API calls (subprocess-based)
         self._health_cache = None
         self._health_cache_time = 0
@@ -144,6 +148,53 @@ class AngryOxide(plugins.Plugin):
         except Exception:
             pass
         return None
+
+    def _get_ip_display(self):
+        """Return the current IP string to display, rotating every ~5 seconds.
+        Shows USB address with web UI port hint, and BT address if bnep0 is up."""
+        self._ip_cycle_counter += 1
+        # Each UI update is ~1s, rotate every 5 updates
+        cycle = (self._ip_cycle_counter // 5) % 2
+
+        # Check if bnep0 (Bluetooth tether) is up and get its IP
+        bt_ip = None
+        try:
+            if os.path.exists('/sys/class/net/bnep0'):
+                r = subprocess.run(
+                    ['ip', '-4', 'addr', 'show', 'bnep0'],
+                    capture_output=True, text=True, timeout=2
+                )
+                for line in r.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith('inet '):
+                        bt_ip = line.split()[1].split('/')[0]
+                        break
+        except Exception:
+            pass
+
+        if cycle == 0 or bt_ip is None:
+            return 'USB:10.0.0.2 :8080'
+        else:
+            return 'BT:%s' % bt_ip
+
+    def _fetch_ap_count(self):
+        """Fetch the number of nearby APs from bettercap's API. Returns int."""
+        try:
+            r = subprocess.run(
+                ['curl', '-s', '--connect-timeout', '2', '-m', '2',
+                 'http://localhost:8081/api/session'],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0 and r.stdout:
+                data = json.loads(r.stdout)
+                # bettercap session has wifi module with aps list
+                wifi = data.get('wifi', data)
+                aps = wifi.get('aps', [])
+                if isinstance(aps, list):
+                    return len(aps)
+        except Exception:
+            pass
+        return 0
 
     def _save_state(self, force=False):
         """Persist runtime config to disk. Debounced: writes at most once per 30s unless force=True."""
@@ -1002,6 +1053,22 @@ class AngryOxide(plugins.Plugin):
         self._captures_this_epoch = self._scan_captures(agent)
         self._stable_epochs += 1
 
+        # Task 22: Update AP count from bettercap API (once per epoch)
+        try:
+            bc_count = self._fetch_ap_count()
+            # In AO mode, also count AO's tracked APs and use the higher value
+            ao_count = 0
+            if self._agent:
+                try:
+                    ao_aps = self._agent._access_points
+                    if ao_aps and isinstance(ao_aps, list):
+                        ao_count = len(ao_aps)
+                except Exception:
+                    pass
+            self._ap_count = max(bc_count, ao_count)
+        except Exception:
+            pass  # keep cached value
+
         # Flush debounced state if dirty
         if getattr(self, '_state_dirty', False):
             self._save_state(force=True)
@@ -1055,12 +1122,30 @@ class AngryOxide(plugins.Plugin):
                 label_font=fonts.Small,
                 text_font=fonts.Small
             ))
+            # IP display indicator above CRASH (rotating USB/BT addresses)
+            ui.add_element('ao_ip', LabeledValue(
+                color=BLACK,
+                label='',
+                value='',
+                position=(0, 95),
+                label_font=fonts.Small,
+                text_font=fonts.Small
+            ))
             # CRASH counter at bottom-left (where PWND was)
             ui.add_element('ao_crash', LabeledValue(
                 color=BLACK,
                 label='',
                 value='',
                 position=(0, 109),
+                label_font=fonts.Small,
+                text_font=fonts.Small
+            ))
+            # AP count indicator in top bar
+            ui.add_element('ao_aps', LabeledValue(
+                color=BLACK,
+                label='',
+                value='',
+                position=(140, 0),
                 label_font=fonts.Small,
                 text_font=fonts.Small
             ))
@@ -1091,6 +1176,14 @@ class AngryOxide(plugins.Plugin):
                 try:
                     ui.set('angryoxide', '')
                     ui.set('ao_crash', '')
+                    ui.set('ao_ip', '')
+                except Exception:
+                    pass
+                # Hide ao_aps off-screen so bettercap's own APS element shows
+                try:
+                    el = ui._state._state.get('ao_aps')
+                    if el and hasattr(el, 'xy'):
+                        el.xy = (300, 300)
                 except Exception:
                     pass
                 return
@@ -1112,9 +1205,21 @@ class AngryOxide(plugins.Plugin):
                 except Exception:
                     pass
 
+            # Show IP display indicator (rotating USB/BT addresses)
+            try:
+                ui.set('ao_ip', self._get_ip_display())
+            except Exception:
+                pass
+
             # Show CRASH counter at bottom-left
             try:
                 ui.set('ao_crash', 'CRASH:%d' % self._fw_crash_count)
+            except Exception:
+                pass
+
+            # Show AP count in top bar
+            try:
+                ui.set('ao_aps', 'AP:%d' % self._ap_count)
             except Exception:
                 pass
 

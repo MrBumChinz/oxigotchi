@@ -3590,3 +3590,259 @@ class TestFastBoot:
             plugin.on_ready(agent)
 
         mock_timer_cls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Task 21: IP Display Indicator Tests
+# ---------------------------------------------------------------------------
+
+class TestIPDisplay:
+    @pytest.fixture
+    def plugin(self):
+        from angryoxide_v2 import AngryOxide
+        p = AngryOxide()
+        p.options = {}
+        return p
+
+    def _make_ui(self):
+        ui = MagicMock()
+        ui._lock = MagicMock()
+        ui._lock.__enter__ = MagicMock(return_value=None)
+        ui._lock.__exit__ = MagicMock(return_value=False)
+        return ui
+
+    def test_ip_element_added_in_ui_setup(self, plugin):
+        """on_ui_setup adds ao_ip element at position (0, 95)."""
+        ui = self._make_ui()
+        plugin.on_ui_setup(ui)
+        add_calls = [c[0][0] for c in ui.add_element.call_args_list]
+        assert 'ao_ip' in add_calls
+
+    def test_ip_display_shows_usb_first(self, plugin):
+        """First cycle shows USB address with web port hint."""
+        plugin._ip_cycle_counter = -1  # will be incremented to 0
+        with patch('angryoxide_v2.os.path.exists', return_value=False):
+            result = plugin._get_ip_display()
+        assert result == 'USB:10.0.0.2 :8080'
+
+    def test_ip_display_rotates_to_bt_when_bnep0_up(self, plugin):
+        """After 5 updates, rotates to BT address when bnep0 is up."""
+        plugin._ip_cycle_counter = 4  # next call increments to 5, cycle=1
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='    inet 192.168.44.44/24 brd 192.168.44.255 scope global bnep0\n',
+                returncode=0
+            )
+            result = plugin._get_ip_display()
+        assert result == 'BT:192.168.44.44'
+
+    def test_ip_display_stays_usb_when_bnep0_down(self, plugin):
+        """If bnep0 is not up, always shows USB regardless of cycle."""
+        plugin._ip_cycle_counter = 4  # next call increments to 5, cycle=1
+        with patch('angryoxide_v2.os.path.exists', return_value=False):
+            result = plugin._get_ip_display()
+        assert result == 'USB:10.0.0.2 :8080'
+
+    def test_ip_display_cycle_counter_increments(self, plugin):
+        """Counter increments each call."""
+        plugin._ip_cycle_counter = 0
+        with patch('angryoxide_v2.os.path.exists', return_value=False):
+            plugin._get_ip_display()
+        assert plugin._ip_cycle_counter == 1
+
+    def test_ip_display_in_ui_update_ao_mode(self, plugin):
+        """IP display is set during on_ui_update in AO mode."""
+        ui = self._make_ui()
+        plugin._running = True
+        plugin._start_time = 1000.0
+        with patch('angryoxide_v2.time') as mock_time, \
+             patch.object(plugin, '_is_ao_mode', return_value=True), \
+             patch.object(plugin, '_count_pcapngs', return_value=0), \
+             patch.object(plugin, '_count_verified', return_value=0), \
+             patch.object(plugin, '_get_ip_display', return_value='USB:10.0.0.2 :8080'):
+            mock_time.time.return_value = 1000.0
+            plugin.on_ui_update(ui)
+        ui.set.assert_any_call('ao_ip', 'USB:10.0.0.2 :8080')
+
+    def test_ip_display_cleared_in_pwn_mode(self, plugin):
+        """IP display is cleared in PWN mode."""
+        ui = self._make_ui()
+        with patch.object(plugin, '_is_ao_mode', return_value=False):
+            plugin.on_ui_update(ui)
+        ui.set.assert_any_call('ao_ip', '')
+
+    def test_ip_display_handles_subprocess_exception(self, plugin):
+        """Gracefully handles subprocess failure when checking bnep0 IP."""
+        plugin._ip_cycle_counter = 4  # next call -> cycle=1
+        with patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.subprocess.run', side_effect=Exception("timeout")):
+            result = plugin._get_ip_display()
+        # Falls back to USB since bt_ip is None
+        assert result == 'USB:10.0.0.2 :8080'
+
+
+# ---------------------------------------------------------------------------
+# Task 22: WiFi AP Count Indicator Tests
+# ---------------------------------------------------------------------------
+
+class TestAPCount:
+    @pytest.fixture
+    def plugin(self):
+        from angryoxide_v2 import AngryOxide
+        p = AngryOxide()
+        p.options = {'binary_path': '/usr/local/bin/angryoxide', 'interface': 'wlan0mon',
+                     'output_dir': '/etc/pwnagotchi/handshakes/'}
+        return p
+
+    def _make_ui(self):
+        ui = MagicMock()
+        ui._lock = MagicMock()
+        ui._lock.__enter__ = MagicMock(return_value=None)
+        ui._lock.__exit__ = MagicMock(return_value=False)
+        return ui
+
+    def test_aps_element_added_in_ui_setup(self, plugin):
+        """on_ui_setup adds ao_aps element at position (140, 0)."""
+        ui = self._make_ui()
+        plugin.on_ui_setup(ui)
+        add_calls = [c[0][0] for c in ui.add_element.call_args_list]
+        assert 'ao_aps' in add_calls
+
+    def test_fetch_ap_count_parses_bettercap(self, plugin):
+        """Fetches AP count from bettercap API JSON response."""
+        fake_response = json.dumps({
+            'wifi': {
+                'aps': [
+                    {'mac': 'AA:BB:CC:DD:EE:FF'},
+                    {'mac': '11:22:33:44:55:66'},
+                    {'mac': '00:11:22:33:44:55'},
+                ]
+            }
+        })
+        with patch('angryoxide_v2.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=fake_response, returncode=0
+            )
+            count = plugin._fetch_ap_count()
+        assert count == 3
+
+    def test_fetch_ap_count_returns_zero_on_failure(self, plugin):
+        """Returns 0 if bettercap API is unavailable."""
+        with patch('angryoxide_v2.subprocess.run', side_effect=Exception("connection refused")):
+            count = plugin._fetch_ap_count()
+        assert count == 0
+
+    def test_fetch_ap_count_returns_zero_on_bad_json(self, plugin):
+        """Returns 0 if bettercap returns invalid JSON."""
+        with patch('angryoxide_v2.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='not json', returncode=0
+            )
+            count = plugin._fetch_ap_count()
+        assert count == 0
+
+    def test_fetch_ap_count_returns_zero_on_empty_aps(self, plugin):
+        """Returns 0 if bettercap has no APs."""
+        fake_response = json.dumps({'wifi': {'aps': []}})
+        with patch('angryoxide_v2.subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=fake_response, returncode=0
+            )
+            count = plugin._fetch_ap_count()
+        assert count == 0
+
+    def test_ap_count_displayed_in_ui_update(self, plugin):
+        """AP count is displayed in on_ui_update in AO mode."""
+        ui = self._make_ui()
+        plugin._running = True
+        plugin._start_time = 1000.0
+        plugin._ap_count = 12
+        with patch('angryoxide_v2.time') as mock_time, \
+             patch.object(plugin, '_is_ao_mode', return_value=True), \
+             patch.object(plugin, '_count_pcapngs', return_value=0), \
+             patch.object(plugin, '_count_verified', return_value=0), \
+             patch.object(plugin, '_get_ip_display', return_value='USB:10.0.0.2 :8080'):
+            mock_time.time.return_value = 1000.0
+            plugin.on_ui_update(ui)
+        ui.set.assert_any_call('ao_aps', 'AP:12')
+
+    def test_ap_count_hidden_in_pwn_mode(self, plugin):
+        """ao_aps is moved off-screen in PWN mode."""
+        ui = self._make_ui()
+        mock_elem = MagicMock()
+        mock_elem.xy = (140, 0)
+        ui._state._state.get.return_value = mock_elem
+        with patch.object(plugin, '_is_ao_mode', return_value=False):
+            plugin.on_ui_update(ui)
+        assert mock_elem.xy == (300, 300)
+
+    def test_ap_count_updated_on_epoch(self, plugin):
+        """AP count is updated during on_epoch."""
+        agent = MagicMock()
+        agent._config = {
+            'personality': {'deauth': True, 'associate': True},
+            'bettercap': {'handshakes': '/etc/pwnagotchi/handshakes/'},
+            'main': {'whitelist': []},
+        }
+        agent._handshakes = {}
+        agent._last_pwnd = None
+        agent._view = MagicMock()
+        agent._access_points = [{'mac': '00:00:00:00:00:01'}, {'mac': '00:00:00:00:00:02'}]
+        plugin._running = True
+        plugin._process = MagicMock()
+        plugin._process.poll.return_value = None
+        plugin._start_time = 1000.0
+        plugin._agent = agent
+        with patch('angryoxide_v2.time') as mock_time, \
+             patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.glob.glob', return_value=[]), \
+             patch.object(plugin, '_is_ao_mode', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None), \
+             patch.object(plugin, '_fetch_ap_count', return_value=5):
+            mock_time.time.return_value = 2000.0
+            plugin.on_epoch(agent, 1, {})
+        # AO has 2 APs, bettercap has 5 -> max is 5
+        assert plugin._ap_count == 5
+
+    def test_ap_count_uses_max_of_ao_and_bettercap(self, plugin):
+        """AP count uses the higher of bettercap and AO counts."""
+        agent = MagicMock()
+        agent._config = {
+            'personality': {'deauth': True, 'associate': True},
+            'bettercap': {'handshakes': '/etc/pwnagotchi/handshakes/'},
+            'main': {'whitelist': []},
+        }
+        agent._handshakes = {}
+        agent._last_pwnd = None
+        agent._view = MagicMock()
+        # AO sees more APs than bettercap
+        agent._access_points = [{'mac': 'AA:BB:CC:DD:EE:%02X' % i} for i in range(15)]
+        plugin._running = True
+        plugin._process = MagicMock()
+        plugin._process.poll.return_value = None
+        plugin._start_time = 1000.0
+        plugin._agent = agent
+        with patch('angryoxide_v2.time') as mock_time, \
+             patch('angryoxide_v2.os.path.exists', return_value=True), \
+             patch('angryoxide_v2.os.path.isfile', return_value=True), \
+             patch('angryoxide_v2.glob.glob', return_value=[]), \
+             patch.object(plugin, '_is_ao_mode', return_value=True), \
+             patch.object(plugin, '_check_health', return_value=False), \
+             patch.object(plugin, '_scan_captures', return_value=0), \
+             patch.object(plugin, '_get_battery_level', return_value=None), \
+             patch.object(plugin, '_fetch_ap_count', return_value=3):
+            mock_time.time.return_value = 2000.0
+            plugin.on_epoch(agent, 1, {})
+        # AO has 15 APs, bettercap has 3 -> max is 15
+        assert plugin._ap_count == 15
+
+    def test_init_has_new_attributes(self, plugin):
+        """Plugin __init__ sets _ip_cycle_counter and _ap_count."""
+        assert hasattr(plugin, '_ip_cycle_counter')
+        assert hasattr(plugin, '_ap_count')
+        assert plugin._ip_cycle_counter == 0
+        assert plugin._ap_count == 0
