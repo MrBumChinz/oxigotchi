@@ -19,5 +19,8 @@ Thumbs.db
 # Build artifacts
 rust/target/
 
+# Captures and user data (local backup, not shipped)
+captures/
+
 # Claude Code
 .claude/
