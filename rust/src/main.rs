@@ -403,7 +403,6 @@ impl Daemon {
     }
 
     /// Update the e-ink display with current state.
-    /// Layout matches Python angryoxide.py: IP at y=95, bottom bar at y=112.
     fn update_display(&mut self) {
         self.screen.clear();
 
@@ -428,36 +427,17 @@ impl Daemon {
         let face = self.epoch_loop.current_face();
         self.screen.draw_face(&face);
 
-        // ---- IP DISPLAY (y=95) ----
-        let ip_str = self.network.display_ip_str(
-            self.bluetooth.ip_address.as_deref()
-        );
-        self.screen.draw_text(&ip_str, 0, 95);
-
         // ---- LINE 2 (y=108) ----
         self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
 
-        // ---- BOTTOM BAR (y=112) — matches Python layout ----
-        // Crash counter at (0, 112) — only if crashes occurred
-        if self.ao.crash_count > 0 {
-            let crash_str = format!("CRASH:{}", self.ao.crash_count);
-            self.screen.draw_text(&crash_str, 0, 112);
-        }
-
-        // PWND count
-        let pwnd_str = format!("PWND:{}", m.handshakes);
-        self.screen.draw_text(&pwnd_str, 70, 112);
-
-        // Assoc count at (166, 112)
-        let assoc_str = format!("A:{}", m.assocs_this_epoch);
-        self.screen.draw_text(&assoc_str, 166, 112);
-
-        // Deauth count at (189, 112)
-        let deauth_str = format!("D:{}", m.deauths_this_epoch);
-        self.screen.draw_text(&deauth_str, 189, 112);
-
-        // Mode at (222, 112)
-        self.screen.draw_text("RAGE", 222, 112);
+        // ---- BOTTOM BAR (y=109+) ----
+        self.screen.draw_labeled_value(
+            "PWND",
+            &m.handshakes.to_string(),
+            0,
+            109,
+        );
+        self.screen.draw_labeled_value("", "AUTO", 222, 112);
 
         self.screen.flush();
     }
