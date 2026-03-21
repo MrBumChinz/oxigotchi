@@ -70,6 +70,16 @@ impl FrameBuffer {
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
     }
+
+    /// Simple hash of framebuffer content for change detection.
+    pub fn content_hash(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+        for &b in &self.data {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3); // FNV-1a prime
+        }
+        h
+    }
 }
 
 /// Implement `DrawTarget` so embedded-graphics can draw directly into our buffer.

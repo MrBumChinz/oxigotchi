@@ -660,9 +660,15 @@ impl WifiManager {
                 warn!("managed_up failed (may already be up): {e}");
             }
 
-            // Step 2: add monitor interface
-            let (prog, args) = self.cmd.add_monitor();
-            run_cmd(prog, &args)?;
+            // Step 2: add monitor interface (skip if already exists)
+            if !std::path::Path::new(&format!("/sys/class/net/{}", self.monitor_iface)).exists() {
+                let (prog, args) = self.cmd.add_monitor();
+                if let Err(e) = run_cmd(prog, &args) {
+                    warn!("add_monitor failed: {e}");
+                }
+            } else {
+                info!("{} already exists, skipping creation", self.monitor_iface);
+            }
 
             // Step 3: bring monitor interface up
             let (prog, args) = self.cmd.monitor_up();

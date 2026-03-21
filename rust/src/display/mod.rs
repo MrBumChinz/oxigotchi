@@ -20,6 +20,8 @@ pub const DISPLAY_HEIGHT: u32 = 122;
 pub struct Screen {
     pub fb: FrameBuffer,
     pub config: DisplayConfig,
+    last_hash: u64,
+    pub flush_count: u32,
 }
 
 impl Screen {
@@ -28,6 +30,8 @@ impl Screen {
         Self {
             fb: FrameBuffer::new(DISPLAY_WIDTH, DISPLAY_HEIGHT),
             config,
+            last_hash: 0,
+            flush_count: 0,
         }
     }
 
@@ -88,10 +92,23 @@ impl Screen {
     /// Flush the framebuffer to the physical display.
     /// On non-aarch64 platforms this is a no-op.
     /// Logs errors instead of panicking — the display can fail transiently.
-    pub fn flush(&self) {
+    /// Only flushes if content has changed since last flush.
+    pub fn flush(&mut self) {
+        let new_hash = self.fb.content_hash();
+        if new_hash == self.last_hash {
+            return; // No change, skip refresh
+        }
+        self.last_hash = new_hash;
+        self.flush_count += 1;
         if let Err(e) = driver::flush_to_hardware(&self.fb, &self.config) {
             log::error!("display flush failed: {e}");
         }
+    }
+
+    /// Force a full display refresh regardless of content change.
+    pub fn force_flush(&mut self) {
+        self.last_hash = 0;
+        self.flush();
     }
 }
 
