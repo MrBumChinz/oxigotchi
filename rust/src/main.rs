@@ -403,30 +403,33 @@ impl Daemon {
     }
 
     /// Update the e-ink display with current state.
-    /// Layout matches Python angryoxide.py plugin display.
+    /// Layout matches Python angryoxide.py AO mode display.
     fn update_display(&mut self) {
         self.screen.clear();
 
         let m = &self.epoch_loop.metrics;
 
-        // ---- TOP BAR (y=0) — small 9pt font ----
-        self.screen.draw_labeled_value("CH", &format!("{:02}", m.channel), 0, 0);
-        self.screen.draw_labeled_value("APS", &m.total_aps.to_string(), 55, 0);
+        // ---- TOP BAR (y=0) — AO status indicator ----
+        // Python AO mode: "AO: {verified}/{total} | {uptime} | CH:{channels}"
+        let ao_status = format!(
+            "AO: {}/{} | {}",
+            m.handshakes,
+            self.captures.count(),
+            self.ao.uptime_str()
+        );
+        self.screen.draw_text(&ao_status, 0, 0);
         self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 185, 0);
 
         // ---- LINE 1 (y=14) ----
         self.screen.draw_hline(0, 14, display::DISPLAY_WIDTH);
 
-        // ---- NAME (y=20, 12pt bold) ----
-        self.screen.draw_name(&self.config.name);
-
-        // ---- STATUS (y=20 right side, 10pt medium) ----
-        let status = self.epoch_loop.status_message();
-        self.screen.draw_status(&status);
-
-        // ---- FACE (y=40, 24pt large kaomoji) ----
+        // ---- FACE (y=16, 120x66 bull PNG sprite) ----
         let face = self.epoch_loop.current_face();
         self.screen.draw_face(&face);
+
+        // ---- STATUS (y=20, right of face, 10pt medium) ----
+        let status = self.epoch_loop.status_message();
+        self.screen.draw_status(&status);
 
         // ---- IP DISPLAY (y=95) ----
         let ip_str = self.network.display_ip_str(
@@ -437,19 +440,16 @@ impl Daemon {
         // ---- LINE 2 (y=108) ----
         self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
 
-        // ---- BOTTOM BAR (y=109) — small 9pt ----
-        let pwnd_str = format!("PWND: {}", m.handshakes);
-        self.screen.draw_text(&pwnd_str, 0, 109);
+        // ---- BOTTOM BAR (y=109) ----
+        // Crash indicator (left)
+        if self.ao.crash_count > 0 {
+            let crash_str = format!("CRASH:{}", self.ao.crash_count);
+            self.screen.draw_text(&crash_str, 0, 109);
+        }
 
-        // Mode indicator at right edge
+        // Mode indicator (right)
         let mode = if self.ao.config.rate > 1 { "RAGE" } else { "AUTO" };
         self.screen.draw_text(mode, 222, 109);
-
-        // AO crash indicator (only if crashes)
-        if self.ao.crash_count > 0 {
-            let crash_str = format!("AO:{}", self.ao.crash_count);
-            self.screen.draw_text(&crash_str, 120, 109);
-        }
 
         self.screen.flush();
     }

@@ -1,5 +1,6 @@
 pub mod buffer;
 pub mod driver;
+pub mod faces;
 pub mod fonts;
 
 use crate::config::DisplayConfig;
@@ -40,13 +41,30 @@ impl Screen {
         self.fb.clear();
     }
 
-    /// Draw a kaomoji face (24pt font, matches Python's huge face area).
-    /// Python spec: face at (0, 40) in AO mode.
+    /// Draw a bull face sprite at (0, 16) — matches Python AO mode.
+    /// Uses embedded 120x66 1-bit bitmap sprites from faces/eink/.
     pub fn draw_face(&mut self, face: &Face) {
-        let text = face.as_str();
-        let style = fonts::face();
-        // 24pt ProFont: ~20px ascent. Visual top at y=40, baseline ~y=60.
-        let _ = Text::new(text, Point::new(0, 60), style).draw(&mut self.fb);
+        let bitmap = faces::bitmap_for_face(face);
+        self.draw_bitmap(bitmap, 0, 16, faces::FACE_WIDTH, faces::FACE_HEIGHT);
+    }
+
+    /// Blit a 1-bit packed bitmap onto the framebuffer at (x, y).
+    /// Bitmap format: MSB first, row-major, 1=black, 0=white.
+    pub fn draw_bitmap(&mut self, data: &[u8], x: u32, y: u32, w: u32, h: u32) {
+        let stride = ((w + 7) / 8) as usize;
+        for row in 0..h {
+            for col in 0..w {
+                let byte_idx = (row as usize) * stride + (col as usize) / 8;
+                let bit_idx = 7 - (col % 8);
+                if byte_idx < data.len() && (data[byte_idx] >> bit_idx) & 1 == 1 {
+                    let px = x + col;
+                    let py = y + row;
+                    if px < DISPLAY_WIDTH && py < DISPLAY_HEIGHT {
+                        self.fb.set_pixel(px, py, BinaryColor::On);
+                    }
+                }
+            }
+        }
     }
 
     /// Draw the device name (12pt bold font). Python spec: name at (5, 20).
