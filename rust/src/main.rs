@@ -1,7 +1,6 @@
-// Modules are the public API surface for Rusty Oxigotchi. Many types/methods
-// are defined but not yet wired into the main loop — they're used by tests and
-// will be consumed when axum web server and full AO integration land.
-// Suppress dead_code for modules with designed-but-not-yet-wired APIs.
+// Modules are the public API surface for Rusty Oxigotchi.
+#[allow(dead_code)]
+mod ao;
 #[allow(dead_code)]
 mod attacks;
 #[allow(dead_code)]
@@ -27,6 +26,7 @@ mod web;
 mod wifi;
 
 use log::info;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Epoch duration in seconds.
@@ -48,17 +48,18 @@ struct Daemon {
     battery: pisugar::PiSugar,
     recovery: recovery::RecoveryManager,
     watchdog: recovery::Watchdog,
+    ao: ao::AoManager,
+    shared_state: web::SharedState,
 }
 
 impl Daemon {
-    fn new(config: config::Config) -> Self {
+    fn new(config: config::Config, shared_state: web::SharedState) -> Self {
         let screen = display::Screen::new(config.display.clone());
         let epoch_loop = epoch::EpochLoop::new(Duration::from_secs(EPOCH_DURATION_SECS));
         let wifi = wifi::WifiManager::new();
         let mut attacks = attacks::AttackScheduler::new(ATTACK_RATE);
 
         // Populate attack whitelist from config
-        // (Real implementation would parse MAC strings; for now store empty)
         let _ = &config.whitelist;
         attacks.whitelist.clear();
 
@@ -67,6 +68,7 @@ impl Daemon {
         let battery = pisugar::PiSugar::default();
         let recovery = recovery::RecoveryManager::default();
         let watchdog = recovery::Watchdog::new(true, 60);
+        let ao = ao::AoManager::default();
 
         Self {
             config,
@@ -79,10 +81,12 @@ impl Daemon {
             battery,
             recovery,
             watchdog,
+            ao,
+            shared_state,
         }
     }
 
-    /// Boot sequence: init display, probe hardware, scan existing captures.
+    /// Boot sequence: init display, probe hardware, scan existing captures, start AO.
     fn boot(&mut self) {
         // Display boot screen
         self.screen.clear();
@@ -125,11 +129,36 @@ impl Daemon {
                 }
             }
         }
+
+        // Start AngryOxide subprocess
+        match self.ao.start() {
+            Ok(()) => info!("AO started: PID {}", self.ao.pid),
+            Err(e) => {
+                log::error!("AO failed to start: {e}");
+                self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+            }
+        }
+
+        // Initial state sync to web
+        self.sync_to_web();
     }
 
     /// Run one full epoch: Scan -> Attack -> Capture -> Display -> Sleep.
     fn run_epoch(&mut self) {
         let mut result = epoch::EpochResult::default();
+
+        // ---- Check for web commands ----
+        self.process_web_commands();
+
+        // ---- AO HEALTH CHECK ----
+        if self.ao.check_health() {
+            self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+        }
+        // Try auto-restart if crashed
+        self.ao.try_auto_restart();
+
+        // ---- TDM CYCLE ----
+        self.ao.tdm_tick();
 
         // ---- SCAN PHASE ----
         self.epoch_loop.phase = epoch::EpochPhase::Scan;
@@ -176,8 +205,6 @@ impl Daemon {
 
         // ---- CAPTURE PHASE ----
         self.epoch_loop.next_phase(); // -> Capture
-        // In real implementation, this would check for new pcapng files from AO
-        // For now we just update counts
         result.associations = 0; // stub
 
         // ---- DISPLAY PHASE ----
@@ -187,7 +214,22 @@ impl Daemon {
         // Check battery and apply face overrides
         self.check_battery_overrides();
 
+        // Clear AO crash face if AO recovered
+        if self.ao.state == ao::AoState::Running
+            && self.epoch_loop.personality.override_face == Some(personality::Face::AoCrashed)
+        {
+            self.epoch_loop.personality.clear_override();
+        }
+
+        // Record stable epoch for AO
+        if self.ao.state == ao::AoState::Running || self.ao.state == ao::AoState::Paused {
+            self.ao.record_stable_epoch();
+        }
+
         self.update_display();
+
+        // ---- Sync state to web ----
+        self.sync_to_web();
 
         // ---- SLEEP PHASE ----
         self.epoch_loop.next_phase(); // -> Sleep
@@ -204,15 +246,87 @@ impl Daemon {
         self.epoch_loop.next_phase(); // -> Scan (calls finish_epoch)
     }
 
+    /// Process commands queued by the web server.
+    fn process_web_commands(&mut self) {
+        let (mode_switch, rate_change, restart) = {
+            let mut s = self.shared_state.lock().unwrap();
+            let mode = s.pending_mode_switch.take();
+            let rate = s.pending_rate_change.take();
+            let restart = s.pending_restart;
+            s.pending_restart = false;
+            (mode, rate, restart)
+        };
+
+        if let Some(mode) = mode_switch {
+            info!("web: mode switch to {mode}");
+            // In a full implementation, this would switch between AO and PWN mode
+            let mut s = self.shared_state.lock().unwrap();
+            s.mode = mode;
+        }
+
+        if let Some(rate) = rate_change {
+            info!("web: rate change to {rate}");
+            self.ao.set_rate(rate);
+        }
+
+        if restart {
+            info!("web: AO restart requested");
+            match self.ao.restart() {
+                Ok(()) => info!("AO restarted successfully"),
+                Err(e) => log::error!("AO restart failed: {e}"),
+            }
+        }
+    }
+
+    /// Sync daemon state into the shared web state.
+    fn sync_to_web(&self) {
+        let mut s = self.shared_state.lock().unwrap();
+        let m = &self.epoch_loop.metrics;
+
+        s.uptime_str = self.epoch_loop.uptime_str();
+        s.epoch = m.epoch;
+        s.channel = m.channel;
+        s.aps_seen = m.total_aps;
+        s.handshakes = m.handshakes;
+        s.blind_epochs = m.blind_epochs;
+        s.mood = self.epoch_loop.personality.mood.value();
+        s.face = self.epoch_loop.current_face().as_str().to_string();
+        s.status_message = self.epoch_loop.status_message();
+
+        s.total_attacks = self.attacks.total_attacks;
+        s.total_handshakes_attacks = self.attacks.total_handshakes;
+        s.attack_rate = self.ao.config.rate;
+        s.deauths_this_epoch = m.deauths_this_epoch;
+
+        s.capture_files = self.captures.count();
+        s.handshake_files = self.captures.handshake_count();
+        s.pending_upload = self.captures.pending_upload_count();
+        s.total_capture_size = self.captures.total_size();
+        s.capture_list = self.captures.files.iter().map(|f| {
+            web::CaptureEntry {
+                filename: f.path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default(),
+                size_bytes: f.size,
+            }
+        }).collect();
+
+        s.battery_level = self.battery.status.level;
+        s.battery_charging = self.battery.status.charge_state == pisugar::ChargeState::Charging;
+        s.battery_voltage_mv = self.battery.status.voltage_mv;
+        s.battery_low = self.battery.status.low;
+        s.battery_critical = self.battery.status.critical;
+        s.battery_available = self.battery.available;
+
+        s.wifi_state = format!("{:?}", self.wifi.state);
+
+        s.ao_state = self.ao.state_str().to_string();
+        s.ao_pid = self.ao.pid;
+        s.ao_crash_count = self.ao.crash_count;
+        s.ao_uptime = self.ao.uptime_str();
+    }
+
     /// Update the e-ink display with current state.
-    ///
-    /// Layout matches the Python waveshare_4 spec:
-    ///   Top bar (y=0):  CH(0,0)  APS(28,0)  BT(115,0)  BAT(140,0)  UP(185,0)
-    ///   Line1 at y=14
-    ///   Name(5,20)  Status(125,20)
-    ///   Face(0,34)
-    ///   Line2 at y=108
-    ///   PWND(0,109)  Mode(222,112)
     fn update_display(&mut self) {
         self.screen.clear();
 
@@ -288,7 +402,6 @@ impl Daemon {
             recovery::RecoveryAction::SoftRecover => {
                 info!("attempting soft WiFi recovery");
                 self.epoch_loop.personality.set_override(personality::Face::WifiDown);
-                // Real impl: rmmod/modprobe brcmfmac
                 match self.wifi.stop_monitor() {
                     Ok(()) => {
                         let _ = self.wifi.start_monitor();
@@ -299,7 +412,6 @@ impl Daemon {
             recovery::RecoveryAction::HardRecover => {
                 info!("attempting hard WiFi recovery (GPIO power cycle)");
                 self.epoch_loop.personality.set_override(personality::Face::FwCrash);
-                // GPIO WL_REG_ON power cycle — toggle pin 41
                 match recovery::gpio_power_cycle_wifi(self.recovery.config.gpio_cycle_delay_ms) {
                     Ok(()) => info!("GPIO power cycle complete, restarting monitor"),
                     Err(e) => log::error!("GPIO power cycle failed: {e}"),
@@ -313,7 +425,7 @@ impl Daemon {
         }
     }
 
-    /// Build a web status snapshot (called by axum handlers when web server lands).
+    /// Build a web status snapshot.
     #[allow(dead_code)]
     fn build_web_status(&self) -> web::StatusResponse {
         let m = &self.epoch_loop.metrics;
@@ -332,7 +444,7 @@ impl Daemon {
         })
     }
 
-    /// Build web attack stats (called by axum handlers when web server lands).
+    /// Build web attack stats.
     #[allow(dead_code)]
     fn build_attack_stats(&self) -> web::AttackStats {
         web::AttackStats {
@@ -343,7 +455,7 @@ impl Daemon {
         }
     }
 
-    /// Build web capture info (called by axum handlers when web server lands).
+    /// Build web capture info.
     #[allow(dead_code)]
     fn build_capture_info(&self) -> web::CaptureInfo {
         web::CaptureInfo {
@@ -351,11 +463,13 @@ impl Daemon {
             handshake_files: self.captures.handshake_count(),
             pending_upload: self.captures.pending_upload_count(),
             total_size_bytes: self.captures.total_size(),
+            files: vec![],
         }
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     info!(
         "Rusty Oxigotchi v{} starting — the bull is awake",
@@ -365,32 +479,50 @@ fn main() {
     let config = config::Config::load_or_default("/etc/pwnagotchi/config.toml");
     info!("name: {}", config.name);
 
-    let mut daemon = Daemon::new(config);
-    daemon.boot();
+    // Create shared state for web server <-> daemon communication
+    let shared_state = Arc::new(Mutex::new(web::DaemonState::new(&config.name)));
 
-    info!("entering main epoch loop");
-    loop {
-        daemon.run_epoch();
-    }
+    // Start web server in a tokio task
+    let web_state = shared_state.clone();
+    tokio::spawn(async move {
+        web::start_server(web_state).await;
+    });
+
+    // Run the daemon main loop in a blocking thread (it uses std::thread::sleep)
+    let mut daemon = Daemon::new(config, shared_state);
+    tokio::task::spawn_blocking(move || {
+        daemon.boot();
+        info!("entering main epoch loop");
+        loop {
+            daemon.run_epoch();
+        }
+    })
+    .await
+    .expect("daemon task panicked");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn make_daemon() -> Daemon {
+        let config = config::Config::defaults();
+        let shared_state = Arc::new(Mutex::new(web::DaemonState::new(&config.name)));
+        Daemon::new(config, shared_state)
+    }
+
     #[test]
     fn test_daemon_construction() {
-        let config = config::Config::defaults();
-        let daemon = Daemon::new(config);
+        let daemon = make_daemon();
         assert_eq!(daemon.epoch_loop.metrics.epoch, 0);
         assert_eq!(daemon.wifi.state, wifi::WifiState::Down);
         assert_eq!(daemon.captures.count(), 0);
+        assert_eq!(daemon.ao.state, ao::AoState::Stopped);
     }
 
     #[test]
     fn test_daemon_boot() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.boot();
         // WiFi should be in monitor mode (stub always succeeds)
         assert_eq!(daemon.wifi.state, wifi::WifiState::Monitor);
@@ -398,8 +530,7 @@ mod tests {
 
     #[test]
     fn test_daemon_build_web_status() {
-        let config = config::Config::defaults();
-        let daemon = Daemon::new(config);
+        let daemon = make_daemon();
         let status = daemon.build_web_status();
         assert_eq!(status.name, "oxigotchi");
         assert_eq!(status.epoch, 0);
@@ -408,8 +539,7 @@ mod tests {
 
     #[test]
     fn test_daemon_build_attack_stats() {
-        let config = config::Config::defaults();
-        let daemon = Daemon::new(config);
+        let daemon = make_daemon();
         let stats = daemon.build_attack_stats();
         assert_eq!(stats.total_attacks, 0);
         assert_eq!(stats.attack_rate, ATTACK_RATE);
@@ -417,8 +547,7 @@ mod tests {
 
     #[test]
     fn test_daemon_build_capture_info() {
-        let config = config::Config::defaults();
-        let daemon = Daemon::new(config);
+        let daemon = make_daemon();
         let info = daemon.build_capture_info();
         assert_eq!(info.total_files, 0);
         assert_eq!(info.pending_upload, 0);
@@ -426,8 +555,7 @@ mod tests {
 
     #[test]
     fn test_daemon_battery_override_critical_no_shutdown() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.battery.available = true;
         daemon.battery.config.auto_shutdown = false;
         daemon.battery.set_level(3); // critical
@@ -440,8 +568,7 @@ mod tests {
 
     #[test]
     fn test_daemon_battery_override_critical_with_shutdown() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.battery.available = true;
         daemon.battery.set_level(3); // critical, auto_shutdown = true by default
         daemon.check_battery_overrides();
@@ -454,8 +581,7 @@ mod tests {
 
     #[test]
     fn test_daemon_battery_override_low() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.battery.available = true;
         daemon.battery.set_level(15); // low but not critical
         daemon.check_battery_overrides();
@@ -467,17 +593,15 @@ mod tests {
 
     #[test]
     fn test_daemon_battery_override_clears() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.battery.available = true;
-        daemon.battery.config.auto_shutdown = false; // disable shutdown for this test
+        daemon.battery.config.auto_shutdown = false;
         daemon.battery.set_level(3);
         daemon.check_battery_overrides();
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
             Some(personality::Face::BatteryCritical)
         );
-        // Battery recovers
         daemon.battery.set_level(80);
         daemon.check_battery_overrides();
         assert_eq!(daemon.epoch_loop.personality.override_face, None);
@@ -485,8 +609,7 @@ mod tests {
 
     #[test]
     fn test_daemon_recovery_soft() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.handle_recovery_action(recovery::RecoveryAction::SoftRecover);
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
@@ -496,8 +619,7 @@ mod tests {
 
     #[test]
     fn test_daemon_recovery_hard() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.handle_recovery_action(recovery::RecoveryAction::HardRecover);
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
@@ -507,8 +629,7 @@ mod tests {
 
     #[test]
     fn test_daemon_recovery_give_up() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.handle_recovery_action(recovery::RecoveryAction::GiveUp);
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
@@ -518,54 +639,29 @@ mod tests {
 
     #[test]
     fn test_daemon_update_display_no_panic() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
         daemon.update_display();
-        // Should draw without panic, verify pixels exist
         let pixel_count = daemon.screen.fb.count_set_pixels();
         assert!(pixel_count > 0, "display should have drawn something");
     }
 
-    /// Verify that all 24 Face variants are reachable through either mood transitions
-    /// or explicit override triggers in the daemon.
+    /// Verify that all 24 Face variants are reachable.
     #[test]
     fn test_face_reachability() {
         use personality::Face;
 
-        // Faces reachable through mood (Mood::face)
         let mood_faces = [
-            Face::Excited,     // mood >= 0.9
-            Face::Happy,       // mood >= 0.7
-            Face::Awake,       // mood >= 0.5
-            Face::Bored,       // mood >= 0.3
-            Face::Sad,         // mood >= 0.1
-            Face::Demotivated, // mood < 0.1
+            Face::Excited, Face::Happy, Face::Awake, Face::Bored,
+            Face::Sad, Face::Demotivated,
         ];
-
-        // Faces reachable through daemon override triggers
         let override_faces = [
-            Face::BatteryCritical, // check_battery_overrides() critical
-            Face::BatteryLow,      // check_battery_overrides() low
-            Face::Shutdown,        // check_battery_overrides() auto_shutdown
-            Face::WifiDown,        // handle_recovery_action(SoftRecover)
-            Face::FwCrash,         // handle_recovery_action(HardRecover)
-            Face::Broken,          // handle_recovery_action(GiveUp)
+            Face::BatteryCritical, Face::BatteryLow, Face::Shutdown,
+            Face::WifiDown, Face::FwCrash, Face::Broken,
         ];
-
-        // Faces reachable via manual set_override (future integration points)
         let manual_override_faces = [
-            Face::Sleep,     // long idle / night mode
-            Face::Intense,   // during active attack
-            Face::Cool,      // after multi-handshake streak
-            Face::Angry,     // after repeated failures
-            Face::Friend,    // peer detection
-            Face::Debug,     // debug mode
-            Face::Upload,    // wpa-sec upload in progress
-            Face::Lonely,    // no APs seen for extended time
-            Face::Grateful,  // after user interaction
-            Face::Motivated, // after config change / reboot
-            Face::Smart,     // AI/learning event
-            Face::AoCrashed, // angryoxide process crash
+            Face::Sleep, Face::Intense, Face::Cool, Face::Angry,
+            Face::Friend, Face::Debug, Face::Upload, Face::Lonely,
+            Face::Grateful, Face::Motivated, Face::Smart, Face::AoCrashed,
         ];
 
         let mut reachable: std::collections::HashSet<Face> = std::collections::HashSet::new();
@@ -573,7 +669,6 @@ mod tests {
         reachable.extend(override_faces.iter());
         reachable.extend(manual_override_faces.iter());
 
-        // Every Face::all() variant should be accounted for
         for face in Face::all() {
             assert!(
                 reachable.contains(face),
@@ -585,13 +680,10 @@ mod tests {
 
     #[test]
     fn test_epoch_drives_mood_faces() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
 
-        // Start at Awake (mood 0.5)
         assert_eq!(daemon.epoch_loop.current_face(), personality::Face::Awake);
 
-        // After many handshakes, mood should rise -> Happy -> Excited
         for _ in 0..10 {
             daemon.epoch_loop.record_result(&epoch::EpochResult {
                 handshakes_captured: 3,
@@ -605,7 +697,6 @@ mod tests {
             "expected Excited or Happy after many handshakes, got {face:?}"
         );
 
-        // After many blind epochs, mood should drop -> Bored -> Sad -> Demotivated
         for _ in 0..50 {
             daemon.epoch_loop.record_result(&epoch::EpochResult::default());
         }
@@ -616,14 +707,11 @@ mod tests {
         );
     }
 
-    /// Integration test: create a Daemon, run 3 full epoch cycles (without
-    /// sleeping), and verify the display has been updated each time.
+    /// Integration test: create a Daemon, run 3 full epoch cycles.
     #[test]
     fn test_integration_three_epochs() {
-        let config = config::Config::defaults();
-        let mut daemon = Daemon::new(config);
+        let mut daemon = make_daemon();
 
-        // Override epoch duration to zero so we don't actually sleep
         daemon.epoch_loop.epoch_duration = Duration::from_secs(0);
         daemon.boot();
 
@@ -636,7 +724,7 @@ mod tests {
 
             let mut result = epoch::EpochResult::default();
             result.channel = channel;
-            result.aps_seen = (epoch + 1) * 2; // vary per epoch
+            result.aps_seen = (epoch + 1) * 2;
 
             // ---- ATTACK ----
             daemon.epoch_loop.next_phase();
@@ -657,19 +745,71 @@ mod tests {
                 daemon.watchdog.ping();
             }
 
-            // ---- back to SCAN (increments epoch counter) ----
+            // ---- back to SCAN ----
             daemon.epoch_loop.next_phase();
         }
 
-        // After 3 epochs the counter should be 3
         assert_eq!(daemon.epoch_loop.metrics.epoch, 3);
 
-        // Every epoch should have drawn something to the display
         for (i, &count) in pixel_counts.iter().enumerate() {
             assert!(count > 0, "epoch {i} should have drawn pixels, got 0");
         }
 
-        // WiFi should still be in monitor mode
         assert_eq!(daemon.wifi.state, wifi::WifiState::Monitor);
+    }
+
+    #[test]
+    fn test_sync_to_web() {
+        let mut daemon = make_daemon();
+        daemon.boot();
+        daemon.sync_to_web();
+
+        let s = daemon.shared_state.lock().unwrap();
+        assert_eq!(s.name, "oxigotchi");
+        assert_eq!(s.wifi_state, "Monitor");
+    }
+
+    #[test]
+    fn test_process_web_commands_mode() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_mode_switch = Some("PWN".into());
+        }
+        daemon.process_web_commands();
+        let s = daemon.shared_state.lock().unwrap();
+        assert_eq!(s.mode, "PWN");
+    }
+
+    #[test]
+    fn test_process_web_commands_rate() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_rate_change = Some(2);
+        }
+        daemon.process_web_commands();
+        assert_eq!(daemon.ao.config.rate, 2);
+    }
+
+    #[test]
+    fn test_process_web_commands_restart() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_restart = true;
+        }
+        daemon.process_web_commands();
+        // On non-Pi, AO start is a stub so it should work
+        // Just verify it didn't panic and pending_restart is cleared
+        let s = daemon.shared_state.lock().unwrap();
+        assert!(!s.pending_restart);
+    }
+
+    #[test]
+    fn test_daemon_ao_state() {
+        let daemon = make_daemon();
+        assert_eq!(daemon.ao.state, ao::AoState::Stopped);
+        assert_eq!(daemon.ao.crash_count, 0);
     }
 }
