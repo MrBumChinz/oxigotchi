@@ -92,6 +92,7 @@ while true; do
             gpio_recovery
         else
             log "false alarm — wlan0 came back"
+        fi
 
     # Also check: wlan0 exists but monitor mode fails (firmware half-dead)
     elif [ ! -e /sys/class/net/wlan0mon ]; then
