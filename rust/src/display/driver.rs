@@ -621,16 +621,11 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
             *guard = Some(driver);
         }
         Some(driver) => {
-            if driver.partial_count >= FULL_REFRESH_INTERVAL {
-                // Periodic full refresh to clear ghosting (no re-init, just write both RAMs)
-                log::info!("display: full refresh to clear ghosting (after {} partials)", driver.partial_count);
-                driver.flush_base(fb)?;
-                driver.partial_count = 0;
-                log::info!("display: full refresh OK ({:.0}ms)", start.elapsed().as_millis());
-            } else {
-                driver.flush_partial(fb)?;
-                driver.partial_count += 1;
-                log::info!("display: partial refresh {}/{} OK ({:.0}ms)", driver.partial_count, FULL_REFRESH_INTERVAL, start.elapsed().as_millis());
+            // Partial refresh only — matches Python (never does full refresh after init)
+            driver.flush_partial(fb)?;
+            driver.partial_count += 1;
+            if driver.partial_count % 50 == 0 {
+                log::info!("display: partial refresh #{} OK ({:.0}ms)", driver.partial_count, start.elapsed().as_millis());
             }
         }
     }
