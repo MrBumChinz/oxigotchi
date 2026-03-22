@@ -164,13 +164,10 @@ impl PluginRuntime {
     }
 
     /// Get plugin info for the web dashboard (name, version, author, tag, x, y).
+    /// Returns the base config position (what on_load receives), not derived indicator positions.
     pub fn get_web_plugin_list(&self) -> Vec<(PluginMeta, i32, i32)> {
-        let indicators = self.indicators.lock().unwrap();
         self.plugins.iter().map(|p| {
-            let (x, y) = Self::find_plugin_indicator(&indicators, &p.name)
-                .map(|i| (i.x, i.y))
-                .unwrap_or((p.config_x, p.config_y));
-            (p.meta.clone(), x, y)
+            (p.meta.clone(), p.config_x, p.config_y)
         }).collect()
     }
 
@@ -199,33 +196,31 @@ impl PluginRuntime {
     }
 
     /// Return current plugin configs for persistence: (name, enabled, x, y).
+    /// Uses the base config position, not derived indicator positions.
+    /// This is important for multi-indicator plugins like sys_stats where
+    /// indicators have offsets from the base (e.g., values at config.y + 10).
     pub fn get_plugin_configs(&self) -> Vec<(String, bool, i32, i32)> {
-        let indicators = self.indicators.lock().unwrap();
         self.plugins.iter().map(|p| {
-            let (x, y) = Self::find_plugin_indicator(&indicators, &p.name)
-                .map(|i| (i.x, i.y))
-                .unwrap_or((p.config_x, p.config_y));
-            (p.name.clone(), true, x, y)
+            (p.name.clone(), true, p.config_x, p.config_y)
         }).collect()
     }
 
-    // ── private helpers ──────────────────────────────────────────────
-
-    /// Find the first indicator belonging to a plugin, given an already-locked guard.
-    /// Uses the same matching rules as `get_indicator_names_for_plugin`.
-    fn find_plugin_indicator<'a>(
-        indicators: &'a HashMap<String, Indicator>,
-        plugin_name: &str,
-    ) -> Option<&'a Indicator> {
-        let prefix = format!("{}_", plugin_name);
-        indicators.iter()
-            .find(|(k, _)| {
-                k.as_str() == plugin_name ||
-                k.starts_with(&prefix) ||
-                (plugin_name == "sys_stats" && (k.as_str() == "sys_header" || k.as_str() == "sys_values"))
-            })
-            .map(|(_, v)| v)
+    /// Update a plugin's base config position (called when web dashboard changes position).
+    /// Also updates all indicator positions for immediate visual effect.
+    pub fn update_plugin_position(&mut self, plugin_name: &str, x: i32, y: i32) {
+        // Update the base config position
+        if let Some(p) = self.plugins.iter_mut().find(|p| p.name == plugin_name) {
+            p.config_x = x;
+            p.config_y = y;
+        }
+        // Update indicator positions for immediate display
+        let ind_names = self.get_indicator_names_for_plugin(plugin_name);
+        for ind_name in ind_names {
+            self.update_indicator_position(&ind_name, x, y);
+        }
     }
+
+    // ── private helpers ──────────────────────────────────────────────
 
     /// Build a sandboxed _ENV table with safe stdlib + our API functions.
     fn build_env(&self, _plugin_name: &str) -> LuaResult<LuaTable> {

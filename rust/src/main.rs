@@ -201,7 +201,7 @@ impl Daemon {
         let plugin_defaults = vec![
             lua::PluginConfig::default_for("ao_status",  0,   0),
             lua::PluginConfig::default_for("aps",        178, 112),
-            lua::PluginConfig::default_for("uptime",     185, 0),
+            lua::PluginConfig::default_for("uptime",     178, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
             lua::PluginConfig::default_for("sys_stats",  125, 85),
             lua::PluginConfig::default_for("ip_display", 0,   95),
@@ -209,7 +209,7 @@ impl Daemon {
             lua::PluginConfig::default_for("www",        48,  112),
             lua::PluginConfig::default_for("bt_status",  86,  112),
             lua::PluginConfig::default_for("battery",    118, 112),
-            lua::PluginConfig::default_for("mode",       228, 112),
+            lua::PluginConfig::default_for("mode",       222, 112),
         ];
         let plugin_configs = match lua::config::read_plugins_toml() {
             Some(pt) => {
@@ -487,9 +487,7 @@ impl Daemon {
                 if let (Some(x), Some(y)) = (update.x, update.y) {
                     let x = x.clamp(0, 249);
                     let y = y.clamp(0, 121);
-                    for ind_name in self.lua.get_indicator_names_for_plugin(&update.name) {
-                        self.lua.update_indicator_position(&ind_name, x, y);
-                    }
+                    self.lua.update_plugin_position(&update.name, x, y);
                     info!("plugin {}: position updated to ({x},{y})", update.name);
                 }
             }
@@ -538,6 +536,8 @@ impl Daemon {
             ao_pid: self.ao.pid,
             ao_crash_count: self.ao.crash_count,
             ao_uptime_str: self.ao.uptime_str(),
+            ao_uptime_secs: self.ao.uptime_secs(),
+            ao_channels: "AH".to_string(), // autohunt — AO handles channel hopping
             battery_level: self.battery.status.level,
             battery_charging: self.battery.status.charge_state == pisugar::ChargeState::Charging,
             battery_voltage_mv: self.battery.status.voltage_mv,
