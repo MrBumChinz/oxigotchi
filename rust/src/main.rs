@@ -221,11 +221,16 @@ impl Daemon {
         // ---- ATTACK PHASE ----
         self.epoch_loop.next_phase(); // -> Attack
         let attackable = self.wifi.tracker.attackable();
+        // Read attack toggles from web state
+        let enabled_types = {
+            let s = self.shared_state.lock().unwrap();
+            [s.attack_deauth, s.attack_pmkid, s.attack_csa, s.attack_disassoc]
+        };
         for ap in &attackable {
             if self.attacks.is_whitelisted(&ap.bssid) {
                 continue;
             }
-            if let Some(attack_type) = self.attacks.next_attack(&ap.bssid) {
+            if let Some(attack_type) = self.attacks.next_attack(&ap.bssid, &enabled_types) {
                 let attack_result = attacks::AttackResult {
                     attack_type,
                     target_bssid: ap.bssid,

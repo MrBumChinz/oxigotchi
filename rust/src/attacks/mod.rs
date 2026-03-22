@@ -75,6 +75,14 @@ impl RateLimiter {
     }
 }
 
+/// All attack types in scheduling order (module-level constant).
+const ATTACK_TYPES: [AttackType; 4] = [
+    AttackType::Deauth,
+    AttackType::Pmkid,
+    AttackType::Csa,
+    AttackType::Disassoc,
+];
+
 /// Attack scheduler deciding which APs to target and when.
 #[derive(Debug)]
 pub struct AttackScheduler {
@@ -85,6 +93,8 @@ pub struct AttackScheduler {
     pub total_attacks: u64,
     /// Total handshakes captured via attacks.
     pub total_handshakes: u64,
+    /// Round-robin index for cycling attack types.
+    next_type_index: usize,
 }
 
 impl AttackScheduler {
@@ -95,6 +105,7 @@ impl AttackScheduler {
             whitelist: Vec::new(),
             total_attacks: 0,
             total_handshakes: 0,
+            next_type_index: 0,
         }
     }
 
@@ -111,13 +122,22 @@ impl AttackScheduler {
         }
     }
 
-    /// Stub: schedule the next attack. Returns the attack type to run, or None.
-    pub fn next_attack(&mut self, _target_bssid: &[u8; 6]) -> Option<AttackType> {
-        if self.rate_limiter.allow() {
-            Some(AttackType::Deauth) // Stub: always deauth
-        } else {
-            None
+    /// Schedule the next attack, cycling through enabled types.
+    /// `enabled` maps to [deauth, pmkid, csa, disassoc].
+    /// Returns None if rate-limited or all types disabled.
+    pub fn next_attack(&mut self, _target_bssid: &[u8; 6], enabled: &[bool; 4]) -> Option<AttackType> {
+        if !self.rate_limiter.allow() {
+            return None;
         }
+        // Find next enabled type starting from current index
+        for _ in 0..ATTACK_TYPES.len() {
+            let idx = self.next_type_index % ATTACK_TYPES.len();
+            self.next_type_index = idx + 1;
+            if enabled[idx] {
+                return Some(ATTACK_TYPES[idx]);
+            }
+        }
+        None // all disabled
     }
 }
 
@@ -181,8 +201,9 @@ mod tests {
     fn test_next_attack_respects_rate() {
         let mut scheduler = AttackScheduler::new(1);
         let bssid = [0; 6];
-        assert!(scheduler.next_attack(&bssid).is_some());
-        assert!(scheduler.next_attack(&bssid).is_none()); // rate limited
+        let enabled = [true, true, true, true];
+        assert!(scheduler.next_attack(&bssid, &enabled).is_some());
+        assert!(scheduler.next_attack(&bssid, &enabled).is_none()); // rate limited
     }
 
     #[test]
@@ -226,5 +247,39 @@ mod tests {
     fn test_whitelist_empty() {
         let scheduler = AttackScheduler::new(1);
         assert!(!scheduler.is_whitelisted(&[0xFF; 6]));
+    }
+
+    #[test]
+    fn test_next_attack_cycles_types() {
+        let enabled = [true, true, false, false]; // deauth + pmkid on, csa + disassoc off
+        let mut scheduler = AttackScheduler::new(10);
+        let bssid = [0; 6];
+
+        let first = scheduler.next_attack(&bssid, &enabled);
+        assert_eq!(first, Some(AttackType::Deauth));
+
+        let second = scheduler.next_attack(&bssid, &enabled);
+        assert_eq!(second, Some(AttackType::Pmkid));
+
+        // Should wrap around back to Deauth (csa/disassoc disabled)
+        let third = scheduler.next_attack(&bssid, &enabled);
+        assert_eq!(third, Some(AttackType::Deauth));
+    }
+
+    #[test]
+    fn test_next_attack_all_disabled() {
+        let enabled = [false, false, false, false];
+        let mut scheduler = AttackScheduler::new(10);
+        let bssid = [0; 6];
+        assert_eq!(scheduler.next_attack(&bssid, &enabled), None);
+    }
+
+    #[test]
+    fn test_next_attack_single_type() {
+        let enabled = [false, false, true, false]; // only CSA
+        let mut scheduler = AttackScheduler::new(10);
+        let bssid = [0; 6];
+        assert_eq!(scheduler.next_attack(&bssid, &enabled), Some(AttackType::Csa));
+        assert_eq!(scheduler.next_attack(&bssid, &enabled), Some(AttackType::Csa));
     }
 }
