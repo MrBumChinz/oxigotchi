@@ -328,6 +328,7 @@ pub fn extract_rusty_config(pwn: &PwnagotchiConfig) -> crate::config::Config {
                 name: pwn.ui.font.name.clone(),
             },
         },
+        bluetooth: crate::config::BluetoothConfig::default(),
         name: String::new(),
         whitelist: Vec::new(),
         display: crate::config::DisplayConfig::default(),
