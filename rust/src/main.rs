@@ -272,15 +272,16 @@ impl Daemon {
             self.handle_recovery_action(action);
         }
 
-        // ---- BLUETOOTH HEALTH CHECK ----
-        self.bluetooth.check_status();
-        // Auto-reconnect if configured
-        if self.bluetooth.should_connect() {
-            match self.bluetooth.connect() {
-                Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
-                Err(e) => {
-                    log::warn!("bluetooth reconnect failed: {e}");
-                    self.bluetooth.on_error();
+        // ---- BLUETOOTH HEALTH CHECK (SAFE mode only) ----
+        if self.mode == OperatingMode::Safe {
+            self.bluetooth.check_status();
+            if self.bluetooth.should_connect() {
+                match self.bluetooth.connect() {
+                    Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
+                    Err(e) => {
+                        log::warn!("bluetooth reconnect failed: {e}");
+                        self.bluetooth.on_error();
+                    }
                 }
             }
         }
@@ -777,8 +778,8 @@ impl Daemon {
         let face = Self::random_face(Self::RAGE_FACES);
         self.show_transition(face, "Switching to RAGE...");
 
-        // Disconnect Bluetooth
-        self.bluetooth.disconnect();
+        // Power off Bluetooth adapter to free radio for WiFi
+        self.bluetooth.power_off();
 
         // Enter WiFi monitor mode
         match self.wifi.start_monitor() {

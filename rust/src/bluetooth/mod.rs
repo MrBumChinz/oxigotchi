@@ -111,6 +111,11 @@ pub fn build_power_on_args() -> Vec<String> {
     vec!["power".into(), "on".into()]
 }
 
+/// Build the bluetoothctl command args to power off the adapter.
+pub fn build_power_off_args() -> Vec<String> {
+    vec!["power".into(), "off".into()]
+}
+
 /// Build the bluetoothctl command args to enable the agent.
 pub fn build_agent_on_args() -> Vec<String> {
     vec!["agent".into(), "on".into()]
@@ -404,6 +409,16 @@ impl BtTether {
         self.state = BtState::Disconnected;
         self.internet_available = false;
         self.ip_address = None;
+    }
+
+    /// Power off the BT adapter to free the radio for WiFi monitor mode.
+    pub fn power_off(&mut self) {
+        self.disconnect();
+        #[cfg(unix)]
+        {
+            let _ = run_bluetoothctl(&build_power_off_args());
+        }
+        self.state = BtState::Disconnected;
     }
 
     /// Handle a connection failure.
