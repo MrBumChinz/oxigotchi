@@ -808,6 +808,25 @@ async fn shutdown_handler(State(state): State<SharedState>) -> Json<ActionRespon
     })
 }
 
+/// GET /api/plugins -> JSON list of all plugins
+async fn plugins_get_handler(State(state): State<SharedState>) -> Json<Vec<PluginInfo>> {
+    let s = state.lock().unwrap();
+    Json(s.plugin_list.clone())
+}
+
+/// POST /api/plugins -> update plugin configs (array of updates)
+async fn plugins_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<Vec<PluginUpdate>>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_plugin_updates.extend(body);
+    Json(ActionResponse {
+        ok: true,
+        message: "Plugin updates queued".into(),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Display framebuffer endpoint
 // ---------------------------------------------------------------------------
@@ -960,6 +979,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route(API_SHUTDOWN, post(shutdown_handler))
         .route(API_DISPLAY, get(display_handler))
         .route("/api/download/all", get(download_zip_handler))
+        .route("/api/plugins", get(plugins_get_handler).post(plugins_post_handler))
         .with_state(state)
 }
 
@@ -1253,6 +1273,13 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 </div>
 
+<!-- 16. Plugins -->
+<div class="card" id="card-plugins">
+<div class="card-title">Plugins</div>
+<div class="sub">Lua plugins control display indicators. Toggle on/off and set x,y positions.</div>
+<div id="plugins-list"><div style="color:#555;font-size:12px">Loading...</div></div>
+</div>
+
 <div style="text-align:center;color:#555;font-size:10px;margin-top:8px">Auto-refreshes every 5s &bull; Rusty Oxigotchi</div>
 
 <div class="toast" id="toast"></div>
@@ -1476,6 +1503,41 @@ function restartPwn() {
     });
 }
 
+function refreshPlugins() {
+    api('GET', '/api/plugins').then(function(plugins) {
+        if (!plugins) return;
+        var html = '';
+        plugins.forEach(function(p) {
+            var tagColor = p.tag === 'default' ? '#00d4aa' : '#f0c040';
+            html += '<div class="toggle-row">' +
+                '<div class="toggle-info">' +
+                '<div class="toggle-label">' + esc(p.name) +
+                ' <span style="color:' + tagColor + ';font-size:10px;padding:1px 6px;border:1px solid ' + tagColor + ';border-radius:8px;margin-left:6px">' + esc(p.tag) + '</span>' +
+                ' <span style="color:#666;font-size:10px;margin-left:4px">v' + esc(p.version) + '</span></div>' +
+                '<div class="toggle-desc" style="margin-top:4px">' +
+                'x: <input type="number" min="0" max="249" value="' + p.x + '" style="width:48px;background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;padding:2px 4px;font-size:11px" onchange="updatePlugin(\'' + esc(p.name) + '\',this.parentNode)">' +
+                ' y: <input type="number" min="0" max="121" value="' + p.y + '" style="width:48px;background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;padding:2px 4px;font-size:11px" onchange="updatePlugin(\'' + esc(p.name) + '\',this.parentNode)">' +
+                '</div></div>' +
+                '<label class="switch"><input type="checkbox" ' + (p.enabled ? 'checked' : '') + ' onchange="togglePlugin(\'' + esc(p.name) + '\',this.checked)"><span class="slider"></span></label>' +
+                '</div>';
+        });
+        document.getElementById('plugins-list').innerHTML = html || '<div style="color:#555;font-size:12px">No plugins loaded</div>';
+    });
+}
+
+function togglePlugin(name, enabled) {
+    api('POST', '/api/plugins', [{name: name, enabled: enabled}])
+        .then(function(r) { toast('Plugin ' + name + (enabled ? ' ON' : ' OFF')); });
+}
+
+function updatePlugin(name, container) {
+    var inputs = container.querySelectorAll('input[type=number]');
+    var x = parseInt(inputs[0].value) || 0;
+    var y = parseInt(inputs[1].value) || 0;
+    api('POST', '/api/plugins', [{name: name, x: x, y: y}])
+        .then(function(r) { toast(name + ' position: ' + x + ',' + y); });
+}
+
 // --- Initial load & auto-refresh ---
 refreshStatus();
 setTimeout(refreshBattery, 500);
@@ -1487,6 +1549,7 @@ setTimeout(refreshRecovery, 3000);
 setTimeout(refreshPersonality, 3500);
 setTimeout(refreshSystem, 4000);
 setTimeout(refreshCracked, 4500);
+setTimeout(refreshPlugins, 5000);
 
 setInterval(refreshStatus, 5000);
 setInterval(refreshBattery, 15000);
@@ -1498,6 +1561,7 @@ setInterval(refreshRecovery, 15000);
 setInterval(refreshPersonality, 10000);
 setInterval(refreshSystem, 15000);
 setInterval(refreshCracked, 60000);
+setInterval(refreshPlugins, 15000);
 setInterval(function(){ document.getElementById('eink-img').src='/api/display.png?t='+Date.now(); }, 5000);
 </script>
 </body>
@@ -1811,6 +1875,7 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("card-download"), "missing download card");
         assert!(DASHBOARD_HTML.contains("card-mode"), "missing mode card");
         assert!(DASHBOARD_HTML.contains("card-actions"), "missing actions card");
+        assert!(DASHBOARD_HTML.contains("card-plugins"), "missing plugins card");
     }
 
     #[test]
@@ -1830,6 +1895,7 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("/api/rate"), "missing /api/rate");
         assert!(DASHBOARD_HTML.contains("/api/restart"), "missing /api/restart");
         assert!(DASHBOARD_HTML.contains("/api/shutdown"), "missing /api/shutdown");
+        assert!(DASHBOARD_HTML.contains("/api/plugins"), "missing /api/plugins");
     }
 
     #[test]
@@ -2213,7 +2279,7 @@ mod tests {
             "/", "/api/status", "/api/captures", "/api/health",
             "/api/battery", "/api/wifi", "/api/bluetooth",
             "/api/personality", "/api/system", "/api/attacks",
-            "/api/recovery", "/api/cracked",
+            "/api/recovery", "/api/cracked", "/api/plugins",
         ];
         for endpoint in endpoints {
             let (status, _) = get(&router, endpoint).await;
@@ -2245,5 +2311,24 @@ mod tests {
         let (status, _body) = get(&router, "/api/download/all").await;
         // get() returns (u16, String); 200 = OK with empty zip for nonexistent capture dir
         assert_eq!(status, 200);
+    }
+
+    #[tokio::test]
+    async fn test_plugins_get_empty() {
+        let (router, _state) = test_router();
+        let (status, body) = get(&router, "/api/plugins").await;
+        assert_eq!(status, 200);
+        let plugins: Vec<PluginInfo> = serde_json::from_str(&body).unwrap();
+        assert!(plugins.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_plugins_post_queues_update() {
+        let (router, state) = test_router();
+        let (status, _body) = post_json(&router, "/api/plugins", r#"[{"name":"uptime","x":100,"y":50}]"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.pending_plugin_updates.len(), 1);
+        assert_eq!(s.pending_plugin_updates[0].name, "uptime");
     }
 }
