@@ -4,6 +4,8 @@
 
 use log::{error, info, warn};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// AO process state.
@@ -77,6 +79,10 @@ pub struct AoManager {
     pub start_time: Option<Instant>,
     /// Next allowed restart time (for exponential backoff).
     next_restart: Option<Instant>,
+    /// AP count parsed from AO stdout (shared with reader thread).
+    pub ao_ap_count: Arc<AtomicU32>,
+    /// Signals the reader thread to stop.
+    pub shutdown_flag: Arc<AtomicBool>,
 }
 
 impl AoManager {
@@ -93,7 +99,14 @@ impl AoManager {
             last_crash: None,
             start_time: None,
             next_restart: None,
+            ao_ap_count: Arc::new(AtomicU32::new(0)),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Get the current AP count parsed from AO stdout.
+    pub fn ap_count(&self) -> u32 {
+        self.ao_ap_count.load(Ordering::Relaxed)
     }
 
     /// Build the command-line arguments for angryoxide.
@@ -183,6 +196,8 @@ impl AoManager {
         if self.state == AoState::Stopped || self.state == AoState::Failed {
             return;
         }
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        self.ao_ap_count.store(0, Ordering::Relaxed);
 
         #[cfg(unix)]
         {
@@ -628,5 +643,34 @@ mod tests {
     fn test_parse_ao_line_embedded_in_status() {
         assert_eq!(parse_ao_line("2026-03-22 14:00:00 UTC | [Status] | Targets: 9"), Some(9));
         assert_eq!(parse_ao_line("[INFO] APs: 20"), Some(20));
+    }
+
+    #[test]
+    fn test_ap_count_default() {
+        let ao = AoManager::default();
+        assert_eq!(ao.ap_count(), 0);
+    }
+
+    #[test]
+    fn test_ap_count_read_write() {
+        let ao = AoManager::default();
+        ao.ao_ap_count.store(42, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(ao.ap_count(), 42);
+    }
+
+    #[test]
+    fn test_shutdown_flag_default() {
+        let ao = AoManager::default();
+        assert!(!ao.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_stop_sets_shutdown_and_resets_count() {
+        let mut ao = AoManager::default();
+        ao.state = AoState::Running;
+        ao.ao_ap_count.store(15, std::sync::atomic::Ordering::Relaxed);
+        ao.stop();
+        assert!(ao.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert_eq!(ao.ao_ap_count.load(std::sync::atomic::Ordering::Relaxed), 0);
     }
 }
