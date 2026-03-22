@@ -530,6 +530,34 @@ impl Daemon {
             }
         }
 
+        // ---- SYSTEM STATS below XP bar (~125, 77) — matches Python memtemp-plus ----
+        let (si, cpu_sample) = personality::SystemInfo::read(&self.prev_cpu_sample);
+        if cpu_sample.is_some() {
+            self.prev_cpu_sample = cpu_sample;
+        }
+        self.screen.draw_text("mem  cpu freq temp", 125, 77);
+        // Read CPU frequency from sysfs
+        let freq_ghz = {
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .map(|khz| format!("{:.1}G", khz / 1_000_000.0))
+                    .unwrap_or_else(|| "---".into())
+            }
+            #[cfg(not(target_os = "linux"))]
+            { "---".to_string() }
+        };
+        let stats = format!(
+            "{}%  {}% {} {}C",
+            if si.mem_total_mb > 0 { (si.mem_used_mb * 100 / si.mem_total_mb).to_string() } else { "-".into() },
+            si.cpu_percent as u32,
+            freq_ghz,
+            si.cpu_temp_c as u32
+        );
+        self.screen.draw_text(&stats, 125, 87);
+
         // ---- IP DISPLAY at (0,95) — rotates USB/BT ----
         let ip_str = self.network.display_ip_str(
             self.bluetooth.ip_address.as_deref()
