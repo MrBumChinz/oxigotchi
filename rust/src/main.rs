@@ -25,6 +25,8 @@ mod recovery;
 mod web;
 #[allow(dead_code)]
 mod wifi;
+#[allow(dead_code)]
+mod lua;
 
 use chrono::Timelike;
 use log::info;
@@ -125,7 +127,7 @@ impl Daemon {
         };
         self.screen.clear();
         self.screen.draw_face(&boot_face);
-        self.screen.draw_name(&self.config.name);
+        // No name drawn — AO mode hides name (face is at y=16, name would overlap)
         let welcome = format!("Hi! I'm {}! Starting v{}...",
             self.config.name, env!("CARGO_PKG_VERSION"));
         self.screen.draw_status(&welcome);
