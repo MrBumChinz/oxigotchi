@@ -165,8 +165,12 @@ impl PluginRuntime {
 
     /// Get plugin info for the web dashboard (name, version, author, tag, x, y).
     pub fn get_web_plugin_list(&self) -> Vec<(PluginMeta, i32, i32)> {
+        let indicators = self.indicators.lock().unwrap();
         self.plugins.iter().map(|p| {
-            (p.meta.clone(), p.config_x, p.config_y)
+            let (x, y) = Self::find_plugin_indicator(&indicators, &p.name)
+                .map(|i| (i.x, i.y))
+                .unwrap_or((p.config_x, p.config_y));
+            (p.meta.clone(), x, y)
         }).collect()
     }
 
@@ -196,11 +200,9 @@ impl PluginRuntime {
 
     /// Return current plugin configs for persistence: (name, enabled, x, y).
     pub fn get_plugin_configs(&self) -> Vec<(String, bool, i32, i32)> {
+        let indicators = self.indicators.lock().unwrap();
         self.plugins.iter().map(|p| {
-            let ind_names = self.get_indicator_names_for_plugin(&p.name);
-            let indicators = self.indicators.lock().unwrap();
-            let (x, y) = ind_names.first()
-                .and_then(|n| indicators.get(n))
+            let (x, y) = Self::find_plugin_indicator(&indicators, &p.name)
                 .map(|i| (i.x, i.y))
                 .unwrap_or((p.config_x, p.config_y));
             (p.name.clone(), true, x, y)
@@ -208,6 +210,22 @@ impl PluginRuntime {
     }
 
     // ── private helpers ──────────────────────────────────────────────
+
+    /// Find the first indicator belonging to a plugin, given an already-locked guard.
+    /// Uses the same matching rules as `get_indicator_names_for_plugin`.
+    fn find_plugin_indicator<'a>(
+        indicators: &'a HashMap<String, Indicator>,
+        plugin_name: &str,
+    ) -> Option<&'a Indicator> {
+        let prefix = format!("{}_", plugin_name);
+        indicators.iter()
+            .find(|(k, _)| {
+                k.as_str() == plugin_name ||
+                k.starts_with(&prefix) ||
+                (plugin_name == "sys_stats" && (k.as_str() == "sys_header" || k.as_str() == "sys_values"))
+            })
+            .map(|(_, v)| v)
+    }
 
     /// Build a sandboxed _ENV table with safe stdlib + our API functions.
     fn build_env(&self, _plugin_name: &str) -> LuaResult<LuaTable> {
