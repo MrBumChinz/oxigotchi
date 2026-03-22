@@ -569,24 +569,21 @@ impl Daemon {
         // ---- LINE 2 (y=108) ----
         self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
 
-        // ---- BOTTOM BAR (y=112) — matches Python layout ----
-        // CRASH counter at (0,112)
+        // ---- BOTTOM BAR (y=112) — evenly spaced across 250px ----
         let crash_str = format!("CRASH:{}", self.ao.crash_count);
-        self.screen.draw_text(&crash_str, 0, 112);
-        // WWW (internet status) at (70,112)
         let www = match self.network.internet {
             network::InternetStatus::Online => "WWW:C",
             network::InternetStatus::Offline => "WWW:-",
             network::InternetStatus::Unknown => "WWW:.",
         };
-        self.screen.draw_text(www, 70, 112);
-        // BT status at (100,112)
         let bt_short = format!("BT:{}", self.bluetooth.status_short());
-        self.screen.draw_text(&bt_short, 100, 112);
-        // Battery/charge at (140,112)
-        self.screen.draw_text(&self.battery.display_str(), 140, 112);
-        // Mode at (222,112)
-        self.screen.draw_text("AUTO", 222, 112);
+        let bat_str = self.battery.display_str();
+
+        self.screen.draw_text(&crash_str, 0, 112);     // CRASH:0
+        self.screen.draw_text(www, 48, 112);            // WWW:C
+        self.screen.draw_text(&bt_short, 86, 112);      // BT:C
+        self.screen.draw_text(&bat_str, 118, 112);       // CHG=100%
+        self.screen.draw_text("AUTO", 228, 112);         // AUTO
 
         self.screen.flush();
     }
