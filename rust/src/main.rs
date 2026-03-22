@@ -483,6 +483,7 @@ impl Daemon {
         lua::state::EpochState {
             uptime_secs: self.epoch_loop.uptime_secs(),
             epoch: m.epoch,
+            mode: "IDLE".to_string(),
             channel: m.channel,
             aps_seen: m.total_aps,
             handshakes: m.handshakes,
@@ -1001,7 +1002,7 @@ mod tests {
         assert!(pixel_count > 0, "display should have drawn something");
     }
 
-    /// Verify that all 24 Face variants are reachable.
+    /// Verify that all 26 Face variants are reachable.
     #[test]
     fn test_face_reachability() {
         use personality::Face;
@@ -1018,6 +1019,7 @@ mod tests {
             Face::Sleep, Face::Intense, Face::Cool, Face::Angry,
             Face::Friend, Face::Debug, Face::Upload, Face::Lonely,
             Face::Grateful, Face::Motivated, Face::Smart, Face::AoCrashed,
+            Face::Raging, Face::Grazing,
         ];
 
         let mut reachable: std::collections::HashSet<Face> = std::collections::HashSet::new();

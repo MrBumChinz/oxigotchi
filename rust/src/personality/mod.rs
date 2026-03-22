@@ -37,6 +37,8 @@ pub enum Face {
     FwCrash,
     AoCrashed,
     Shutdown,
+    Raging,
+    Grazing,
 }
 
 impl Face {
@@ -67,6 +69,8 @@ impl Face {
             Face::FwCrash => "(X_X)fw",
             Face::AoCrashed => "(X_X)ao",
             Face::Shutdown => "(~_~)",
+            Face::Raging => "(>_<)>",
+            Face::Grazing => "(~u~)",
         }
     }
 
@@ -97,6 +101,8 @@ impl Face {
             Face::FwCrash => "angry",
             Face::AoCrashed => "angry",
             Face::Shutdown => "sleep",
+            Face::Raging => "raging",
+            Face::Grazing => "grazing",
         }
     }
 
@@ -122,6 +128,8 @@ impl Face {
             "motivated" => Some(Face::Motivated),
             "demotivated" => Some(Face::Demotivated),
             "smart" => Some(Face::Smart),
+            "raging" => Some(Face::Raging),
+            "grazing" => Some(Face::Grazing),
             _ => None,
         }
     }
@@ -153,6 +161,8 @@ impl Face {
             Face::FwCrash,
             Face::AoCrashed,
             Face::Shutdown,
+            Face::Raging,
+            Face::Grazing,
         ]
     }
 }
@@ -964,7 +974,7 @@ mod tests {
 
     #[test]
     fn test_face_all_count() {
-        assert_eq!(Face::all().len(), 24);
+        assert_eq!(Face::all().len(), 26);
     }
 
     #[test]

@@ -44,6 +44,8 @@ static SLEEP: &[u8] = include_bytes!("../../faces/sleep.raw");
 static SMART: &[u8] = include_bytes!("../../faces/smart.raw");
 static UPLOAD: &[u8] = include_bytes!("../../faces/upload.raw");
 static WIFI_DOWN: &[u8] = include_bytes!("../../faces/wifi_down.raw");
+static RAGING: &[u8] = include_bytes!("../../faces/raging.raw");
+static GRAZING: &[u8] = include_bytes!("../../faces/grazing.raw");
 
 /// Get the raw bitmap data for a face. Returns the 990-byte packed bitmap.
 pub fn bitmap_for_face(face: &Face) -> &'static [u8] {
@@ -72,6 +74,8 @@ pub fn bitmap_for_face(face: &Face) -> &'static [u8] {
         Face::Grateful => GRATEFUL,
         Face::Motivated => MOTIVATED,
         Face::Smart => SMART,
+        Face::Raging => RAGING,
+        Face::Grazing => GRAZING,
     }
 }
 
