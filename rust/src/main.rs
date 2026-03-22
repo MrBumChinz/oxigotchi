@@ -734,10 +734,32 @@ impl Daemon {
         self.screen.flush();
     }
 
+    /// Pick a random face from a pool.
+    fn random_face(faces: &[personality::Face]) -> personality::Face {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        let idx = rng.gen_range(0..faces.len());
+        faces[idx]
+    }
+
+    /// Face pools for each mode.
+    const RAGE_FACES: &'static [personality::Face] = &[
+        personality::Face::Angry,
+        personality::Face::Intense,
+        personality::Face::Excited,
+        personality::Face::Upload,
+        personality::Face::Motivated,
+    ];
+    const SAFE_FACES: &'static [personality::Face] = &[
+        personality::Face::Debug,
+        personality::Face::Grateful,
+    ];
+
     /// Transition from RAGE to SAFE mode.
     fn enter_safe_mode(&mut self) {
         info!("mode: RAGE -> SAFE");
-        self.show_transition(personality::Face::Grazing, "Switching to SAFE...");
+        let face = Self::random_face(Self::SAFE_FACES);
+        self.show_transition(face, "Switching to SAFE...");
 
         // Stop attacks
         self.ao.stop();
@@ -754,13 +776,14 @@ impl Daemon {
         }
 
         self.mode = OperatingMode::Safe;
-        self.epoch_loop.personality.set_override(personality::Face::Grazing);
+        self.epoch_loop.personality.set_override(face);
     }
 
     /// Transition from SAFE to RAGE mode.
     fn enter_rage_mode(&mut self) {
         info!("mode: SAFE -> RAGE");
-        self.show_transition(personality::Face::Raging, "Switching to RAGE...");
+        let face = Self::random_face(Self::RAGE_FACES);
+        self.show_transition(face, "Switching to RAGE...");
 
         // Disconnect Bluetooth
         self.bluetooth.disconnect();

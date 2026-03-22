@@ -1,7 +1,7 @@
--- mode.lua: Static operating mode label ("AUTO").
+-- mode.lua: Shows current operating mode (RAGE/SAFE).
 plugin = {}
 plugin.name    = "mode"
-plugin.version = "1.0.0"
+plugin.version = "1.1.0"
 plugin.author  = "oxigotchi"
 plugin.tag     = "default"
 
@@ -11,10 +11,8 @@ function on_load(config)
         y    = config.y,
         font = "small",
     })
-    -- Static value set at load time; no state needed.
-    set_indicator("mode", "AUTO")
 end
 
 function on_epoch(state)
-    -- Mode is always AUTO in AO mode; no update needed.
+    set_indicator("mode", state.mode)
 end
