@@ -143,6 +143,11 @@ impl EpochLoop {
         }
     }
 
+    /// Get total uptime in seconds since daemon start.
+    pub fn uptime_secs(&self) -> u64 {
+        self.start_time.elapsed().as_secs()
+    }
+
     /// Format uptime as "HH:MM:SS".
     pub fn uptime_str(&self) -> String {
         let secs = self.start_time.elapsed().as_secs();

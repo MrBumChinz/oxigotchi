@@ -56,6 +56,7 @@ struct Daemon {
     ao: ao::AoManager,
     shared_state: web::SharedState,
     prev_cpu_sample: Option<personality::CpuSample>,
+    lua: lua::PluginRuntime,
 }
 
 impl Daemon {
@@ -103,6 +104,7 @@ impl Daemon {
             ao,
             shared_state,
             prev_cpu_sample: None,
+            lua: lua::PluginRuntime::new(),
         }
     }
 
@@ -167,6 +169,11 @@ impl Daemon {
             Ok(n) => info!("found {n} existing captures"),
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
+
+        // Load Lua plugins
+        let plugin_configs = vec![]; // empty for now — Plan B adds default configs
+        let loaded = self.lua.load_plugins_from_dir("/etc/oxigotchi/plugins", &plugin_configs);
+        info!("loaded {loaded} Lua plugin(s)");
 
         // Bluetooth tethering
         match self.bluetooth.setup() {
@@ -350,6 +357,10 @@ impl Daemon {
             self.ao.record_stable_epoch();
         }
 
+        // ---- TICK LUA PLUGINS ----
+        let epoch_state = self.build_epoch_state();
+        self.lua.tick_epoch(&epoch_state);
+
         self.update_display();
 
         // ---- CPU USAGE SAMPLING ----
@@ -409,6 +420,46 @@ impl Daemon {
                 Ok(()) => info!("AO restarted successfully"),
                 Err(e) => log::error!("AO restart failed: {e}"),
             }
+        }
+    }
+
+    /// Build an EpochState snapshot for Lua plugins.
+    fn build_epoch_state(&self) -> lua::state::EpochState {
+        let m = &self.epoch_loop.metrics;
+        lua::state::EpochState {
+            uptime_secs: self.epoch_loop.uptime_secs(),
+            epoch: m.epoch,
+            channel: m.channel,
+            aps_seen: m.total_aps,
+            handshakes: m.handshakes,
+            captures_total: self.captures.count(),
+            blind_epochs: m.blind_epochs,
+            ao_state: self.ao.state_str().to_string(),
+            ao_pid: self.ao.pid,
+            ao_crash_count: self.ao.crash_count,
+            ao_uptime_str: self.ao.uptime_str(),
+            battery_level: self.battery.status.level,
+            battery_charging: self.battery.status.charge_state == pisugar::ChargeState::Charging,
+            battery_voltage_mv: self.battery.status.voltage_mv,
+            battery_low: self.battery.status.low,
+            battery_critical: self.battery.status.critical,
+            battery_available: self.battery.available,
+            bt_connected: self.bluetooth.state == bluetooth::BtState::Connected,
+            bt_short: self.bluetooth.status_short().to_string(),
+            bt_ip: self.bluetooth.ip_address.clone().unwrap_or_default(),
+            bt_internet: self.bluetooth.internet_available,
+            internet_online: self.network.internet == network::InternetStatus::Online,
+            display_ip: self.network.display_ip_str(self.bluetooth.ip_address.as_deref()),
+            mood: self.epoch_loop.personality.mood.value(),
+            face: self.epoch_loop.current_face().as_str().to_string(),
+            level: self.epoch_loop.personality.xp.level,
+            xp: self.epoch_loop.personality.xp.xp,
+            status_message: self.epoch_loop.personality.status_msg(),
+            cpu_temp: 0.0,
+            mem_used_mb: 0,
+            mem_total_mb: 0,
+            cpu_percent: 0.0,
+            cpu_freq_ghz: "---".into(),
         }
     }
 
@@ -597,6 +648,11 @@ impl Daemon {
         self.screen.draw_text(&bt_short, 86, 112);      // BT:C
         self.screen.draw_text(&bat_str, 118, 112);       // CHG=100%
         self.screen.draw_text("AUTO", 228, 112);         // AUTO
+
+        // ---- LUA PLUGIN INDICATORS ----
+        for ind in self.lua.get_indicators() {
+            self.screen.draw_indicator(&ind);
+        }
 
         self.screen.flush();
     }
