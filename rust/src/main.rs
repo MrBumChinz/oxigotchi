@@ -241,7 +241,7 @@ impl Daemon {
                     attack_type,
                     target_bssid: ap.bssid,
                     success: self.ao.state == ao::AoState::Running,
-                    handshake_captured: false, // stub
+                    handshake_captured: false, // per-attack attribution not possible; epoch-level detection below
                     timestamp: std::time::Instant::now(),
                 };
                 self.attacks.record(&attack_result);
@@ -255,6 +255,19 @@ impl Daemon {
         // ---- CAPTURE PHASE ----
         self.epoch_loop.next_phase(); // -> Capture
         result.associations = self.wifi.tracker.total_clients();
+
+        // Scan for new captures from AngryOxide
+        let handshakes_before = self.captures.handshake_count();
+        match self.captures.scan_directory() {
+            Ok(new) => {
+                if new > 0 {
+                    info!("capture scan: {new} new file(s)");
+                }
+            }
+            Err(e) => log::warn!("capture scan failed: {e}"),
+        }
+        let new_handshakes = self.captures.handshake_count().saturating_sub(handshakes_before);
+        result.handshakes_captured = new_handshakes as u32;
 
         // ---- DISPLAY PHASE ----
         self.epoch_loop.next_phase(); // -> Display
@@ -998,5 +1011,26 @@ mod tests {
         let daemon = make_daemon();
         assert_eq!(daemon.ao.state, ao::AoState::Stopped);
         assert_eq!(daemon.ao.crash_count, 0);
+    }
+
+    #[test]
+    fn test_capture_scan_detects_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cm = capture::CaptureManager::new(dir.path().to_str().unwrap());
+
+        // Initial scan — empty
+        assert_eq!(cm.scan_directory().unwrap(), 0);
+        assert_eq!(cm.handshake_count(), 0);
+
+        // Create a pcapng + .22000 companion
+        let pcap = dir.path().join("test.pcapng");
+        std::fs::write(&pcap, b"fake").unwrap();
+        let companion = dir.path().join("test.22000");
+        std::fs::write(&companion, b"fake").unwrap();
+
+        // Rescan — should find 1 new file with handshake
+        let new = cm.scan_directory().unwrap();
+        assert_eq!(new, 1);
+        assert_eq!(cm.handshake_count(), 1);
     }
 }
