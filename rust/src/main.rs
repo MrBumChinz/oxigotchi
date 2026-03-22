@@ -426,6 +426,30 @@ impl Daemon {
     /// Build an EpochState snapshot for Lua plugins.
     fn build_epoch_state(&self) -> lua::state::EpochState {
         let m = &self.epoch_loop.metrics;
+
+        // Read system info (CPU temp, memory)
+        let (si, _cpu_sample) = personality::SystemInfo::read(&self.prev_cpu_sample);
+
+        // Read CPU frequency
+        let cpu_freq_ghz = {
+            #[cfg(target_os = "linux")]
+            {
+                std::fs::read_to_string("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
+                    .ok()
+                    .and_then(|s| s.trim().parse::<f64>().ok())
+                    .map(|khz| format!("{:.1}G", khz / 1_000_000.0))
+                    .unwrap_or_else(|| "---".into())
+            }
+            #[cfg(not(target_os = "linux"))]
+            { "---".to_string() }
+        };
+
+        // Get CPU percent from shared state
+        let cpu_pct = {
+            let s = self.shared_state.lock().unwrap();
+            s.cpu_percent
+        };
+
         lua::state::EpochState {
             uptime_secs: self.epoch_loop.uptime_secs(),
             epoch: m.epoch,
@@ -455,11 +479,11 @@ impl Daemon {
             level: self.epoch_loop.personality.xp.level,
             xp: self.epoch_loop.personality.xp.xp,
             status_message: self.epoch_loop.personality.status_msg(),
-            cpu_temp: 0.0,
-            mem_used_mb: 0,
-            mem_total_mb: 0,
-            cpu_percent: 0.0,
-            cpu_freq_ghz: "---".into(),
+            cpu_temp: si.cpu_temp_c,
+            mem_used_mb: si.mem_used_mb,
+            mem_total_mb: si.mem_total_mb,
+            cpu_percent: cpu_pct,
+            cpu_freq_ghz,
         }
     }
 
