@@ -1,6 +1,7 @@
 //! Lua plugin runtime: plugin loading, indicator registry, epoch ticking.
 
 pub mod state;
+pub mod config;
 
 use mlua::prelude::*;
 use std::collections::HashMap;
@@ -191,6 +192,19 @@ impl PluginRuntime {
             })
             .cloned()
             .collect()
+    }
+
+    /// Return current plugin configs for persistence: (name, enabled, x, y).
+    pub fn get_plugin_configs(&self) -> Vec<(String, bool, i32, i32)> {
+        self.plugins.iter().map(|p| {
+            let ind_names = self.get_indicator_names_for_plugin(&p.name);
+            let indicators = self.indicators.lock().unwrap();
+            let (x, y) = ind_names.first()
+                .and_then(|n| indicators.get(n))
+                .map(|i| (i.x, i.y))
+                .unwrap_or((p.config_x, p.config_y));
+            (p.name.clone(), true, x, y)
+        }).collect()
     }
 
     // ── private helpers ──────────────────────────────────────────────

@@ -197,10 +197,10 @@ impl Daemon {
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
 
-        // Load Lua plugins — default configs match update_display() positions exactly
-        let plugin_configs = vec![
+        // Load Lua plugins — read persisted positions from plugins.toml, fall back to defaults
+        let plugin_defaults = vec![
             lua::PluginConfig::default_for("ao_status",  0,   0),
-            lua::PluginConfig::default_for("aps",        145, 0),
+            lua::PluginConfig::default_for("aps",        178, 112),
             lua::PluginConfig::default_for("uptime",     185, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
             lua::PluginConfig::default_for("sys_stats",  125, 85),
@@ -211,6 +211,13 @@ impl Daemon {
             lua::PluginConfig::default_for("battery",    118, 112),
             lua::PluginConfig::default_for("mode",       228, 112),
         ];
+        let plugin_configs = match lua::config::read_plugins_toml() {
+            Some(pt) => {
+                info!("loaded plugin positions from plugins.toml");
+                lua::config::merge_with_defaults(plugin_defaults, &pt)
+            }
+            None => plugin_defaults,
+        };
         let loaded = self.lua.load_plugins_from_dir("/etc/oxigotchi/plugins", &plugin_configs);
         info!("loaded {loaded} Lua plugin(s)");
 
@@ -475,15 +482,19 @@ impl Daemon {
             let mut s = self.shared_state.lock().unwrap();
             std::mem::take(&mut s.pending_plugin_updates)
         };
-        for update in plugin_updates {
-            if let (Some(x), Some(y)) = (update.x, update.y) {
-                let x = x.clamp(0, 249);
-                let y = y.clamp(0, 121);
-                for ind_name in self.lua.get_indicator_names_for_plugin(&update.name) {
-                    self.lua.update_indicator_position(&ind_name, x, y);
+        if !plugin_updates.is_empty() {
+            for update in &plugin_updates {
+                if let (Some(x), Some(y)) = (update.x, update.y) {
+                    let x = x.clamp(0, 249);
+                    let y = y.clamp(0, 121);
+                    for ind_name in self.lua.get_indicator_names_for_plugin(&update.name) {
+                        self.lua.update_indicator_position(&ind_name, x, y);
+                    }
+                    info!("plugin {}: position updated to ({x},{y})", update.name);
                 }
-                info!("plugin {}: position updated to ({x},{y})", update.name);
             }
+            lua::config::write_plugins_toml(&self.lua.get_plugin_configs());
+            info!("persisted plugin positions to plugins.toml");
         }
     }
 
