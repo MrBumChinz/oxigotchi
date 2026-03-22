@@ -239,19 +239,81 @@ impl Daemon {
     fn run_epoch(&mut self) {
         let mut result = epoch::EpochResult::default();
 
-        // ---- Check for web commands ----
+        // ---- Web commands ----
         self.process_web_commands();
 
-        // ---- AO HEALTH CHECK (RAGE mode only) ----
+        // ---- AO health (RAGE mode only) ----
         if self.mode == OperatingMode::Rage && self.ao.check_health() {
             self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
         }
-        // Try auto-restart if crashed
         if self.mode == OperatingMode::Rage {
             self.ao.try_auto_restart();
         }
 
-        // ---- SCAN PHASE ----
+        // ---- Scan phase ----
+        self.run_scan_phase(&mut result);
+
+        // ---- Bluetooth health (SAFE mode only) ----
+        if self.mode == OperatingMode::Safe {
+            self.bluetooth.check_status();
+            if self.bluetooth.should_connect() {
+                match self.bluetooth.connect() {
+                    Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
+                    Err(e) => {
+                        log::warn!("bluetooth reconnect failed: {e}");
+                        self.bluetooth.on_error();
+                    }
+                }
+            }
+        }
+
+        // ---- Network health ----
+        self.network.health_check();
+        self.network.check_internet();
+        if self.mode == OperatingMode::Rage {
+            self.network.rotate_display(true);
+        }
+
+        // ---- Attack + Capture phases ----
+        self.run_attack_phase(&mut result);
+        self.run_capture_phase(&mut result);
+
+        // ---- Display phase ----
+        self.epoch_loop.next_phase(); // -> Display
+        self.epoch_loop.record_result(&result);
+
+        // ---- Face & personality ----
+        self.update_face_and_personality(&result);
+
+        // ---- Lua plugins + display ----
+        let epoch_state = self.build_epoch_state();
+        self.lua.tick_epoch(&epoch_state);
+        self.update_display();
+
+        // ---- CPU usage sampling ----
+        if let Some(sample) = personality::CpuSample::read() {
+            if let Some(ref prev) = self.prev_cpu_sample {
+                let cpu_pct = sample.cpu_percent(prev);
+                let mut s = self.shared_state.lock().unwrap();
+                s.cpu_percent = cpu_pct;
+            }
+            self.prev_cpu_sample = Some(sample);
+        }
+
+        // ---- Sync state to web ----
+        self.sync_to_web();
+
+        // ---- Sleep + watchdog ----
+        self.epoch_loop.next_phase(); // -> Sleep
+        if self.watchdog.needs_ping() {
+            self.watchdog.ping();
+        }
+        std::thread::sleep(self.epoch_loop.epoch_duration);
+        self.epoch_loop.next_phase(); // -> Scan (increments epoch counter)
+    }
+
+    /// Scan phase: count tracked APs, check WiFi health (RAGE mode only).
+    fn run_scan_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.phase = epoch::EpochPhase::Scan;
         self.recovery.log(recovery::DiagLevel::Info, "epoch scan start");
 
@@ -268,29 +330,10 @@ impl Daemon {
             let action = self.recovery.process_health(health);
             self.handle_recovery_action(action);
         }
+    }
 
-        // ---- BLUETOOTH HEALTH CHECK (SAFE mode only) ----
-        if self.mode == OperatingMode::Safe {
-            self.bluetooth.check_status();
-            if self.bluetooth.should_connect() {
-                match self.bluetooth.connect() {
-                    Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
-                    Err(e) => {
-                        log::warn!("bluetooth reconnect failed: {e}");
-                        self.bluetooth.on_error();
-                    }
-                }
-            }
-        }
-
-        // ---- NETWORK HEALTH CHECK ----
-        self.network.health_check();
-        // Check internet connectivity (via USB or BT)
-        self.network.check_internet();
-        // Rotate IP display each epoch
-        self.network.rotate_display();
-
-        // ---- ATTACK PHASE ----
+    /// Attack phase: schedule attacks against tracked APs.
+    fn run_attack_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Attack
         let attackable = self.wifi.tracker.attackable();
         // Read attack toggles from web state
@@ -317,12 +360,13 @@ impl Daemon {
                 }
             }
         }
+    }
 
-        // ---- CAPTURE PHASE ----
+    /// Capture phase: scan for new handshake files from AngryOxide.
+    fn run_capture_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Capture
         result.associations = self.wifi.tracker.total_clients();
 
-        // Scan for new captures from AngryOxide
         let handshakes_before = self.captures.handshake_count();
         match self.captures.scan_directory() {
             Ok(new) => {
@@ -334,12 +378,10 @@ impl Daemon {
         }
         let new_handshakes = self.captures.handshake_count().saturating_sub(handshakes_before);
         result.handshakes_captured = new_handshakes as u32;
+    }
 
-        // ---- DISPLAY PHASE ----
-        self.epoch_loop.next_phase(); // -> Display
-        self.epoch_loop.record_result(&result);
-
-        // ---- FACE VARIETY ENGINE ----
+    /// Update face variety engine, XP, battery overrides, and AO crash recovery.
+    fn update_face_and_personality(&mut self, result: &epoch::EpochResult) {
         // Tick countdowns (milestones, friend, upload, capture face)
         self.epoch_loop.personality.variety.tick_countdowns();
 
@@ -348,14 +390,12 @@ impl Daemon {
             let total = self.epoch_loop.personality.total_handshakes;
             self.epoch_loop.personality.variety.on_capture(total);
         } else {
-            // Tick idle counter if no handshakes this epoch
             self.epoch_loop.personality.variety.tick_idle();
         }
 
         // Set time-of-day state for variety engine
         let hour = chrono::Local::now().hour();
         self.epoch_loop.personality.variety.current_hour = hour;
-        // Mark morning greeting as shown (6-8am, once per boot)
         if (6..=8).contains(&hour)
             && !self.epoch_loop.personality.variety.morning_greeted
             && self.epoch_loop.personality.variety.current_override() == Some("motivated")
@@ -366,7 +406,7 @@ impl Daemon {
         // Generate bull-themed status message (handles joke cycling)
         self.epoch_loop.personality.generate_status();
 
-        // ---- PERIODIC XP SAVE (every 5 epochs) ----
+        // Periodic XP save (every 5 epochs)
         self.epoch_loop.personality.xp.tick_epoch();
         if self.epoch_loop.personality.xp.should_save() {
             let mood = self.epoch_loop.personality.mood.value();
@@ -375,7 +415,7 @@ impl Daemon {
             }
         }
 
-        // Check battery and apply face overrides
+        // Battery face overrides
         self.check_battery_overrides();
 
         // Clear AO crash face if AO recovered
@@ -389,39 +429,6 @@ impl Daemon {
         if self.ao.state == ao::AoState::Running {
             self.ao.record_stable_epoch();
         }
-
-        // ---- TICK LUA PLUGINS ----
-        let epoch_state = self.build_epoch_state();
-        self.lua.tick_epoch(&epoch_state);
-
-        self.update_display();
-
-        // ---- CPU USAGE SAMPLING ----
-        if let Some(sample) = personality::CpuSample::read() {
-            if let Some(ref prev) = self.prev_cpu_sample {
-                let cpu_pct = sample.cpu_percent(prev);
-                let mut s = self.shared_state.lock().unwrap();
-                s.cpu_percent = cpu_pct;
-            }
-            self.prev_cpu_sample = Some(sample);
-        }
-
-        // ---- Sync state to web ----
-        self.sync_to_web();
-
-        // ---- SLEEP PHASE ----
-        self.epoch_loop.next_phase(); // -> Sleep
-
-        // Ping watchdog
-        if self.watchdog.needs_ping() {
-            self.watchdog.ping();
-        }
-
-        // Sleep before next epoch
-        std::thread::sleep(self.epoch_loop.epoch_duration);
-
-        // Advance to next Scan (increments epoch counter)
-        self.epoch_loop.next_phase(); // -> Scan (calls finish_epoch)
     }
 
     /// Process commands queued by the web server.

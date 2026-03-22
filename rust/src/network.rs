@@ -216,7 +216,11 @@ pub fn format_display_ip(slot: DisplaySlot, usb_ip: Option<&str>, bt_ip: Option<
 }
 
 /// Advance to the next display slot (cycles USB -> BT -> USB ...).
-pub fn next_display_slot(current: DisplaySlot) -> DisplaySlot {
+/// In RAGE mode, always returns UsbIp (BT is off).
+pub fn next_display_slot(current: DisplaySlot, is_rage: bool) -> DisplaySlot {
+    if is_rage {
+        return DisplaySlot::UsbIp;
+    }
     match current {
         DisplaySlot::UsbIp => DisplaySlot::BtIp,
         DisplaySlot::BtIp => DisplaySlot::UsbIp,
@@ -542,8 +546,9 @@ impl NetworkManager {
     }
 
     /// Advance the display rotation to the next slot.
-    pub fn rotate_display(&mut self) {
-        self.display_slot = next_display_slot(self.display_slot);
+    /// In RAGE mode, forces UsbIp (no rotation).
+    pub fn rotate_display(&mut self, is_rage: bool) {
+        self.display_slot = next_display_slot(self.display_slot, is_rage);
     }
 
     /// Record a state change timestamp.
@@ -828,9 +833,18 @@ mod tests {
     #[test]
     fn test_display_slot_cycling() {
         let slot = DisplaySlot::UsbIp;
-        let slot = next_display_slot(slot);
+        let slot = next_display_slot(slot, false);
         assert_eq!(slot, DisplaySlot::BtIp);
-        let slot = next_display_slot(slot);
+        let slot = next_display_slot(slot, false);
+        assert_eq!(slot, DisplaySlot::UsbIp);
+    }
+
+    #[test]
+    fn test_display_slot_rage_always_usb() {
+        let slot = DisplaySlot::BtIp;
+        let slot = next_display_slot(slot, true);
+        assert_eq!(slot, DisplaySlot::UsbIp);
+        let slot = next_display_slot(slot, true);
         assert_eq!(slot, DisplaySlot::UsbIp);
     }
 
@@ -931,9 +945,9 @@ mod tests {
     fn test_network_manager_rotate_display() {
         let mut nm = NetworkManager::new();
         assert_eq!(nm.display_slot, DisplaySlot::UsbIp);
-        nm.rotate_display();
+        nm.rotate_display(false);
         assert_eq!(nm.display_slot, DisplaySlot::BtIp);
-        nm.rotate_display();
+        nm.rotate_display(false);
         assert_eq!(nm.display_slot, DisplaySlot::UsbIp);
     }
 
@@ -1058,13 +1072,13 @@ mod tests {
         let s1 = nm.display_ip_str(Some("192.168.44.128"));
         assert_eq!(s1, "USB:10.0.0.2 :8080");
 
-        nm.rotate_display();
+        nm.rotate_display(false);
 
         // Slot 2: BT IP
         let s2 = nm.display_ip_str(Some("192.168.44.128"));
         assert_eq!(s2, "BT:192.168.44.128");
 
-        nm.rotate_display();
+        nm.rotate_display(false);
 
         // Back to slot 1
         let s3 = nm.display_ip_str(Some("192.168.44.128"));
