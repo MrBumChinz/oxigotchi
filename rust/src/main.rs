@@ -502,10 +502,10 @@ impl Daemon {
         // "Lv N" text then graphical bar, matching Python "Lv 1  Exp|███" style
         let xp = &self.epoch_loop.personality.xp;
         let lv_str = format!("Lv {}", xp.level);
-        self.screen.draw_text(&lv_str, 125, 65);
+        self.screen.draw_text(&lv_str, 125, 73);
         // Bar: fixed position so layout works for Lv 1 through Lv 999
         let bar_x: u32 = 168; // gap after "Lv 100" (ends ~x=155)
-        let bar_y: u32 = 66;
+        let bar_y: u32 = 74;
         let bar_w: u32 = 80; // extends to x=248
         let bar_h: u32 = 7;
         let needed = xp.xp_to_next_level();
@@ -535,7 +535,7 @@ impl Daemon {
         if cpu_sample.is_some() {
             self.prev_cpu_sample = cpu_sample;
         }
-        self.screen.draw_text("mem  cpu freq temp", 125, 77);
+        self.screen.draw_text("mem  cpu freq temp", 125, 85);
         // Read CPU frequency from sysfs
         let freq_ghz = {
             #[cfg(target_os = "linux")]
@@ -556,7 +556,7 @@ impl Daemon {
             freq_ghz,
             si.cpu_temp_c as u32
         );
-        self.screen.draw_text(&stats, 125, 87);
+        self.screen.draw_text(&stats, 125, 95);
 
         // ---- IP DISPLAY at (0,95) — rotates USB/BT ----
         let ip_str = self.network.display_ip_str(
