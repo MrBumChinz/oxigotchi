@@ -232,6 +232,8 @@ impl Daemon {
 
         // ---- NETWORK HEALTH CHECK ----
         self.network.health_check();
+        // Check internet connectivity (via USB or BT)
+        self.network.check_internet();
         // Rotate IP display each epoch
         self.network.rotate_display();
 
@@ -572,7 +574,11 @@ impl Daemon {
         let crash_str = format!("CRASH:{}", self.ao.crash_count);
         self.screen.draw_text(&crash_str, 0, 112);
         // WWW (internet status) at (70,112)
-        let www = if self.network.internet == network::InternetStatus::Online { "WWW" } else { "---" };
+        let www = match self.network.internet {
+            network::InternetStatus::Online => "WWW",
+            network::InternetStatus::Offline => "---",
+            network::InternetStatus::Unknown => "...",
+        };
         self.screen.draw_text(www, 70, 112);
         // BT status at (100,112)
         let bt_short = format!("BT:{}", self.bluetooth.status_short());

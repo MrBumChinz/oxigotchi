@@ -458,11 +458,7 @@ impl NetworkManager {
     ///
     /// Returns the new status.
     pub fn check_internet(&mut self) -> InternetStatus {
-        if self.usb0_state == Usb0State::Absent {
-            self.internet = InternetStatus::Offline;
-            return self.internet;
-        }
-
+        // Ping regardless of usb0 state — internet may come via bnep0 (BT tether)
         let ping_ok;
         #[cfg(unix)]
         {
