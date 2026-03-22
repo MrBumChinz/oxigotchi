@@ -1,5 +1,7 @@
 //! Lua plugin runtime: plugin loading, indicator registry, epoch ticking.
 
+pub mod state;
+
 /// Font size for indicators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorFont {
