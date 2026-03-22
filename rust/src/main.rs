@@ -251,20 +251,6 @@ impl Daemon {
         // ---- Check for web commands ----
         self.process_web_commands();
 
-        // ---- BUTTON POLL ----
-        if let Some(action) = self.battery.poll_button() {
-            match action {
-                pisugar::ButtonAction::SingleTap => {
-                    let new_mode = self.mode.toggle();
-                    match new_mode {
-                        OperatingMode::Safe => self.enter_safe_mode(),
-                        OperatingMode::Rage => self.enter_rage_mode(),
-                    }
-                }
-                _ => {} // double tap, long press unused
-            }
-        }
-
         // ---- AO HEALTH CHECK (RAGE mode only) ----
         if self.mode == OperatingMode::Rage && self.ao.check_health() {
             self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
@@ -439,26 +425,8 @@ impl Daemon {
             self.watchdog.ping();
         }
 
-        // Sleep before next epoch — poll button every 500ms during sleep
-        let sleep_total = self.epoch_loop.epoch_duration;
-        let poll_interval = Duration::from_millis(500);
-        let sleep_start = std::time::Instant::now();
-        while sleep_start.elapsed() < sleep_total {
-            std::thread::sleep(poll_interval);
-            // Check button during sleep for responsive mode switching
-            if let Some(action) = self.battery.poll_button() {
-                match action {
-                    pisugar::ButtonAction::SingleTap => {
-                        let new_mode = self.mode.toggle();
-                        match new_mode {
-                            OperatingMode::Safe => self.enter_safe_mode(),
-                            OperatingMode::Rage => self.enter_rage_mode(),
-                        }
-                    }
-                    _ => {} // double tap, long press unused
-                }
-            }
-        }
+        // Sleep before next epoch
+        std::thread::sleep(self.epoch_loop.epoch_duration);
 
         // Advance to next Scan (increments epoch counter)
         self.epoch_loop.next_phase(); // -> Scan (calls finish_epoch)
@@ -477,9 +445,21 @@ impl Daemon {
 
         if let Some(mode) = mode_switch {
             info!("web: mode switch to {mode}");
-            // In a full implementation, this would switch between AO and PWN mode
-            let mut s = self.shared_state.lock().unwrap();
-            s.mode = mode;
+            match mode.to_uppercase().as_str() {
+                "TOGGLE" => {
+                    let new_mode = self.mode.toggle();
+                    match new_mode {
+                        OperatingMode::Safe => self.enter_safe_mode(),
+                        OperatingMode::Rage => self.enter_rage_mode(),
+                    }
+                }
+                "SAFE" if self.mode == OperatingMode::Rage => self.enter_safe_mode(),
+                "RAGE" if self.mode == OperatingMode::Safe => self.enter_rage_mode(),
+                _ => {
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.mode = mode;
+                }
+            }
         }
 
         if let Some(rate) = rate_change {
