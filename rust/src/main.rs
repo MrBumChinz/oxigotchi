@@ -261,8 +261,8 @@ impl Daemon {
         result.channel = 0; // AO handles channel hopping
         result.aps_seen = self.wifi.tracker.count() as u32;
 
-        // Health check on WiFi
-        if self.recovery.should_check() {
+        // Health check on WiFi (RAGE mode only — SAFE mode intentionally has no monitor)
+        if self.mode == OperatingMode::Rage && self.recovery.should_check() {
             let health = if self.wifi.state == wifi::WifiState::Monitor {
                 recovery::HealthCheck::Ok
             } else {
