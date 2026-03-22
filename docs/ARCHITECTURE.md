@@ -1,3 +1,7 @@
+> **Note:** This document describes the **Oxigotchi v2.x Python architecture**. For the Rust v3.0 rewrite (single binary, Lua plugins, RAGE/SAFE mode), see [RUSTY_V3.md](RUSTY_V3.md).
+
+---
+
 # Oxigotchi Architecture
 
 > A deep technical guide to how Oxigotchi works, why it was built this way, and how to hack on it.

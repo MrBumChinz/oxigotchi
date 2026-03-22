@@ -182,7 +182,7 @@ end
 |----------|-----------|-------------|
 | `register_indicator` | `(name, opts)` | Register a text indicator on the display. `opts`: `x`, `y`, `font` (`"small"` or `"medium"`), `label` (optional prefix), `wrap_width` (optional) |
 | `set_indicator` | `(name, value)` | Set the text value of a registered indicator |
-| `format_duration` | `(secs)` returns string | Format seconds as `"HH:MM:SS"` |
+| `format_duration` | `(secs)` returns string | Format seconds as `"DD:HH:MM"` |
 | `log` | `(message)` | Write a message to the daemon log |
 
 ### Event Hooks
@@ -290,8 +290,18 @@ y = 112
 
 [plugins.uptime]
 enabled = true
-x = 185
+x = 178
 y = 0
+
+[plugins.aps]
+enabled = true
+x = 178
+y = 112
+
+[plugins.mode]
+enabled = true
+x = 222
+y = 112
 
 [plugins.ao_status]
 enabled = true
@@ -307,12 +317,12 @@ Oxigotchi ships with 11 built-in plugins:
 
 | Plugin | What it shows |
 |--------|---------------|
-| `ao_status` | AngryOxide state: channel, handshakes, epoch |
+| `ao_status` | AngryOxide state: `"AO: N/N | Nm | CH:AH"` (running), `"AO: off"` (stopped), `"AO: ERR"` (failed) |
 | `aps` | Number of visible access points |
-| `uptime` | Daemon uptime (HH:MM format) |
+| `uptime` | Daemon uptime (DD:HH:MM format) |
 | `status_msg` | Personality status message |
 | `sys_stats` | CPU, memory, frequency, temperature |
-| `ip_display` | Current IP address (USB or BT) |
+| `ip_display` | Current IP address (USB or BT). In RAGE mode, only shows USB tether IP. In SAFE mode, Rust rotates between USB and BT IPs every 5 seconds. |
 | `crash` | AO crash counter |
 | `www` | Internet connectivity indicator |
 | `bt_status` | Bluetooth connection status |
@@ -353,7 +363,7 @@ The e-ink display is 250x122 pixels, 1-bit monochrome (black and white only). Al
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ AO: 3/8 | 01:15         APs:15           UP: 02:15         │  y=0  TOP BAR
+│ AO: 3/8 | 1m | CH:AH                    UP: 01:02:15       │  y=0  TOP BAR
 ├──────────────────────────────────────────────────────────────┤  y=14 HLINE
 │                     │  Sniffing the                         │
 │   [120x66 FACE]     │  airwaves...                          │  y=20 STATUS
@@ -362,12 +372,12 @@ The e-ink display is 250x122 pixels, 1-bit monochrome (black and white only). Al
 │                     │  mem  cpu freq temp                   │  y=85 SYS
 │ USB:192.168.137.2   │  42%  12% 1.0G 45C                   │  y=95 SYS VALUES
 ├──────────────────────────────────────────────────────────────┤  y=108 HLINE
-│ CRASH:0  WWW  BT:C  BAT:85%  APs:15              RAGE     │  y=112 BOTTOM BAR
+│ CRASH:0  WWW  BT:C  BAT:85%    APs:15              RAGE   │  y=112 BOTTOM BAR
 └──────────────────────────────────────────────────────────────┘
 ```
 
 **Regions:**
-- **Top bar (y=0):** AO status (channel/handshakes), AP count, uptime
+- **Top bar (y=0):** AO status (handshakes, minutes, channel mode), uptime
 - **Face area (y=14 to y=108):** 120x66 pixel bull face on the left
 - **Status area:** Status message and personality text to the right of the face
 - **XP bar (y=73):** Level and experience progress bar

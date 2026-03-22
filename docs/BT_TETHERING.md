@@ -1,5 +1,7 @@
 # Bluetooth Tethering on Pi Zero 2W
 
+> **Note:** In Rusty Oxigotchi v3.0, BT and WiFi monitor mode never run simultaneously. The daemon uses RAGE/SAFE mode cycling — BT is only active in SAFE mode, WiFi monitor is only active in RAGE mode. The PiSugar3 button toggles between them. See [RUSTY_V3.md](RUSTY_V3.md) for details.
+
 ## Hardware Limitation: BCM43436B0 Shared UART
 
 The Pi Zero 2W uses a BCM43436B0 combo WiFi/BT chip. WiFi and Bluetooth share a single UART bus. This creates a critical constraint:
@@ -24,6 +26,8 @@ The daemon MUST set up BT **before** starting WiFi monitor mode:
 ```
 
 The current Rust daemon does this in `boot()` — see `rust/src/main.rs`.
+
+> **Note (v3.0):** This boot sequence only applies to the initial SAFE mode transition, not boot. RAGE is the default boot mode — no BT is started at boot. BT is only powered on when the user switches to SAFE mode via the PiSugar3 button.
 
 ## Config
 

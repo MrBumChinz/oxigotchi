@@ -86,8 +86,8 @@ BOTTOM BAR:
 ```
 RUST (current — all indicators implemented):
 ┌──────────────────────────────────────────────────────────┐
-│ AO: 0/0 | 00:01:31    APs:0       UP: 00:01:31          │  Y=0  top bar (Small 9pt)
-│ (0,0)                 (145,0)      (185,0)               │
+│ AO: 0/0 | 0m | CH:AH                  UP: 00:01:31      │  Y=0  top bar (Small 9pt)
+│ (0,0)                                  (178,0)           │
 ├──────────────────────────────────────────────────────────┤  Y=14 line1
 │                     Bull status msg                      │  (125,20) Medium 10pt
 │  ┌────────────┐     word-wrapped                         │  word wrap at 20 chars
@@ -98,8 +98,8 @@ RUST (current — all indicators implemented):
 │                                                          │
 │  USB:10.0.0.2 :8080  (or BT:IP, rotates)                │  (0,95) Small 9pt
 ├──────────────────────────────────────────────────────────┤  Y=108 line2
-│ CRASH:0  WWW:C  BT:C  CHG=100%                   AUTO   │  Y=112 (Small 9pt)
-│ (0)      (48)   (86)  (118)                      (228)   │  evenly spaced
+│ CRASH:0  WWW:C  BT:C  CHG=100%   APs:0           RAGE   │  Y=112 (Small 9pt)
+│ (0)      (48)   (86)  (118)      (178)            (222)  │  evenly spaced
 └──────────────────────────────────────────────────────────┘
 
 BOOT SCREEN (shown for ~5s on startup):
@@ -121,9 +121,9 @@ BOOT SCREEN (shown for ~5s on startup):
 
 | # | Element | Position | Font | Content | Source |
 |---|---------|----------|------|---------|--------|
-| 1 | AO status | (0, 0) | Small 9pt | `"AO: V/T \| HH:MM:SS"` | main.rs:543 |
-| 2 | APs count | (145, 0) | Small 9pt | `"APs:N"` | main.rs:551 |
-| 3 | Uptime | (185, 0) | Small 9pt | `"UP: HH:MM:SS"` | main.rs:554 |
+| 1 | AO status | (0, 0) | Small 9pt | `"AO: N/N \| Nm \| CH:AH"` / `"AO: off"` / `"AO: ERR"` | main.rs:543 |
+| 2 | APs count | (178, 112) | Small 9pt | `"APs:N"` | main.rs:551 |
+| 3 | Uptime | (178, 0) | Small 9pt | `"UP: DD:HH:MM"` | main.rs:554 |
 | 4 | Line 1 | y=14 | — | full width divider | main.rs:557 |
 | 5 | Face | (0, 16) | — | 120x66 bull bitmap | main.rs:560, faces.rs |
 | 6 | Status | (125, 20) | Medium 10pt | bull message/joke, word-wrap 20c | main.rs:564 |
@@ -137,7 +137,7 @@ BOOT SCREEN (shown for ~5s on startup):
 | 14 | WWW | (48, 112) | Small 9pt | `"WWW:C"` / `"WWW:-"` / `"WWW:."` | main.rs:638-641 |
 | 15 | BT | (86, 112) | Small 9pt | `"BT:C"` / `"BT:-"` / `"BT:P"` | main.rs:643 |
 | 16 | Battery | (118, 112) | Small 9pt | `"CHG=100%"` / `"BAT=75%"` | main.rs:645, pisugar |
-| 17 | Mode | (228, 112) | Small 9pt | `"AUTO"` | main.rs:647 |
+| 17 | Mode | (222, 112) | Small 9pt | `"RAGE"` / `"SAFE"` | main.rs:647 |
 
 ### Boot Screen Layout
 
@@ -170,7 +170,7 @@ BOOT SCREEN (shown for ~5s on startup):
 - No hardcoded device names — all from config
 
 **Display indicators restored:**
-- Top bar: AO status, APs count, uptime
+- Top bar: AO status, uptime
 - XP bar with graphical progress (pixel-drawn, not Unicode)
 - System stats: mem/cpu/freq/temp from /proc and /sys
 - Bottom bar: CRASH, WWW:C/-, BT:C/-, CHG=/BAT=, AUTO — evenly spaced
@@ -224,7 +224,7 @@ fn update_display(&mut self) {
     // ---- TOP BAR (y=0) ----
 
     // AO status line at (0,0) — Small 9pt
-    // Format: "AO: V/T | HH:MM | CH:1,6,11"
+    // Format: "AO: N/N | Nm | CH:AH" / "AO: off" / "AO: ERR"
     let ao_status = format!("AO: {}/{} | {}",
         m.handshakes, self.captures.count(), self.ao.uptime_str());
     self.screen.draw_text(&ao_status, 0, 0);
@@ -235,13 +235,10 @@ fn update_display(&mut self) {
     // Battery at (140,0) — Small 9pt
     self.screen.draw_text(&self.battery.display_str(), 140, 0);
 
-    // AO APs count at (145,0) — Small 9pt (overlaps battery — pick one)
-    // Python puts APs at 145 which overlaps battery at 140.
-    // In practice the AO plugin draws APs OVER the battery area.
-    // For Rust, put APs right of battery or skip if battery is shown.
+    // APs count moved to bottom bar at (178,112) — Small 9pt
 
-    // Uptime at (185,0) — Small 9pt "UP HH:MM:SS"
-    self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 185, 0);
+    // Uptime at (178,0) — Small 9pt "UP DD:HH:MM"
+    self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 178, 0);
 
     // ---- LINE 1 (y=14) ----
     self.screen.draw_hline(0, 14, DISPLAY_WIDTH);
@@ -268,8 +265,11 @@ fn update_display(&mut self) {
         self.screen.draw_text(
             &format!("CRASH:{}", self.ao.crash_count), 0, 112);
     }
-    // Mode at (222,112) — Small 9pt "AUTO"
-    self.screen.draw_text("AUTO", 222, 112);
+    // APs count at (178,112) — Small 9pt "APs:N"
+    self.screen.draw_text(&format!("APs:{}", m.aps_seen), 178, 112);
+
+    // Mode at (222,112) — Small 9pt "RAGE" / "SAFE"
+    self.screen.draw_text(&self.mode.display_str(), 222, 112);
 
     self.screen.flush();
 }
