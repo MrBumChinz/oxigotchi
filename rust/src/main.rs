@@ -409,8 +409,7 @@ impl Daemon {
 
         let m = &self.epoch_loop.metrics;
 
-        // ---- TOP BAR (y=0) — AO status indicator ----
-        // Python AO mode: "AO: {verified}/{total} | {uptime} | CH:{channels}"
+        // ---- TOP BAR (y=0) — AO status + indicators ----
         let ao_status = format!(
             "AO: {}/{} | {}",
             m.handshakes,
@@ -418,6 +417,9 @@ impl Daemon {
             self.ao.uptime_str()
         );
         self.screen.draw_text(&ao_status, 0, 0);
+        // Battery + uptime on right
+        let bat_str = self.battery.display_str();
+        self.screen.draw_text(&bat_str, 155, 0);
         self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 185, 0);
 
         // ---- LINE 1 (y=14) ----
@@ -427,8 +429,8 @@ impl Daemon {
         let face = self.epoch_loop.current_face();
         self.screen.draw_face(&face);
 
-        // ---- STATUS (y=20, right of face, 10pt medium) ----
-        let status = self.epoch_loop.status_message();
+        // ---- STATUS (y=20, right of face — bull-themed messages/jokes) ----
+        let status = self.epoch_loop.personality.status_msg();
         self.screen.draw_status(&status);
 
         // ---- IP DISPLAY (y=95) ----
@@ -446,6 +448,14 @@ impl Daemon {
             let crash_str = format!("CRASH:{}", self.ao.crash_count);
             self.screen.draw_text(&crash_str, 0, 109);
         }
+
+        // PWND count
+        let pwnd_str = format!("PWND:{}", m.handshakes);
+        self.screen.draw_text(&pwnd_str, 70, 109);
+
+        // APs count
+        let aps_str = format!("APs:{}", m.total_aps);
+        self.screen.draw_text(&aps_str, 140, 109);
 
         // Mode indicator (right)
         let mode = if self.ao.config.rate > 1 { "RAGE" } else { "AUTO" };
