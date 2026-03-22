@@ -489,8 +489,30 @@ impl Daemon {
         self.screen.draw_status(&status);
 
         // ---- XP BAR right of face (~125, 55) ----
-        let xp_str = self.epoch_loop.personality.xp.display_str();
-        self.screen.draw_text(&xp_str, 125, 55);
+        // "Lv N  Exp|" as text, then pixel-drawn progress bar
+        let xp = &self.epoch_loop.personality.xp;
+        let lv_str = format!("Lv {}  Exp|", xp.level);
+        self.screen.draw_text(&lv_str, 125, 55);
+        // Draw progress bar as filled rectangle (bar starts after "Exp|" text)
+        let bar_x = 125 + (lv_str.len() as i32) * 5; // ~5px per char at 9pt
+        let bar_y = 57; // vertically centered in text line
+        let bar_w = 50u32; // total bar width in pixels
+        let bar_h = 5u32;  // bar height
+        let needed = xp.xp_to_next_level();
+        let filled = if needed > 0 {
+            (xp.xp * bar_w as u64 / needed).min(bar_w as u64) as u32
+        } else {
+            bar_w
+        };
+        // Draw filled portion
+        for dy in 0..bar_h {
+            for dx in 0..filled {
+                self.screen.set_pixel((bar_x as u32) + dx, bar_y + dy, embedded_graphics::pixelcolor::BinaryColor::On);
+            }
+        }
+        // Draw border around full bar
+        self.screen.draw_hline(bar_x, bar_y as i32, bar_w);
+        self.screen.draw_hline(bar_x, (bar_y + bar_h - 1) as i32, bar_w);
 
         // ---- IP DISPLAY at (0,95) — rotates USB/BT ----
         let ip_str = self.network.display_ip_str(
