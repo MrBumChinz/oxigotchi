@@ -40,6 +40,29 @@ const ATTACK_RATE: u32 = 1;
 /// Default capture directory.
 const CAPTURE_DIR: &str = "/home/pi/captures";
 
+/// Operating mode: RAGE (WiFi attacks) or SAFE (BT internet).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OperatingMode {
+    Rage,
+    Safe,
+}
+
+impl OperatingMode {
+    fn as_str(&self) -> &str {
+        match self {
+            OperatingMode::Rage => "RAGE",
+            OperatingMode::Safe => "SAFE",
+        }
+    }
+
+    fn toggle(&self) -> Self {
+        match self {
+            OperatingMode::Rage => OperatingMode::Safe,
+            OperatingMode::Safe => OperatingMode::Rage,
+        }
+    }
+}
+
 /// All subsystem state, owned by the main loop.
 struct Daemon {
     config: config::Config,
@@ -54,6 +77,7 @@ struct Daemon {
     recovery: recovery::RecoveryManager,
     watchdog: recovery::Watchdog,
     ao: ao::AoManager,
+    mode: OperatingMode,
     shared_state: web::SharedState,
     prev_cpu_sample: Option<personality::CpuSample>,
     lua: lua::PluginRuntime,
@@ -102,6 +126,7 @@ impl Daemon {
             recovery,
             watchdog,
             ao,
+            mode: OperatingMode::Rage,
             shared_state,
             prev_cpu_sample: None,
             lua: lua::PluginRuntime::new(),
@@ -226,12 +251,28 @@ impl Daemon {
         // ---- Check for web commands ----
         self.process_web_commands();
 
-        // ---- AO HEALTH CHECK ----
-        if self.ao.check_health() {
+        // ---- BUTTON POLL ----
+        if let Some(action) = self.battery.poll_button() {
+            match action {
+                pisugar::ButtonAction::SingleTap => {
+                    let new_mode = self.mode.toggle();
+                    match new_mode {
+                        OperatingMode::Safe => self.enter_safe_mode(),
+                        OperatingMode::Rage => self.enter_rage_mode(),
+                    }
+                }
+                _ => {} // double tap, long press unused
+            }
+        }
+
+        // ---- AO HEALTH CHECK (RAGE mode only) ----
+        if self.mode == OperatingMode::Rage && self.ao.check_health() {
             self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
         }
         // Try auto-restart if crashed
-        self.ao.try_auto_restart();
+        if self.mode == OperatingMode::Rage {
+            self.ao.try_auto_restart();
+        }
 
         // ---- SCAN PHASE ----
         self.epoch_loop.phase = epoch::EpochPhase::Scan;
@@ -483,7 +524,7 @@ impl Daemon {
         lua::state::EpochState {
             uptime_secs: self.epoch_loop.uptime_secs(),
             epoch: m.epoch,
-            mode: "IDLE".to_string(),
+            mode: self.mode.as_str().to_string(),
             channel: m.channel,
             aps_seen: m.total_aps,
             handshakes: m.handshakes,
@@ -683,6 +724,61 @@ impl Daemon {
             self.update_display();
             // Real implementation would call `shutdown -h now`
         }
+    }
+
+    /// Show a transition screen with face and message, then flush immediately.
+    fn show_transition(&mut self, face: personality::Face, message: &str) {
+        self.screen.clear();
+        self.screen.draw_face(&face);
+        self.screen.draw_status(message);
+        self.screen.flush();
+    }
+
+    /// Transition from RAGE to SAFE mode.
+    fn enter_safe_mode(&mut self) {
+        info!("mode: RAGE -> SAFE");
+        self.show_transition(personality::Face::Grazing, "Switching to SAFE...");
+
+        // Stop attacks
+        self.ao.stop();
+
+        // Exit WiFi monitor mode
+        if let Err(e) = self.wifi.stop_monitor() {
+            log::warn!("WiFi monitor stop failed: {e}");
+        }
+
+        // Connect Bluetooth
+        match self.bluetooth.setup() {
+            Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
+            Err(e) => log::warn!("BT setup failed: {e}"),
+        }
+
+        self.mode = OperatingMode::Safe;
+        self.epoch_loop.personality.set_override(personality::Face::Grazing);
+    }
+
+    /// Transition from SAFE to RAGE mode.
+    fn enter_rage_mode(&mut self) {
+        info!("mode: SAFE -> RAGE");
+        self.show_transition(personality::Face::Raging, "Switching to RAGE...");
+
+        // Disconnect Bluetooth
+        self.bluetooth.disconnect();
+
+        // Enter WiFi monitor mode
+        match self.wifi.start_monitor() {
+            Ok(()) => info!("WiFi monitor mode started"),
+            Err(e) => log::error!("WiFi monitor failed: {e}"),
+        }
+
+        // Start AngryOxide
+        match self.ao.start() {
+            Ok(()) => info!("AO started: PID {}", self.ao.pid),
+            Err(e) => log::error!("AO start failed: {e}"),
+        }
+
+        self.mode = OperatingMode::Rage;
+        self.epoch_loop.personality.clear_override();
     }
 
     /// Handle recovery actions from the health checker.
@@ -1221,5 +1317,23 @@ mod tests {
         assert_eq!(indicators[0].value, "E:99");
         assert_eq!(indicators[0].x, 50);
         assert_eq!(indicators[0].y, 60);
+    }
+
+    #[test]
+    fn test_operating_mode_toggle() {
+        assert_eq!(OperatingMode::Rage.toggle(), OperatingMode::Safe);
+        assert_eq!(OperatingMode::Safe.toggle(), OperatingMode::Rage);
+    }
+
+    #[test]
+    fn test_operating_mode_as_str() {
+        assert_eq!(OperatingMode::Rage.as_str(), "RAGE");
+        assert_eq!(OperatingMode::Safe.as_str(), "SAFE");
+    }
+
+    #[test]
+    fn test_daemon_starts_in_rage_mode() {
+        let daemon = make_daemon();
+        assert_eq!(daemon.mode, OperatingMode::Rage);
     }
 }
