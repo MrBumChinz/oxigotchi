@@ -75,11 +75,31 @@ impl Screen {
         let _ = Text::new(&label, Point::new(5, 30), style).draw(&mut self.fb);
     }
 
-    /// Draw a status message (10pt font). Python spec: status at (125, 20).
+    /// Draw a status message (10pt font) with word wrap.
+    /// Python spec: status at (125, 20), max 20 chars per line.
     pub fn draw_status(&mut self, text: &str) {
         let style = fonts::medium();
-        // 10pt: ~8px ascent. Visual top y=20, baseline ~y=28.
-        let _ = Text::new(text, Point::new(125, 28), style).draw(&mut self.fb);
+        let max_chars = 20;
+        let line_height = 12; // 10pt font + 2px spacing
+        let x = 125i32;
+        let mut y = 28i32; // baseline for first line
+
+        // Simple word wrap at max_chars
+        let mut remaining = text;
+        while !remaining.is_empty() && y < 90 {
+            if remaining.len() <= max_chars {
+                let _ = Text::new(remaining, Point::new(x, y), style).draw(&mut self.fb);
+                break;
+            }
+            // Find last space within max_chars
+            let break_at = remaining[..max_chars]
+                .rfind(' ')
+                .unwrap_or(max_chars);
+            let (line, rest) = remaining.split_at(break_at);
+            let _ = Text::new(line, Point::new(x, y), style).draw(&mut self.fb);
+            remaining = rest.trim_start();
+            y += line_height;
+        }
     }
 
     /// Draw raw text at (x, y) using small font (9pt).
