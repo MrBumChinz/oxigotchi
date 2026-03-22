@@ -462,8 +462,8 @@ impl Daemon {
         self.screen.clear();
         let m = &self.epoch_loop.metrics;
 
-        // ---- TOP BAR (y=0) ----
-        // AO status at (0,0) — Small 9pt — "AO: V/T | HH:MM | CH:1,6,11"
+        // ---- TOP BAR (y=0) — matches Python AO mode positions ----
+        // AO status at (0,0) — "AO: V/T | Xm | CH:1,6,11"
         let ao_status = format!(
             "AO: {}/{} | {}",
             m.handshakes,
@@ -471,12 +471,10 @@ impl Daemon {
             self.ao.uptime_str()
         );
         self.screen.draw_text(&ao_status, 0, 0);
-        // BT status at (115,0) — Small 9pt — "BT:C" / "BT:-"
-        let bt_str = format!("BT:{}", self.bluetooth.status_short());
-        self.screen.draw_text(&bt_str, 115, 0);
-        // Battery at (140,0) — Small 9pt
-        self.screen.draw_text(&self.battery.display_str(), 140, 0);
-        // Uptime at (185,0) — Small 9pt
+        // APs count at (145,0)
+        let aps_str = format!("APs:{}", m.total_aps);
+        self.screen.draw_text(&aps_str, 145, 0);
+        // Uptime at (185,0)
         self.screen.draw_labeled_value("UP", &self.epoch_loop.uptime_str(), 185, 0);
 
         // ---- LINE 1 (y=14) ----
@@ -490,7 +488,11 @@ impl Daemon {
         let status = self.epoch_loop.personality.status_msg();
         self.screen.draw_status(&status);
 
-        // ---- IP DISPLAY at (0,95) — Small 9pt, rotates USB/BT ----
+        // ---- XP BAR right of face (~125, 55) ----
+        let xp_str = self.epoch_loop.personality.xp.display_str();
+        self.screen.draw_text(&xp_str, 125, 55);
+
+        // ---- IP DISPLAY at (0,95) — rotates USB/BT ----
         let ip_str = self.network.display_ip_str(
             self.bluetooth.ip_address.as_deref()
         );
@@ -499,13 +501,19 @@ impl Daemon {
         // ---- LINE 2 (y=108) ----
         self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
 
-        // ---- BOTTOM BAR (y=112) ----
-        // Crash counter at (0,112) — Small 9pt — only shown if crashes
-        if self.ao.crash_count > 0 {
-            let crash_str = format!("CRASH:{}", self.ao.crash_count);
-            self.screen.draw_text(&crash_str, 0, 112);
-        }
-        // Mode at (222,112) — Small 9pt
+        // ---- BOTTOM BAR (y=112) — matches Python layout ----
+        // CRASH counter at (0,112)
+        let crash_str = format!("CRASH:{}", self.ao.crash_count);
+        self.screen.draw_text(&crash_str, 0, 112);
+        // WWW (internet status) at (70,112)
+        let www = if self.network.internet == network::InternetStatus::Online { "WWW" } else { "---" };
+        self.screen.draw_text(www, 70, 112);
+        // BT status at (100,112)
+        let bt_short = format!("BT:{}", self.bluetooth.status_short());
+        self.screen.draw_text(&bt_short, 100, 112);
+        // Battery/charge at (140,112)
+        self.screen.draw_text(&self.battery.display_str(), 140, 112);
+        // Mode at (222,112)
         self.screen.draw_text("AUTO", 222, 112);
 
         self.screen.flush();
