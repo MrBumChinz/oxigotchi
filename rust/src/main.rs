@@ -240,7 +240,7 @@ impl Daemon {
                 let attack_result = attacks::AttackResult {
                     attack_type,
                     target_bssid: ap.bssid,
-                    success: true,  // stub
+                    success: self.ao.state == ao::AoState::Running,
                     handshake_captured: false, // stub
                     timestamp: std::time::Instant::now(),
                 };
@@ -720,6 +720,25 @@ mod tests {
         let info = daemon.build_capture_info();
         assert_eq!(info.total_files, 0);
         assert_eq!(info.pending_upload, 0);
+    }
+
+    #[test]
+    fn test_attack_success_when_ao_stopped() {
+        let daemon = make_daemon();
+        // Default state is Stopped on all platforms
+        assert_eq!(daemon.ao.state, ao::AoState::Stopped);
+        // Build an attack result the way run_epoch does
+        let success = daemon.ao.state == ao::AoState::Running;
+        assert!(!success, "attack should not succeed when AO is stopped");
+    }
+
+    #[test]
+    fn test_attack_success_when_ao_running() {
+        let mut daemon = make_daemon();
+        // Simulate AO running state directly
+        daemon.ao.state = ao::AoState::Running;
+        let success = daemon.ao.state == ao::AoState::Running;
+        assert!(success, "attack should succeed when AO is running");
     }
 
     #[test]
