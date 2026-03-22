@@ -155,6 +155,14 @@ impl Daemon {
             info!("PiSugar not detected");
         }
 
+        // Bluetooth tethering — MUST happen before WiFi monitor mode.
+        // The BCM43436B0 shares UART between WiFi and BT; once WiFi enters
+        // monitor mode the BT UART init times out. Power on BT first.
+        match self.bluetooth.setup() {
+            Ok(()) => info!("bluetooth setup complete: {}", self.bluetooth.status_str()),
+            Err(e) => log::warn!("bluetooth setup failed: {e}"),
+        }
+
         // Start WiFi monitor mode
         match self.wifi.start_monitor() {
             Ok(()) => info!("WiFi monitor mode started"),
@@ -186,12 +194,6 @@ impl Daemon {
         ];
         let loaded = self.lua.load_plugins_from_dir("/etc/oxigotchi/plugins", &plugin_configs);
         info!("loaded {loaded} Lua plugin(s)");
-
-        // Bluetooth tethering
-        match self.bluetooth.setup() {
-            Ok(()) => info!("bluetooth setup complete: {}", self.bluetooth.status_str()),
-            Err(e) => log::warn!("bluetooth setup failed: {e}"),
-        }
 
         // USB RNDIS network setup
         self.network.probe();
