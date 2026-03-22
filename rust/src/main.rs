@@ -504,9 +504,9 @@ impl Daemon {
         let lv_str = format!("Lv {}", xp.level);
         self.screen.draw_text(&lv_str, 125, 65);
         // Bar: fixed position so layout works for Lv 1 through Lv 999
-        let bar_x: u32 = 160;
+        let bar_x: u32 = 168; // gap after "Lv 100" (ends ~x=155)
         let bar_y: u32 = 66;
-        let bar_w: u32 = 88; // extends to x=248
+        let bar_w: u32 = 80; // extends to x=248
         let bar_h: u32 = 7;
         let needed = xp.xp_to_next_level();
         let filled_w = if needed > 0 {
