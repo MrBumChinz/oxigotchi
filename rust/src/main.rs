@@ -106,6 +106,16 @@ impl Daemon {
 
     /// Boot sequence: init display, probe hardware, scan existing captures, start AO.
     fn boot(&mut self) {
+        // Load saved XP/mood from disk
+        let xp_path = std::path::Path::new(personality::DEFAULT_XP_SAVE_PATH);
+        let (xp, mood) = personality::XpTracker::load(xp_path);
+        self.epoch_loop.personality.xp = xp;
+        self.epoch_loop.personality.mood = personality::Mood::new(mood);
+        info!("loaded XP: Lv {} ({} xp), mood {:.2}",
+            self.epoch_loop.personality.xp.level,
+            self.epoch_loop.personality.xp.xp_total,
+            mood);
+
         // Display boot screen with debug face (Feature 7: debug on boot)
         let boot_face_key = self.epoch_loop.personality.variety.boot_face();
         let boot_face = if boot_face_key == "debug" {
