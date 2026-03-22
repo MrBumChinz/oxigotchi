@@ -10,12 +10,13 @@
 
 ---
 
-## Rust Implementation — Current State
+## Rust Implementation — Current State (Updated 2026-03-22)
 
-**Source:** `rust/src/main.rs` → `update_display()`
-**Renderer:** `rust/src/display/mod.rs` → `Screen` struct
+**Source:** `rust/src/main.rs` → `update_display()` (epoch display) and `boot()` (boot screen)
+**Renderer:** `rust/src/display/mod.rs` → `Screen` struct with `draw_text`, `draw_bitmap`, `draw_indicator`
 **Fonts:** `rust/src/display/fonts.rs` → ProFont bitmap fonts via `profont` crate
 **Faces:** `rust/src/display/faces.rs` → 120x66 1-bit bitmaps compiled in from `faces/*.raw`
+**Lua indicators:** `rust/src/display/mod.rs` → `draw_indicator()` for Lua-registered elements
 
 ### Rust Font Mapping
 
@@ -83,41 +84,109 @@ BOTTOM BAR:
 ```
 
 ```
-RUST (current — gaps marked with ✗):
+RUST (current — all indicators implemented):
 ┌──────────────────────────────────────────────────────────┐
-│ AO: 0/0 | 00:00:00           BAT100%  UP: 00:00:00       │  Y=0  all Small 9pt
-│ (0,0)                       (155,0)    (185,0)            │
-│                                                    ✗ BT  │  ✗ MISSING bluetooth
-│                                                  ✗ APs   │  ✗ MISSING ao_aps
+│ AO: 0/0 | 00:01:31    APs:0       UP: 00:01:31          │  Y=0  top bar (Small 9pt)
+│ (0,0)                 (145,0)      (185,0)               │
 ├──────────────────────────────────────────────────────────┤  Y=14 line1
-│                      Bull status msg...                  │  (125,20) Medium ✓
-│  ┌────────────┐                                          │  (0,16) bitmap ✓
-│  │ BULL PNG   │                                          │
-│  │ 120×66     │                                          │
-│  └────────────┘                                          │
+│                     Bull status msg                      │  (125,20) Medium 10pt
+│  ┌────────────┐     word-wrapped                         │  word wrap at 20 chars
+│  │ BULL PNG   │                                          │  (0,16) 120x66 bitmap
+│  │ 120×66     │     Lv 100 [████████████████]            │  (125,73) text + (168,74) bar
+│  │            │     mem  cpu freq temp                    │  (125,85) labels
+│  └────────────┘     46%  13% 1.0G 55C                    │  (125,95) values
 │                                                          │
-│  USB:10.0.0.2 :8080                                      │  (0,95) ✓
+│  USB:10.0.0.2 :8080  (or BT:IP, rotates)                │  (0,95) Small 9pt
 ├──────────────────────────────────────────────────────────┤  Y=108 line2
-│ CRASH:0  PWND:0  APs:0                            AUTO  │  Y=109 all Small 9pt
-│ (0,109)  (70,109)(140,109)                     (222,109) │
+│ CRASH:0  WWW:C  BT:C  CHG=100%                   AUTO   │  Y=112 (Small 9pt)
+│ (0)      (48)   (86)  (118)                      (228)   │  evenly spaced
+└──────────────────────────────────────────────────────────┘
+
+BOOT SCREEN (shown for ~5s on startup):
+┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│              ┌────────────┐                              │
+│              │ DEBUG/AWAKE│                              │  (65,5) centered 120x66
+│              │  BULL PNG  │                              │
+│              │            │                              │
+│              └────────────┘                              │
+│                                                          │
+│              Hi! I'm oxigotchi!                          │  (~x centered, y=80) Bold 12pt
+│              Starting v0.1.0                             │  (~x centered, y=95) Bold 12pt
+│                                                          │
 └──────────────────────────────────────────────────────────┘
 ```
 
-### Gap Analysis — Rust vs Python
+### Element Reference — Rust Epoch Display
 
-| # | Element | Python | Rust Current | Fix Needed |
-|---|---------|--------|-------------|------------|
-| 1 | AO status | (0,0) Small 9pt `"AO: V/T \| HH:MM \| CH:1,6,11"` | (0,0) Small 9pt `"AO: H/C \| HH:MM:SS"` | **Match format** — add channels |
-| 2 | BT status | (115,0) Bold+Medium `"BT C"` / `"BT -"` | **MISSING** | **Add** at (115,0) |
-| 3 | Battery | (140,0) Bold+Medium `"BAT 85%"` | (155,0) Small `"BAT100%"` | **Move to (140,0)**, match font |
-| 4 | Uptime | (185,0) Bold+Medium `"UP HH:MM:SS"` | (185,0) Small `"UP: HH:MM:SS"` | **Match font** (Bold+Medium) |
-| 5 | AO APs | (145,0) Small 9pt `"APs:N"` | (140,109) Small — **wrong zone** | **Move to (145,0)** top bar |
-| 6 | Face | (0,16) PNG 120x66 | (0,16) bitmap 120x66 | ✓ Correct |
-| 7 | Status | (125,20) Medium word-wrap | (125,20) Medium word-wrap | ✓ Correct |
-| 8 | IP display | (0,95) Small `"USB:10.0.0.2 :8080"` | (0,95) Small | ✓ Correct |
-| 9 | Crash | (0,112) Small `"CRASH:N"` | (0,109) Small | **Move to y=112** |
-| 10 | PWND | **hidden** in AO mode | (70,109) shown | **Remove** — not shown in AO mode |
-| 11 | Mode | (222,112) Bold 10pt `"AUTO"` | (222,109) Small 9pt | **Move to y=112**, use bold font |
+| # | Element | Position | Font | Content | Source |
+|---|---------|----------|------|---------|--------|
+| 1 | AO status | (0, 0) | Small 9pt | `"AO: V/T \| HH:MM:SS"` | main.rs:543 |
+| 2 | APs count | (145, 0) | Small 9pt | `"APs:N"` | main.rs:551 |
+| 3 | Uptime | (185, 0) | Small 9pt | `"UP: HH:MM:SS"` | main.rs:554 |
+| 4 | Line 1 | y=14 | — | full width divider | main.rs:557 |
+| 5 | Face | (0, 16) | — | 120x66 bull bitmap | main.rs:560, faces.rs |
+| 6 | Status | (125, 20) | Medium 10pt | bull message/joke, word-wrap 20c | main.rs:564 |
+| 7 | XP level | (125, 73) | Small 9pt | `"Lv N"` | main.rs:571 |
+| 8 | XP bar | (168, 74) | — | 80x7 pixel bar, outlined+filled | main.rs:573-596 |
+| 9 | Memtemp labels | (125, 85) | Small 9pt | `"mem  cpu freq temp"` | main.rs:604 |
+| 10 | Memtemp values | (125, 95) | Small 9pt | `"46%  13% 1.0G 55C"` | main.rs:618-625 |
+| 11 | IP display | (0, 95) | Small 9pt | `"USB:10.0.0.2 :8080"` or `"BT:IP"` | main.rs:628-631 |
+| 12 | Line 2 | y=108 | — | full width divider | main.rs:634 |
+| 13 | CRASH | (0, 112) | Small 9pt | `"CRASH:N"` | main.rs:637 |
+| 14 | WWW | (48, 112) | Small 9pt | `"WWW:C"` / `"WWW:-"` / `"WWW:."` | main.rs:638-641 |
+| 15 | BT | (86, 112) | Small 9pt | `"BT:C"` / `"BT:-"` / `"BT:P"` | main.rs:643 |
+| 16 | Battery | (118, 112) | Small 9pt | `"CHG=100%"` / `"BAT=75%"` | main.rs:645, pisugar |
+| 17 | Mode | (228, 112) | Small 9pt | `"AUTO"` | main.rs:647 |
+
+### Boot Screen Layout
+
+| Element | Position | Font | Content |
+|---------|----------|------|---------|
+| Face | (65, 5) centered | — | debug.png or awake.png bitmap 120x66 |
+| Welcome line 1 | centered, y=80 | Bold 12pt | `"Hi! I'm oxigotchi!"` |
+| Welcome line 2 | centered, y=95 | Bold 12pt | `"Starting v0.1.0"` |
+
+### Changes This Session (2026-03-22)
+
+**Personality system ported from Python:**
+- 48 two-part bull jokes across 11 faces (jokes.rs)
+- 119 bull status messages across 19 faces (messages.rs)
+- Face variety engine: milestones (1=excited,10=cool,25=intense,50=smart,100=grateful), level-up every 10, capture cycling, idle rotation (mod 50), time-of-day (2-5am=sleep, 6-8am=motivated, 22-1am=cool), friend/upload faces, debug on boot, 5% rare face (variety.rs)
+- Joke phase cycling: question 2 epochs, punchline 3 epochs, 30% chance per epoch
+- Status text resets when face changes (no stale message mismatch)
+
+**AO module:**
+- TDM cycling removed — AO runs continuously
+- Channel hopping removed — AO handles it
+
+**Bluetooth tethering:**
+- Full `setup()` flow: power on → scan → pair → trust → nmcli profile → connect → hide
+- Auto-detect first named device when phone_name is empty
+- ANSI code stripping for bluetoothctl output parsing
+- Periodic `check_status()` every epoch (probes bnep0)
+- Auto-reconnect with backoff
+- `[bluetooth]` config section in config.toml
+- No hardcoded device names — all from config
+
+**Display indicators restored:**
+- Top bar: AO status, APs count, uptime
+- XP bar with graphical progress (pixel-drawn, not Unicode)
+- System stats: mem/cpu/freq/temp from /proc and /sys
+- Bottom bar: CRASH, WWW:C/-, BT:C/-, CHG=/BAT=, AUTO — evenly spaced
+- IP display rotates USB/BT addresses
+- Boot screen: centered face + centered bold welcome text
+
+**Internet check:**
+- Ping runs regardless of usb0 state (internet may come via bnep0)
+- `check_internet()` called every epoch
+
+**XP persistence:**
+- XP/mood loaded from exp_stats.json on boot (was missing)
+- Periodic save every 5 epochs
+
+**Battery indicator:**
+- Shows CHG= when charging/full, BAT= when on battery (matches Python pisugarx)
 
 ### Face Variety — Python Reference (from on_epoch, lines 1510-1667)
 
