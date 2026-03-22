@@ -163,6 +163,57 @@ impl Screen {
         self.last_hash = 0;
         self.flush();
     }
+
+    /// Draw a Lua-registered indicator on the framebuffer.
+    /// Handles label prefix, font selection, and word-wrap.
+    pub fn draw_indicator(&mut self, ind: &crate::lua::Indicator) {
+        let text = if let Some(ref label) = ind.label {
+            format!("{}: {}", label, ind.value)
+        } else {
+            ind.value.clone()
+        };
+
+        // Font-specific baseline offset: Medium=8px (matches draw_status), Small=7px (matches draw_text)
+        let baseline_offset = match ind.font {
+            crate::lua::IndicatorFont::Medium => 8i32,
+            crate::lua::IndicatorFont::Small => 7i32,
+        };
+
+        if ind.wrap_width > 0 && text.len() > ind.wrap_width as usize {
+            // Word-wrap rendering (matches draw_status logic)
+            let style = match ind.font {
+                crate::lua::IndicatorFont::Medium => fonts::medium(),
+                crate::lua::IndicatorFont::Small => fonts::small(),
+            };
+            let line_height = match ind.font {
+                crate::lua::IndicatorFont::Medium => 12i32,
+                crate::lua::IndicatorFont::Small => 10i32,
+            };
+            let max_chars = ind.wrap_width as usize;
+            let mut y = ind.y + baseline_offset;
+            let mut remaining = text.as_str();
+            while !remaining.is_empty() && y < DISPLAY_HEIGHT as i32 {
+                if remaining.len() <= max_chars {
+                    let _ = Text::new(remaining, Point::new(ind.x, y), style).draw(&mut self.fb);
+                    break;
+                }
+                let break_at = remaining[..max_chars]
+                    .rfind(' ')
+                    .unwrap_or(max_chars);
+                let (line, rest) = remaining.split_at(break_at);
+                let _ = Text::new(line, Point::new(ind.x, y), style).draw(&mut self.fb);
+                remaining = rest.trim_start();
+                y += line_height;
+            }
+        } else {
+            // Single-line rendering
+            let style = match ind.font {
+                crate::lua::IndicatorFont::Medium => fonts::medium(),
+                crate::lua::IndicatorFont::Small => fonts::small(),
+            };
+            let _ = Text::new(&text, Point::new(ind.x, ind.y + baseline_offset), style).draw(&mut self.fb);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -281,5 +332,41 @@ mod tests {
         screen.draw_status("");
         screen.draw_labeled_value("", "", 0, 0);
         // No crash, may or may not set pixels (font draws colon separator)
+    }
+
+    #[test]
+    fn test_draw_indicator_sets_pixels() {
+        use crate::lua::{Indicator, IndicatorFont};
+        let mut screen = Screen::new(test_config());
+        let ind = Indicator {
+            name: "test".into(),
+            value: "hello".into(),
+            x: 10,
+            y: 50,
+            label: None,
+            font: IndicatorFont::Small,
+            wrap_width: 0,
+        };
+        screen.draw_indicator(&ind);
+        let has_pixels = (10..60).any(|x| (50..60).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        assert!(has_pixels, "draw_indicator should set pixels");
+    }
+
+    #[test]
+    fn test_draw_indicator_with_label() {
+        use crate::lua::{Indicator, IndicatorFont};
+        let mut screen = Screen::new(test_config());
+        let ind = Indicator {
+            name: "up".into(),
+            value: "02:15".into(),
+            x: 185,
+            y: 0,
+            label: Some("UP".into()),
+            font: IndicatorFont::Small,
+            wrap_width: 0,
+        };
+        screen.draw_indicator(&ind);
+        let has_pixels = (185..240).any(|x| (0..10).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        assert!(has_pixels, "draw_indicator with label should set pixels");
     }
 }
