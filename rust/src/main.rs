@@ -1279,13 +1279,20 @@ impl Daemon {
         }
         s.ap_list = ap_entries;
 
-        // Sync whitelist for web dashboard
-        s.whitelist = self.attacks.whitelist.iter().map(|mac| {
+        // Sync whitelist for web dashboard (MAC + SSID entries)
+        let mut wl: Vec<web::WhitelistEntry> = self.attacks.whitelist.iter().map(|mac| {
             web::WhitelistEntry {
                 value: mac.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"),
                 entry_type: "MAC".into(),
             }
         }).collect();
+        for ssid in &self.wifi.tracker.ssid_whitelist {
+            wl.push(web::WhitelistEntry {
+                value: ssid.clone(),
+                entry_type: "SSID".into(),
+            });
+        }
+        s.whitelist = wl;
 
         // Sync plugin list for web dashboard
         s.plugin_list = self.lua.get_web_plugin_list().into_iter().map(|(meta, enabled, x, y)| {

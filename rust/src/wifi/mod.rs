@@ -153,6 +153,11 @@ impl ApTracker {
     /// Update or insert an AP. Returns true if this is a new AP.
     pub fn update(&mut self, ap: AccessPoint) -> bool {
         let is_new = !self.aps.contains_key(&ap.bssid);
+        // Mark whitelisted if SSID matches
+        let mut ap = ap;
+        if self.ssid_whitelist.iter().any(|s| s.eq_ignore_ascii_case(&ap.ssid)) {
+            ap.whitelisted = true;
+        }
         self.aps.insert(ap.bssid, ap);
         is_new
     }
@@ -179,10 +184,16 @@ impl ApTracker {
         aps
     }
 
-    /// Add an SSID to the whitelist.
+    /// Add an SSID to the whitelist. Also marks any already-tracked APs with that SSID.
     pub fn add_ssid_whitelist(&mut self, ssid: &str) {
         if !self.ssid_whitelist.iter().any(|s| s == ssid) {
             self.ssid_whitelist.push(ssid.to_string());
+            // Mark existing APs with this SSID
+            for ap in self.aps.values_mut() {
+                if ap.ssid.eq_ignore_ascii_case(ssid) {
+                    ap.whitelisted = true;
+                }
+            }
         }
     }
 
