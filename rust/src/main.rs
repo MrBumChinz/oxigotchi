@@ -427,15 +427,22 @@ impl Daemon {
             #[cfg(not(unix))]
             let iface_exists = self.wifi.state == wifi::WifiState::Monitor;
 
-            let health = if iface_exists {
-                recovery::HealthCheck::Ok
-            } else {
-                // Interface gone — likely firmware crash. Reset internal state.
+            let health = if !iface_exists {
+                // Interface gone — hard firmware crash
                 if self.wifi.state == wifi::WifiState::Monitor {
                     log::warn!("wlan0mon disappeared — firmware crash detected");
                     self.wifi.state = wifi::WifiState::Down;
                 }
                 recovery::HealthCheck::Missing
+            } else if self.ao.crash_count >= 3 {
+                // Interface up but AO keeps crashing — firmware degraded (PSM wedged)
+                log::warn!(
+                    "wlan0mon exists but AO crashed {} times — firmware degraded",
+                    self.ao.crash_count
+                );
+                recovery::HealthCheck::Unresponsive
+            } else {
+                recovery::HealthCheck::Ok
             };
             let action = self.recovery.process_health(health);
             self.handle_recovery_action(action);
@@ -617,13 +624,18 @@ impl Daemon {
     fn process_web_commands(&mut self) {
         let mut any_command = false;
 
-        let (mode_switch, rate_change, restart) = {
+        let (mode_switch, rate_change, restart, shutdown, bt_toggle, pwn_restart) = {
             let mut s = self.shared_state.lock().unwrap();
             let mode = s.pending_mode_switch.take();
             let rate = s.pending_rate_change.take();
             let restart = s.pending_restart;
             s.pending_restart = false;
-            (mode, rate, restart)
+            let shutdown = s.pending_shutdown;
+            s.pending_shutdown = false;
+            let bt_toggle = s.pending_bt_toggle.take();
+            let pwn_restart = s.pending_pwnagotchi_restart;
+            s.pending_pwnagotchi_restart = false;
+            (mode, rate, restart, shutdown, bt_toggle, pwn_restart)
         };
 
         if let Some(mode) = mode_switch {
@@ -659,6 +671,34 @@ impl Daemon {
                 Ok(()) => info!("AO restarted successfully"),
                 Err(e) => log::error!("AO restart failed: {e}"),
             }
+        }
+
+        if shutdown {
+            any_command = true;
+            info!("web: system shutdown requested");
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("sudo")
+                    .args(["shutdown", "-h", "now"])
+                    .spawn();
+            }
+        }
+
+        if pwn_restart {
+            any_command = true;
+            info!("web: oxigotchi service restart requested");
+            #[cfg(unix)]
+            {
+                let _ = std::process::Command::new("sudo")
+                    .args(["systemctl", "restart", "rusty-oxigotchi"])
+                    .spawn();
+            }
+        }
+
+        if let Some(visible) = bt_toggle {
+            any_command = true;
+            info!("web: BT visibility set to {visible}");
+            // TODO: implement bluetooth.set_discoverable(visible)
         }
 
         // Process pending plugin position updates
@@ -1321,6 +1361,8 @@ impl Daemon {
                 match self.wifi.start_monitor() {
                     Ok(()) => {
                         info!("soft recovery: monitor mode restored");
+                        // Reset AO crash counter so we don't immediately re-trigger
+                        self.ao.reset();
                         // Restart AO
                         match self.ao.start() {
                             Ok(()) => info!("soft recovery: AO restarted (PID {})", self.ao.pid),
