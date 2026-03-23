@@ -698,7 +698,41 @@ impl Daemon {
         if let Some(visible) = bt_toggle {
             any_command = true;
             info!("web: BT visibility set to {visible}");
-            // TODO: implement bluetooth.set_discoverable(visible)
+            if visible {
+                self.bluetooth.show();
+            } else {
+                self.bluetooth.hide();
+            }
+        }
+
+        // Process BT scan request
+        let bt_scan_needed = {
+            let s = self.shared_state.lock().unwrap();
+            s.bt_scan_in_progress && s.bt_scan_results.is_empty()
+        };
+        if bt_scan_needed {
+            info!("web: BT scan triggered");
+            let devices = self.bluetooth.scan_devices();
+            let results: Vec<web::BtScanDevice> = devices.into_iter().map(|(mac, name)| {
+                web::BtScanDevice { mac, name }
+            }).collect();
+            let mut s = self.shared_state.lock().unwrap();
+            s.bt_scan_results = results;
+            s.bt_scan_in_progress = false;
+        }
+
+        // Process BT pair request
+        let bt_pair_mac = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_bt_pair.take()
+        };
+        if let Some(mac) = bt_pair_mac {
+            any_command = true;
+            info!("web: BT pair with {mac}");
+            match self.bluetooth.pair_and_connect(&mac) {
+                Ok(()) => info!("BT paired and connected to {mac}"),
+                Err(e) => log::error!("BT pair failed: {e}"),
+            }
         }
 
         // Process pending plugin position updates

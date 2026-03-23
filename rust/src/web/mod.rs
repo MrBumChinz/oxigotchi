@@ -128,6 +128,9 @@ pub struct DaemonState {
     pub pending_pwnagotchi_restart: bool,
     pub pending_attack_toggle: Option<AttackToggle>,
     pub pending_bt_toggle: Option<bool>,
+    pub pending_bt_pair: Option<String>,
+    pub bt_scan_results: Vec<BtScanDevice>,
+    pub bt_scan_in_progress: bool,
     pub pending_settings: Option<SettingsUpdate>,
 
     // -- plugins --
@@ -233,6 +236,9 @@ impl DaemonState {
             pending_pwnagotchi_restart: false,
             pending_attack_toggle: None,
             pending_bt_toggle: None,
+            pending_bt_pair: None,
+            bt_scan_results: Vec::new(),
+            bt_scan_in_progress: false,
             pending_settings: None,
             plugin_list: Vec::new(),
             pending_plugin_updates: Vec::new(),
@@ -404,6 +410,19 @@ pub struct BluetoothInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct BtVisibilityToggle {
     pub visible: bool,
+}
+
+/// BT scan result entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtScanDevice {
+    pub mac: String,
+    pub name: String,
+}
+
+/// BT pair request.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BtPairRequest {
+    pub mac: String,
 }
 
 /// Recovery/health info returned by /api/recovery.
@@ -594,6 +613,8 @@ pub const API_RESTART_PI: &str = "/api/restart-pi";
 pub const API_RESTART_SSH: &str = "/api/restart-ssh";
 pub const API_RESTART_PWN: &str = "/api/restart-pwn";
 pub const API_SETTINGS: &str = "/api/settings";
+pub const API_BT_SCAN: &str = "/api/bluetooth/scan";
+pub const API_BT_PAIR: &str = "/api/bluetooth/pair";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -1177,6 +1198,38 @@ async fn restart_ssh_handler() -> Json<ActionResponse> {
     })
 }
 
+/// POST /api/bluetooth/scan -> trigger BT scan, return cached results
+async fn bt_scan_handler(State(state): State<SharedState>) -> Json<Vec<BtScanDevice>> {
+    let mut s = state.lock().unwrap();
+    if s.bt_scan_in_progress {
+        // Return current cached results while scan is in progress
+        return Json(s.bt_scan_results.clone());
+    }
+    // Signal main loop to run a scan
+    s.bt_scan_in_progress = true;
+    s.bt_scan_results.clear();
+    Json(Vec::new())
+}
+
+/// GET /api/bluetooth/scan -> get cached scan results
+async fn bt_scan_results_handler(State(state): State<SharedState>) -> Json<Vec<BtScanDevice>> {
+    let s = state.lock().unwrap();
+    Json(s.bt_scan_results.clone())
+}
+
+/// POST /api/bluetooth/pair -> pair with a device by MAC
+async fn bt_pair_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<BtPairRequest>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_bt_pair = Some(body.mac.clone());
+    Json(ActionResponse {
+        ok: true,
+        message: format!("Pairing with {} queued", body.mac),
+    })
+}
+
 /// POST /api/settings -> update device settings (name, etc.)
 async fn settings_handler(
     State(state): State<SharedState>,
@@ -1370,6 +1423,8 @@ pub fn build_router(state: SharedState) -> Router {
         .route(API_RESTART_SSH, post(restart_ssh_handler))
         .route(API_RESTART_PWN, post(restart_pwn_handler))
         .route(API_SETTINGS, post(settings_handler))
+        .route(API_BT_SCAN, get(bt_scan_results_handler).post(bt_scan_handler))
+        .route(API_BT_PAIR, post(bt_pair_handler))
         .with_state(state)
 }
 

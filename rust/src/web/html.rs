@@ -282,9 +282,16 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="label">Internet</div><div class="value" id="bt-internet">-</div>
 <div class="label">Retries</div><div class="value" id="bt-retries">-</div>
 </div>
-<div class="toggle-row" style="border-bottom:none">
+<div class="toggle-row">
 <div class="toggle-info"><div class="toggle-label">Discoverable</div><div class="toggle-desc">Make device visible for BT pairing</div></div>
 <label class="switch"><input type="checkbox" id="bt-visible" onchange="toggleBtVisible(this.checked)"><span class="slider"></span></label>
+</div>
+<div style="margin-top:10px;padding-top:10px;border-top:1px solid #0f3460">
+<div style="font-size:12px;color:#888;margin-bottom:8px">Phone Pairing</div>
+<div class="action-btns" style="margin-bottom:8px">
+<button class="action-btn btn-restart" id="bt-scan-btn" onclick="btScan()">Scan for Devices</button>
+</div>
+<div id="bt-scan-results"></div>
 </div>
 </div>
 
@@ -809,6 +816,53 @@ function restartSSH() {
 function toggleBtVisible(visible) {
     api('POST', '/api/bluetooth', {visible: visible}).then(function(r) {
         toast('Bluetooth ' + (visible ? 'discoverable' : 'hidden'));
+    });
+}
+
+function btScan() {
+    var btn = document.getElementById('bt-scan-btn');
+    btn.textContent = 'Scanning...';
+    btn.disabled = true;
+    document.getElementById('bt-scan-results').innerHTML = '<div style="color:#888;font-size:12px">Scanning for nearby devices (~10s)...</div>';
+    api('POST', '/api/bluetooth/scan', {}).then(function() {
+        // Poll for results
+        var poll = setInterval(function() {
+            api('GET', '/api/bluetooth/scan').then(function(devices) {
+                if (!devices) return;
+                // Check if scan is done (results came back or timeout)
+                if (devices.length > 0 || btn.textContent === 'Scanning...') {
+                    btn.textContent = 'Scan for Devices';
+                    btn.disabled = false;
+                }
+                if (devices.length > 0) {
+                    clearInterval(poll);
+                    var html = '<div style="font-size:11px;color:#888;margin-bottom:4px">Found ' + devices.length + ' device(s). Tap to pair:</div>';
+                    devices.forEach(function(d) {
+                        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid #0f3460">' +
+                            '<div><div style="font-size:13px;font-weight:bold">' + esc(d.name) + '</div>' +
+                            '<div style="font-size:10px;color:#888">' + esc(d.mac) + '</div></div>' +
+                            '<button class="wl-btn wl-btn-add" style="padding:6px 12px" onclick="btPair(\'' + esc(d.mac) + '\')">Pair</button></div>';
+                    });
+                    document.getElementById('bt-scan-results').innerHTML = html;
+                }
+            });
+        }, 2000);
+        // Stop polling after 20s regardless
+        setTimeout(function() {
+            clearInterval(poll);
+            btn.textContent = 'Scan for Devices';
+            btn.disabled = false;
+        }, 20000);
+    });
+}
+
+function btPair(mac) {
+    toast('Pairing with ' + mac + '...');
+    api('POST', '/api/bluetooth/pair', {mac: mac}).then(function(r) {
+        if (r && r.ok) {
+            toast(r.message);
+            document.getElementById('bt-scan-results').innerHTML = '<div style="color:#00d4aa;font-size:12px">Pairing in progress...</div>';
+        }
     });
 }
 

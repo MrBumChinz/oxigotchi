@@ -232,6 +232,27 @@ pub fn parse_scan_for_device(output: &str, name: &str, mac: &str) -> Option<Stri
     None
 }
 
+/// Parse ALL discovered devices from bluetoothctl scan output.
+/// Returns a list of (MAC, name) pairs.
+pub fn parse_scan_all_devices(output: &str) -> Vec<(String, String)> {
+    let mut devices = Vec::new();
+    for raw_line in output.lines() {
+        let line = strip_ansi(raw_line);
+        if let Some(rest) = line.strip_prefix("[NEW] Device ") {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            if !parts.is_empty() {
+                let mac = parts[0].to_string();
+                let name = if parts.len() >= 2 { parts[1].to_string() } else { String::new() };
+                // Skip entries where name is just the MAC echoed back
+                if !name.is_empty() && !name.contains('-') && name != mac {
+                    devices.push((mac, name));
+                }
+            }
+        }
+    }
+    devices
+}
+
 /// Parse an IPv4 address from `ip -4 addr show bnep0` output.
 ///
 /// Looks for a line like `inet 192.168.44.128/24 ...` and extracts the IP.
@@ -448,6 +469,80 @@ impl BtTether {
         self.state = BtState::Disconnected;
         self.internet_available = false;
         self.ip_address = None;
+    }
+
+    /// Scan for nearby BT devices (blocking, ~10s). Returns list of (MAC, name).
+    pub fn scan_devices(&self) -> Vec<(String, String)> {
+        #[cfg(unix)]
+        {
+            info!("BT: scanning for devices (10s)...");
+            let _ = run_bluetoothctl(&build_power_on_args());
+            let _ = run_bluetoothctl(&build_agent_on_args());
+            match run_bluetoothctl(&build_scan_on_args()) {
+                Ok(output) => return parse_scan_all_devices(&output),
+                Err(e) => {
+                    log::error!("BT scan failed: {e}");
+                    return Vec::new();
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        Vec::new()
+    }
+
+    /// Pair with a device by MAC, trust it, create nmcli profile, and connect.
+    pub fn pair_and_connect(&mut self, mac: &str) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            info!("BT: pairing with {mac}");
+            self.state = BtState::Pairing;
+
+            // Power on + agent
+            let _ = run_bluetoothctl(&build_power_on_args());
+            let _ = run_bluetoothctl(&build_agent_on_args());
+            let _ = run_bluetoothctl(&build_default_agent_args());
+
+            // Pair and trust
+            let _ = run_bluetoothctl(&build_pair_args(mac));
+            let _ = run_bluetoothctl(&build_trust_args(mac));
+
+            // Ensure nmcli profile
+            let con_name = if self.config.connection_name.is_empty() {
+                generate_connection_name(mac)
+            } else {
+                self.config.connection_name.clone()
+            };
+            let profile_exists = run_nmcli(&build_nmcli_show_args(&con_name)).is_ok();
+            if !profile_exists {
+                info!("BT: creating nmcli profile '{con_name}'");
+                let _ = run_nmcli(&build_nmcli_add_pan_args(&con_name, mac));
+            }
+
+            // Store resolved values
+            self.config.phone_mac = mac.to_string();
+            self.config.connection_name = con_name;
+
+            // Connect
+            match self.connect() {
+                Ok(()) => {
+                    info!("BT: paired and connected to {mac}");
+                    if self.config.hide_after_connect {
+                        let _ = run_bluetoothctl(&build_discoverable_off_args());
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    self.state = BtState::Disconnected;
+                    Err(format!("Paired but connect failed: {e}"))
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            self.config.phone_mac = mac.to_string();
+            self.state = BtState::Connected;
+            Ok(())
+        }
     }
 
     /// Make BT adapter discoverable (visible to other devices).
