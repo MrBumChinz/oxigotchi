@@ -1551,19 +1551,14 @@ impl Daemon {
                 let _ = recovery::trigger_reboot();
             }
             recovery::RecoveryAction::GiveUp => {
-                log::error!("WiFi recovery exhausted — rebooting as last resort");
+                log::error!("WiFi recovery exhausted — giving up (no reboot to avoid loop)");
                 self.epoch_loop.personality.set_override(personality::Face::Broken);
                 self.recovery.log(
                     recovery::DiagLevel::Error,
-                    "all recovery attempts exhausted — rebooting",
+                    "all recovery attempts exhausted — WiFi offline, daemon continues",
                 );
-                self.update_display();
-                #[cfg(unix)]
-                {
-                    let _ = std::process::Command::new("sudo")
-                        .args(["reboot"])
-                        .output();
-                }
+                // Do NOT reboot — causes infinite loop when firmware is persistently broken.
+                // The daemon stays up with web dashboard accessible via USB for diagnostics.
             }
         }
     }
