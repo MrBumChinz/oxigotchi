@@ -93,8 +93,8 @@ pub struct ChannelConfig {
 impl Default for ChannelConfig {
     fn default() -> Self {
         Self {
-            channels: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-            dwell_ms: 250,
+            channels: vec![1, 6, 11],
+            dwell_ms: 2000,
             current_index: 0,
         }
     }
@@ -105,7 +105,7 @@ impl ChannelConfig {
     pub fn non_overlapping() -> Self {
         Self {
             channels: vec![1, 6, 11],
-            dwell_ms: 250,
+            dwell_ms: 2000,
             current_index: 0,
         }
     }
@@ -982,17 +982,18 @@ mod tests {
     #[test]
     fn test_channel_config_default() {
         let cc = ChannelConfig::default();
-        assert_eq!(cc.channels.len(), 11);
+        assert_eq!(cc.channels, vec![1, 6, 11]);
+        assert_eq!(cc.dwell_ms, 2000);
         assert_eq!(cc.current_channel(), 1);
     }
 
     #[test]
     fn test_channel_hop_wraps() {
         let mut cc = ChannelConfig::default();
-        for _ in 0..11 {
+        for _ in 0..3 {
             cc.next_channel();
         }
-        // After 11 hops, should wrap back to channel 1
+        // After 3 hops (1,6,11), should wrap back to channel 1
         assert_eq!(cc.current_channel(), 1);
     }
 
@@ -1023,14 +1024,14 @@ mod tests {
 
     #[test]
     fn test_channel_hop_full_cycle_default() {
-        // Hop through all 11 default channels and collect them
+        // Hop through default channels (1,6,11) and collect them
         let mut cc = ChannelConfig::default();
         let mut visited = vec![cc.current_channel()];
-        for _ in 0..11 {
+        for _ in 0..3 {
             visited.push(cc.next_channel());
         }
-        // Should visit 1,2,3,...,11,1
-        assert_eq!(visited, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 1]);
+        // Should visit 1,6,11,1
+        assert_eq!(visited, vec![1, 6, 11, 1]);
     }
 
     // ---- AP tracker tests ----
@@ -1151,7 +1152,7 @@ mod tests {
     fn test_wifi_manager_hop() {
         let mut wm = WifiManager::new();
         let ch = wm.hop_channel();
-        assert_eq!(ch, 2); // First hop from ch1 to ch2
+        assert_eq!(ch, 6); // First hop from ch1 to ch6 (default: 1,6,11)
     }
 
     #[test]
