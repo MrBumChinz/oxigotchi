@@ -232,8 +232,9 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 
 <div style="margin-bottom:8px">
-<div style="font-size:12px;color:#888;margin-bottom:4px">Channels (comma-separated)</div>
-<input type="text" id="ch-list" class="ch-input" placeholder="1,6,11" value="">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Channels</div>
+<input type="hidden" id="ch-list" value="1,6,11">
+<div id="ch-btns" style="display:flex;flex-wrap:wrap;gap:4px"></div>
 </div>
 <div style="margin-bottom:8px">
 <div style="font-size:12px;color:#888;margin-bottom:4px">Dwell Time: <span id="ch-dwell-val">2000</span>ms</div>
@@ -512,8 +513,8 @@ function refreshWifi() {
         document.getElementById('wifi-dwell').textContent = d.dwell_ms + 'ms';
         // Populate channel config card — skip if user recently applied changes (cooldown)
         if (Date.now() < _chConfigCooldown) return;
-        var chInput = document.getElementById('ch-list');
-        if (chInput && !chInput.matches(':focus')) chInput.value = d.channels.join(',');
+        document.getElementById('ch-list').value = d.channels.join(',');
+        renderChannelButtons(d.channels);
         var dwInput = document.getElementById('ch-dwell');
         if (dwInput && !dwInput.matches(':active')) { dwInput.value = d.dwell_ms; document.getElementById('ch-dwell-val').textContent = d.dwell_ms; }
         var ahToggle = document.getElementById('autohunt-toggle');
@@ -731,6 +732,36 @@ function removeWhitelist(val) {
     });
 }
 
+function renderChannelButtons(activeChannels) {
+    var container = document.getElementById('ch-btns');
+    if (!container) return;
+    var safe = [1, 6, 11];
+    var html = '';
+    for (var ch = 1; ch <= 13; ch++) {
+        var active = activeChannels.indexOf(ch) !== -1;
+        var isSafe = safe.indexOf(ch) !== -1;
+        var bg = active ? (isSafe ? '#00d4aa' : '#e67e22') : '#0f3460';
+        var fg = active ? '#1a1a2e' : '#888';
+        html += '<button onclick="toggleChannel(' + ch + ')" style="width:36px;height:32px;border:none;border-radius:6px;background:' + bg + ';color:' + fg + ';font-family:inherit;font-size:13px;font-weight:bold;cursor:pointer">' + ch + '</button>';
+    }
+    container.innerHTML = html;
+}
+
+function toggleChannel(ch) {
+    var input = document.getElementById('ch-list');
+    var channels = input.value.split(',').map(function(c){ return parseInt(c.trim()); }).filter(function(c){ return !isNaN(c) && c > 0; });
+    var idx = channels.indexOf(ch);
+    if (idx !== -1) {
+        channels.splice(idx, 1);
+    } else {
+        channels.push(ch);
+        channels.sort(function(a,b){ return a-b; });
+    }
+    if (!channels.length) channels = [1]; // at least one channel
+    input.value = channels.join(',');
+    renderChannelButtons(channels);
+}
+
 function applyChannels() {
     var chStr = document.getElementById('ch-list').value.trim();
     var dwell = parseInt(document.getElementById('ch-dwell').value) || 2000;
@@ -738,7 +769,7 @@ function applyChannels() {
     var channels = null;
     if (chStr) {
         channels = chStr.split(',').map(function(c){ return parseInt(c.trim()); }).filter(function(c){ return !isNaN(c) && c > 0 && c <= 14; });
-        if (!channels.length) { toast('Invalid channel list'); return; }
+        if (!channels.length) { toast('Select at least one channel'); return; }
     }
     _chConfigCooldown = Date.now() + 45000;
     api('POST', '/api/channels', {channels: channels, dwell_ms: dwell, autohunt: autohunt}).then(function(r) {
@@ -909,6 +940,7 @@ function saveSettings() {
 }
 
 // --- Initial load & auto-refresh ---
+renderChannelButtons([1, 6, 11]); // default until refreshWifi populates
 refreshStatus();
 setTimeout(refreshBattery, 500);
 setTimeout(refreshBluetooth, 1000);
