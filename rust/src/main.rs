@@ -511,6 +511,68 @@ impl Daemon {
             lua::config::write_plugins_toml(&self.lua.get_plugin_configs());
             info!("persisted plugin positions to plugins.toml");
         }
+
+        // Process pending whitelist add/remove
+        let (wl_add, wl_remove) = {
+            let mut s = self.shared_state.lock().unwrap();
+            (s.pending_whitelist_add.take(), s.pending_whitelist_remove.take())
+        };
+        if let Some(add) = wl_add {
+            // Parse MAC address string to [u8; 6]
+            let parts: Vec<&str> = add.value.split(':').collect();
+            if parts.len() == 6 {
+                let mut mac = [0u8; 6];
+                let mut ok = true;
+                for (i, p) in parts.iter().enumerate() {
+                    match u8::from_str_radix(p, 16) {
+                        Ok(b) => mac[i] = b,
+                        Err(_) => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    if !self.attacks.is_whitelisted(&mac) {
+                        self.attacks.whitelist.push(mac);
+                        info!("web: whitelist added {}", add.value);
+                    }
+                }
+            }
+        }
+        if let Some(remove) = wl_remove {
+            let parts: Vec<&str> = remove.split(':').collect();
+            if parts.len() == 6 {
+                let mut mac = [0u8; 6];
+                let mut ok = true;
+                for (i, p) in parts.iter().enumerate() {
+                    match u8::from_str_radix(p, 16) {
+                        Ok(b) => mac[i] = b,
+                        Err(_) => { ok = false; break; }
+                    }
+                }
+                if ok {
+                    self.attacks.whitelist.retain(|m| m != &mac);
+                    info!("web: whitelist removed {}", remove);
+                }
+            }
+        }
+
+        // Process pending channel config
+        let ch_config = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_channel_config.take()
+        };
+        if let Some(cfg) = ch_config {
+            if let Some(channels) = cfg.channels {
+                if !channels.is_empty() {
+                    self.wifi.channel_config.channels = channels.clone();
+                    self.wifi.channel_config.current_index = 0;
+                    info!("web: channels set to {:?}", channels);
+                }
+            }
+            if let Some(dwell) = cfg.dwell_ms {
+                self.wifi.channel_config.dwell_ms = dwell;
+                info!("web: dwell set to {}ms", dwell);
+            }
+        }
     }
 
     /// Battery state snapshot: (level, charging, voltage_mv, low, critical, available).
@@ -689,6 +751,26 @@ impl Daemon {
         s.screen_width = self.screen.fb.width;
         s.screen_height = self.screen.fb.height;
         s.screen_bytes = self.screen.fb.as_bytes().to_vec();
+
+        // Sync AP list for web dashboard
+        s.ap_list = self.wifi.tracker.sorted_by_rssi().iter().map(|ap| {
+            web::ApEntry {
+                bssid: ap.bssid_str(),
+                ssid: if ap.ssid.is_empty() { "(hidden)".into() } else { ap.ssid.clone() },
+                rssi: ap.rssi as i16,
+                channel: ap.channel,
+                clients: ap.client_count,
+                has_handshake: false, // TODO: cross-reference with captures
+            }
+        }).collect();
+
+        // Sync whitelist for web dashboard
+        s.whitelist = self.attacks.whitelist.iter().map(|mac| {
+            web::WhitelistEntry {
+                value: mac.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"),
+                entry_type: "MAC".into(),
+            }
+        }).collect();
 
         // Sync plugin list for web dashboard
         s.plugin_list = self.lua.get_web_plugin_list().into_iter().map(|(meta, x, y)| {
