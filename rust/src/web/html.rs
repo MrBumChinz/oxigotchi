@@ -262,10 +262,11 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- 13. Handshake download -->
 <div class="card" id="card-download">
 <div class="card-title">Download Captures</div>
-<div class="sub">Download all captures as a ZIP archive.</div>
-<div class="action-btns">
+<div class="sub">Download all captures as a ZIP, or click individual files below.</div>
+<div class="action-btns" style="margin-bottom:8px">
 <a href="/api/download/all" class="action-btn btn-restart" style="text-decoration:none;text-align:center">Download All (ZIP)</a>
 </div>
+<div class="captures-list" id="dl-list"><div style="color:#555;font-size:12px">Loading...</div></div>
 </div>
 
 <!-- 14. Mode switch -->
@@ -286,6 +287,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 <button class="action-btn btn-restart" onclick="restartAO()">Restart AO</button>
 <button class="action-btn btn-stop" onclick="if(confirm('Shut down the Pi?'))doShutdown()">Shutdown Pi</button>
 <button class="action-btn btn-warn" onclick="if(confirm('Restart pwnagotchi?'))restartPwn()">Restart Pwn</button>
+<button class="action-btn btn-restart" onclick="if(confirm('Reboot the Pi?'))restartPi()">Restart Pi</button>
+<button class="action-btn btn-restart" onclick="restartSSH()">Restart SSH</button>
 </div>
 </div>
 
@@ -334,6 +337,37 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 <div style="color:#e67e22;font-size:11px;padding:6px 8px;background:#5a300033;border-radius:6px;margin-bottom:8px">Warning: Some channels may cause BCM43436B0 firmware crashes. Stick to 1,6,11 for stability.</div>
 <button class="wl-btn wl-btn-add" onclick="applyChannels()">Apply</button>
+</div>
+
+<!-- 21. WPA-SEC Config -->
+<div class="card" id="card-wpasec">
+<div class="card-title">WPA-SEC Upload</div>
+<div class="sub">Upload captured handshakes to wpa-sec.stanev.org for cloud cracking.</div>
+<div class="status-grid" style="margin-bottom:8px">
+<div class="label">Status</div><div class="value" id="wpasec-status">-</div>
+<div class="label">API Key</div><div class="value" id="wpasec-key">-</div>
+</div>
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+<input type="text" id="wpasec-input" class="wl-input" placeholder="WPA-SEC API key" style="flex:2;min-width:180px">
+<button class="wl-btn wl-btn-add" onclick="saveWpaSec()">Save</button>
+</div>
+</div>
+
+<!-- 22. Discord Webhook -->
+<div class="card" id="card-discord">
+<div class="card-title">Discord Notifications</div>
+<div class="sub">Send handshake capture notifications to a Discord channel.</div>
+<div class="toggle-row" style="border-bottom:none;padding-bottom:0">
+<div class="toggle-info"><div class="toggle-label">Enabled</div><div class="toggle-desc">Toggle Discord notifications on/off</div></div>
+<label class="switch"><input type="checkbox" id="discord-toggle" onchange="saveDiscord()"><span class="slider"></span></label>
+</div>
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+<input type="text" id="discord-url" class="wl-input" placeholder="Discord webhook URL" style="flex:2;min-width:180px">
+<button class="wl-btn wl-btn-add" onclick="saveDiscord()">Save</button>
+</div>
+<div class="status-grid" style="margin-top:8px">
+<div class="label">Status</div><div class="value" id="discord-status">Disabled</div>
+</div>
 </div>
 
 <!-- 20. Logs Panel -->
@@ -665,6 +699,60 @@ function restartPwn() {
         toast('Pwnagotchi restart queued');
     });
 }
+function restartPi() {
+    api('POST', '/api/restart-pi', {}).then(function(r) {
+        toast(r && r.message ? r.message : 'Pi reboot initiated');
+    });
+}
+function restartSSH() {
+    api('POST', '/api/restart-ssh', {}).then(function(r) {
+        toast(r && r.message ? r.message : 'SSH restart initiated');
+    });
+}
+
+function refreshWpaSec() {
+    api('GET', '/api/wpasec').then(function(d) {
+        if (!d) return;
+        document.getElementById('wpasec-status').textContent = d.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('wpasec-status').style.color = d.enabled ? '#00d4aa' : '#888';
+        document.getElementById('wpasec-key').textContent = d.api_key || '(not set)';
+    });
+}
+function saveWpaSec() {
+    var key = document.getElementById('wpasec-input').value.trim();
+    api('POST', '/api/wpasec', {api_key: key}).then(function(r) {
+        if (r && r.ok) { toast('WPA-SEC key saved'); document.getElementById('wpasec-input').value = ''; refreshWpaSec(); }
+    });
+}
+
+function refreshDiscord() {
+    api('GET', '/api/discord').then(function(d) {
+        if (!d) return;
+        document.getElementById('discord-status').textContent = d.enabled ? 'Enabled' : 'Disabled';
+        document.getElementById('discord-status').style.color = d.enabled ? '#00d4aa' : '#888';
+        document.getElementById('discord-toggle').checked = d.enabled;
+    });
+}
+function saveDiscord() {
+    var url = document.getElementById('discord-url').value.trim();
+    var enabled = document.getElementById('discord-toggle').checked;
+    api('POST', '/api/discord', {webhook_url: url, enabled: enabled}).then(function(r) {
+        if (r && r.ok) { toast('Discord config saved'); refreshDiscord(); }
+    });
+}
+
+function refreshDownloadList() {
+    api('GET', '/api/captures').then(function(d) {
+        var el = document.getElementById('dl-list');
+        if (!d || !d.files || !d.files.length) {
+            el.innerHTML = '<div style="color:#555;font-size:12px">No captures to download</div>';
+            return;
+        }
+        el.innerHTML = d.files.map(function(f) {
+            return '<div class="capture-item"><a href="/api/download/' + encodeURIComponent(f.filename) + '" style="color:#00d4aa;text-decoration:none">' + esc(f.filename) + '</a> <span style="color:#555">(' + fmtBytes(f.size_bytes) + ')</span></div>';
+        }).join('');
+    });
+}
 
 function refreshPlugins() {
     api('GET', '/api/plugins').then(function(plugins) {
@@ -715,6 +803,9 @@ setTimeout(refreshCracked, 4500);
 setTimeout(refreshPlugins, 5000);
 setTimeout(refreshAps, 5500);
 setTimeout(refreshWhitelist, 6000);
+setTimeout(refreshWpaSec, 6500);
+setTimeout(refreshDiscord, 7000);
+setTimeout(refreshDownloadList, 7500);
 
 setInterval(refreshStatus, 5000);
 setInterval(refreshBattery, 15000);
@@ -730,6 +821,9 @@ setInterval(refreshPlugins, 15000);
 setInterval(refreshAps, 10000);
 setInterval(refreshWhitelist, 30000);
 setInterval(refreshLogs, 10000);
+setInterval(refreshWpaSec, 30000);
+setInterval(refreshDiscord, 30000);
+setInterval(refreshDownloadList, 30000);
 setInterval(function(){ document.getElementById('eink-img').src='/api/display.png?t='+Date.now(); }, 5000);
 </script>
 </body>

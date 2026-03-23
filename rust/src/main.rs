@@ -72,6 +72,10 @@ struct Daemon {
     shared_state: web::SharedState,
     prev_cpu_sample: Option<personality::CpuSample>,
     lua: lua::PluginRuntime,
+    wpasec_config: capture::WpaSecConfig,
+    upload_queue: capture::UploadQueue,
+    discord_webhook_url: String,
+    discord_enabled: bool,
 }
 
 impl Daemon {
@@ -121,6 +125,10 @@ impl Daemon {
             shared_state,
             prev_cpu_sample: None,
             lua: lua::PluginRuntime::new(),
+            wpasec_config: capture::WpaSecConfig::default(),
+            upload_queue: capture::UploadQueue::new(),
+            discord_webhook_url: String::new(),
+            discord_enabled: false,
         }
     }
 
@@ -231,6 +239,9 @@ impl Daemon {
                 self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
             }
         }
+
+        // Load persisted runtime state (attack toggles, whitelist, WPA-SEC key, Discord)
+        self.load_runtime_state();
 
         // Initial state sync to web
         self.sync_to_web();
@@ -397,8 +408,58 @@ impl Daemon {
             }
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
+
+        // Convert new pcapng files to .22000 format for hashcat
+        let (converted, _no_hs, failed) = capture::batch_convert(&mut self.captures);
+        if converted > 0 {
+            info!("hashcat: converted {converted} capture(s) to .22000");
+        }
+        if failed > 0 {
+            log::warn!("hashcat: {failed} conversion(s) failed");
+        }
+
+        // Upload pending .22000 files to WPA-SEC
+        let (uploaded, upload_failed) = capture::upload_all_pending(
+            &mut self.captures,
+            &self.wpasec_config,
+            &mut self.upload_queue,
+        );
+        if uploaded > 0 {
+            info!("WPA-SEC: uploaded {uploaded} files");
+        }
+        if upload_failed > 0 {
+            log::warn!("WPA-SEC: {upload_failed} upload(s) failed");
+        }
+
         let new_handshakes = self.captures.handshake_count().saturating_sub(handshakes_before);
         result.handshakes_captured = new_handshakes as u32;
+
+        // Discord notification for new handshakes
+        if new_handshakes > 0 && self.discord_enabled && !self.discord_webhook_url.is_empty() {
+            let msg = format!(
+                "New handshake(s) captured! {} new, {} total",
+                new_handshakes,
+                self.captures.handshake_count()
+            );
+            Self::post_discord(&self.discord_webhook_url, &msg);
+        }
+    }
+
+    /// Post a message to a Discord webhook via curl.
+    #[cfg(unix)]
+    fn post_discord(webhook_url: &str, message: &str) {
+        if webhook_url.is_empty() {
+            return;
+        }
+        let body = format!(r#"{{"content":"{}"}}"#, message.replace('"', r#"\""#));
+        let _ = std::process::Command::new("curl")
+            .args(["-s", "-H", "Content-Type: application/json", "-d", &body, webhook_url])
+            .output();
+    }
+
+    #[cfg(not(unix))]
+    fn post_discord(_webhook_url: &str, _message: &str) {
+        // Discord posting requires curl (Unix only)
     }
 
     /// Update face variety engine, XP, battery overrides, and AO crash recovery.
@@ -454,6 +515,8 @@ impl Daemon {
 
     /// Process commands queued by the web server.
     fn process_web_commands(&mut self) {
+        let mut any_command = false;
+
         let (mode_switch, rate_change, restart) = {
             let mut s = self.shared_state.lock().unwrap();
             let mode = s.pending_mode_switch.take();
@@ -464,6 +527,7 @@ impl Daemon {
         };
 
         if let Some(mode) = mode_switch {
+            any_command = true;
             info!("web: mode switch to {mode}");
             match mode.to_uppercase().as_str() {
                 "TOGGLE" => {
@@ -483,11 +547,13 @@ impl Daemon {
         }
 
         if let Some(rate) = rate_change {
+            any_command = true;
             info!("web: rate change to {rate}");
             self.ao.set_rate(rate);
         }
 
         if restart {
+            any_command = true;
             info!("web: AO restart requested");
             match self.ao.restart() {
                 Ok(()) => info!("AO restarted successfully"),
@@ -534,6 +600,7 @@ impl Daemon {
                     if !self.attacks.is_whitelisted(&mac) {
                         self.attacks.whitelist.push(mac);
                         info!("web: whitelist added {}", add.value);
+                        any_command = true;
                     }
                 }
             }
@@ -552,6 +619,7 @@ impl Daemon {
                 if ok {
                     self.attacks.whitelist.retain(|m| m != &mac);
                     info!("web: whitelist removed {}", remove);
+                    any_command = true;
                 }
             }
         }
@@ -561,6 +629,9 @@ impl Daemon {
             let mut s = self.shared_state.lock().unwrap();
             s.pending_channel_config.take()
         };
+        if ch_config.is_some() {
+            any_command = true;
+        }
         if let Some(cfg) = ch_config {
             if let Some(channels) = cfg.channels {
                 if !channels.is_empty() {
@@ -573,6 +644,35 @@ impl Daemon {
                 self.wifi.channel_config.dwell_ms = dwell;
                 info!("web: dwell set to {}ms", dwell);
             }
+        }
+
+        // Process pending WPA-SEC key
+        let wpasec_key = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_wpasec_key.take()
+        };
+        if let Some(key) = wpasec_key {
+            self.wpasec_config.api_key = key.clone();
+            self.wpasec_config.enabled = !key.is_empty();
+            info!("web: WPA-SEC key updated, enabled={}", self.wpasec_config.enabled);
+            any_command = true;
+        }
+
+        // Process pending Discord config
+        let discord_config = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_discord_config.take()
+        };
+        if let Some(cfg) = discord_config {
+            self.discord_webhook_url = cfg.webhook_url;
+            self.discord_enabled = cfg.enabled;
+            info!("web: Discord updated, enabled={}", self.discord_enabled);
+            any_command = true;
+        }
+
+        // Persist runtime state if any command was processed
+        if any_command {
+            self.save_runtime_state();
         }
     }
 
@@ -678,6 +778,115 @@ impl Daemon {
             cpu_percent: cpu_pct,
             cpu_freq_ghz,
         }
+    }
+
+    /// Persist runtime state to JSON so web-configurable settings survive restarts.
+    fn save_runtime_state(&self) {
+        let s = self.shared_state.lock().unwrap();
+        let state = serde_json::json!({
+            "attack_deauth": s.attack_deauth,
+            "attack_pmkid": s.attack_pmkid,
+            "attack_csa": s.attack_csa,
+            "attack_disassoc": s.attack_disassoc,
+            "attack_anon_reassoc": s.attack_anon_reassoc,
+            "attack_rogue_m2": s.attack_rogue_m2,
+            "attack_rate": self.ao.config.rate,
+            "whitelist": self.attacks.whitelist.iter().map(|m|
+                m.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":")
+            ).collect::<Vec<String>>(),
+            "wpasec_key": self.wpasec_config.api_key,
+            "discord_webhook_url": self.discord_webhook_url,
+            "discord_enabled": self.discord_enabled,
+        });
+        drop(s);
+        let path = "/var/lib/oxigotchi/state.json";
+        let _ = std::fs::create_dir_all("/var/lib/oxigotchi");
+        if let Err(e) = std::fs::write(path, serde_json::to_string_pretty(&state).unwrap_or_default()) {
+            log::warn!("state save failed: {e}");
+        }
+    }
+
+    /// Load persisted runtime state from JSON and apply values.
+    fn load_runtime_state(&mut self) {
+        let path = "/var/lib/oxigotchi/state.json";
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => return, // No saved state, use defaults
+        };
+        let state: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("state load parse error: {e}");
+                return;
+            }
+        };
+
+        // Apply attack toggles to shared state
+        {
+            let mut s = self.shared_state.lock().unwrap();
+            if let Some(v) = state.get("attack_deauth").and_then(|v| v.as_bool()) {
+                s.attack_deauth = v;
+            }
+            if let Some(v) = state.get("attack_pmkid").and_then(|v| v.as_bool()) {
+                s.attack_pmkid = v;
+            }
+            if let Some(v) = state.get("attack_csa").and_then(|v| v.as_bool()) {
+                s.attack_csa = v;
+            }
+            if let Some(v) = state.get("attack_disassoc").and_then(|v| v.as_bool()) {
+                s.attack_disassoc = v;
+            }
+            if let Some(v) = state.get("attack_anon_reassoc").and_then(|v| v.as_bool()) {
+                s.attack_anon_reassoc = v;
+            }
+            if let Some(v) = state.get("attack_rogue_m2").and_then(|v| v.as_bool()) {
+                s.attack_rogue_m2 = v;
+            }
+        }
+
+        // Apply attack rate
+        if let Some(rate) = state.get("attack_rate").and_then(|v| v.as_u64()) {
+            self.ao.set_rate(rate as u32);
+        }
+
+        // Apply whitelist
+        if let Some(wl) = state.get("whitelist").and_then(|v| v.as_array()) {
+            self.attacks.whitelist.clear();
+            for entry in wl {
+                if let Some(mac_str) = entry.as_str() {
+                    let parts: Vec<&str> = mac_str.split(':').collect();
+                    if parts.len() == 6 {
+                        let mut mac = [0u8; 6];
+                        let mut ok = true;
+                        for (i, p) in parts.iter().enumerate() {
+                            match u8::from_str_radix(p, 16) {
+                                Ok(b) => mac[i] = b,
+                                Err(_) => { ok = false; break; }
+                            }
+                        }
+                        if ok {
+                            self.attacks.whitelist.push(mac);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply WPA-SEC key
+        if let Some(key) = state.get("wpasec_key").and_then(|v| v.as_str()) {
+            self.wpasec_config.api_key = key.to_string();
+            self.wpasec_config.enabled = !key.is_empty();
+        }
+
+        // Apply Discord config
+        if let Some(url) = state.get("discord_webhook_url").and_then(|v| v.as_str()) {
+            self.discord_webhook_url = url.to_string();
+        }
+        if let Some(enabled) = state.get("discord_enabled").and_then(|v| v.as_bool()) {
+            self.discord_enabled = enabled;
+        }
+
+        info!("loaded runtime state from {path}");
     }
 
     /// Sync daemon state into the shared web state.
@@ -788,6 +997,11 @@ impl Daemon {
                 y,
             }
         }).collect();
+
+        // Sync WPA-SEC and Discord config for web dashboard
+        s.wpasec_api_key = self.wpasec_config.api_key.clone();
+        s.discord_webhook_url = self.discord_webhook_url.clone();
+        s.discord_enabled = self.discord_enabled;
     }
 
     /// Update the e-ink display with current state.

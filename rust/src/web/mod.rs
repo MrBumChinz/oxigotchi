@@ -8,7 +8,7 @@
 //! replicated here with htmx auto-refresh and the same dark theme.
 
 use axum::{
-    extract::State,
+    extract::{State, Path as AxumPath},
     response::{Html, Json},
     routing::{get, post},
     Router,
@@ -140,6 +140,15 @@ pub struct DaemonState {
 
     // -- channel config --
     pub pending_channel_config: Option<ChannelConfig>,
+
+    // -- wpa-sec --
+    pub wpasec_api_key: String,
+    pub pending_wpasec_key: Option<String>,
+
+    // -- discord --
+    pub discord_webhook_url: String,
+    pub discord_enabled: bool,
+    pub pending_discord_config: Option<DiscordConfig>,
 }
 
 impl DaemonState {
@@ -226,6 +235,11 @@ impl DaemonState {
             pending_whitelist_add: None,
             pending_whitelist_remove: None,
             pending_channel_config: None,
+            wpasec_api_key: String::new(),
+            pending_wpasec_key: None,
+            discord_webhook_url: String::new(),
+            discord_enabled: false,
+            pending_discord_config: None,
         }
     }
 }
@@ -496,6 +510,33 @@ pub struct ChannelConfig {
     pub dwell_ms: Option<u64>,
 }
 
+/// WPA-SEC config response returned by GET /api/wpasec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WpaSecResponse {
+    pub api_key: String,
+    pub enabled: bool,
+}
+
+/// WPA-SEC config update request for POST /api/wpasec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WpaSecUpdate {
+    pub api_key: String,
+}
+
+/// Discord webhook configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordConfig {
+    pub webhook_url: String,
+    pub enabled: bool,
+}
+
+/// Discord config response returned by GET /api/discord.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiscordResponse {
+    pub webhook_url: String,
+    pub enabled: bool,
+}
+
 /// Logs response returned by GET /api/logs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LogsResponse {
@@ -531,6 +572,11 @@ pub const API_WHITELIST_ADD: &str = "/api/whitelist/add";
 pub const API_WHITELIST_REMOVE: &str = "/api/whitelist/remove";
 pub const API_CHANNELS: &str = "/api/channels";
 pub const API_LOGS: &str = "/api/logs";
+pub const API_WPASEC: &str = "/api/wpasec";
+pub const API_DISCORD: &str = "/api/discord";
+pub const API_DOWNLOAD_SINGLE: &str = "/api/download/:filename";
+pub const API_RESTART_PI: &str = "/api/restart-pi";
+pub const API_RESTART_SSH: &str = "/api/restart-ssh";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -961,6 +1007,159 @@ async fn logs_handler() -> Json<LogsResponse> {
 }
 
 // ---------------------------------------------------------------------------
+// WPA-SEC endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/wpasec -> JSON wpa-sec config (key masked)
+async fn wpasec_get_handler(State(state): State<SharedState>) -> Json<WpaSecResponse> {
+    let s = state.lock().unwrap();
+    let key = &s.wpasec_api_key;
+    let masked = if key.len() > 4 {
+        format!("{}****", &key[..4])
+    } else if !key.is_empty() {
+        "****".into()
+    } else {
+        String::new()
+    };
+    Json(WpaSecResponse {
+        api_key: masked,
+        enabled: !s.wpasec_api_key.is_empty(),
+    })
+}
+
+/// POST /api/wpasec -> set wpa-sec API key
+async fn wpasec_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<WpaSecUpdate>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_wpasec_key = Some(body.api_key);
+    Json(ActionResponse {
+        ok: true,
+        message: "WPA-SEC key update queued".into(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Discord webhook endpoints
+// ---------------------------------------------------------------------------
+
+/// GET /api/discord -> JSON discord config
+async fn discord_get_handler(State(state): State<SharedState>) -> Json<DiscordResponse> {
+    let s = state.lock().unwrap();
+    let url = &s.discord_webhook_url;
+    let masked = if url.len() > 30 {
+        format!("{}****", &url[..30])
+    } else if !url.is_empty() {
+        "****".into()
+    } else {
+        String::new()
+    };
+    Json(DiscordResponse {
+        webhook_url: masked,
+        enabled: s.discord_enabled,
+    })
+}
+
+/// POST /api/discord -> set discord config
+async fn discord_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<DiscordConfig>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_discord_config = Some(body);
+    Json(ActionResponse {
+        ok: true,
+        message: "Discord config update queued".into(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Single capture download endpoint
+// ---------------------------------------------------------------------------
+
+/// GET /api/download/:filename -> serve a single capture file
+async fn download_single_handler(
+    AxumPath(filename): AxumPath<String>,
+    State(state): State<SharedState>,
+) -> axum::response::Response<axum::body::Body> {
+    use axum::http::{header, StatusCode};
+
+    let capture_dir = {
+        let s = state.lock().unwrap();
+        s.capture_dir.clone()
+    };
+
+    // Sanitize filename: reject path traversal
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return axum::response::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(axum::body::Body::from("invalid filename"))
+            .unwrap();
+    }
+
+    let path = std::path::Path::new(&capture_dir).join(&filename);
+    if !path.exists() || !path.is_file() {
+        return axum::response::Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("file not found"))
+            .unwrap();
+    }
+
+    match std::fs::read(&path) {
+        Ok(data) => {
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/octet-stream")
+                .header(
+                    header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"", filename),
+                )
+                .body(axum::body::Body::from(data))
+                .unwrap()
+        }
+        Err(_) => {
+            axum::response::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from("failed to read file"))
+                .unwrap()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// System control endpoints
+// ---------------------------------------------------------------------------
+
+/// POST /api/restart-pi -> reboot the Pi
+async fn restart_pi_handler() -> Json<ActionResponse> {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("sudo")
+            .arg("reboot")
+            .spawn();
+    }
+    Json(ActionResponse {
+        ok: true,
+        message: "Pi reboot initiated".into(),
+    })
+}
+
+/// POST /api/restart-ssh -> restart SSH service
+async fn restart_ssh_handler() -> Json<ActionResponse> {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("sudo")
+            .args(["systemctl", "restart", "ssh"])
+            .spawn();
+    }
+    Json(ActionResponse {
+        ok: true,
+        message: "SSH restart initiated".into(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Display framebuffer endpoint
 // ---------------------------------------------------------------------------
 
@@ -1119,6 +1318,11 @@ pub fn build_router(state: SharedState) -> Router {
         .route(API_WHITELIST_REMOVE, post(whitelist_remove_handler))
         .route(API_CHANNELS, post(channels_handler))
         .route(API_LOGS, get(logs_handler))
+        .route(API_WPASEC, get(wpasec_get_handler).post(wpasec_post_handler))
+        .route(API_DISCORD, get(discord_get_handler).post(discord_post_handler))
+        .route(API_DOWNLOAD_SINGLE, get(download_single_handler))
+        .route(API_RESTART_PI, post(restart_pi_handler))
+        .route(API_RESTART_SSH, post(restart_ssh_handler))
         .with_state(state)
 }
 
@@ -1243,6 +1447,11 @@ mod tests {
         assert_eq!(API_WHITELIST_REMOVE, "/api/whitelist/remove");
         assert_eq!(API_CHANNELS, "/api/channels");
         assert_eq!(API_LOGS, "/api/logs");
+        assert_eq!(API_WPASEC, "/api/wpasec");
+        assert_eq!(API_DISCORD, "/api/discord");
+        assert_eq!(API_DOWNLOAD_SINGLE, "/api/download/:filename");
+        assert_eq!(API_RESTART_PI, "/api/restart-pi");
+        assert_eq!(API_RESTART_SSH, "/api/restart-ssh");
     }
 
     #[test]
@@ -1423,6 +1632,11 @@ mod tests {
         assert!(ds.cracked.is_empty());
         assert_eq!(ds.bt_state, "Off");
         assert!(!ds.bt_connected);
+        assert!(ds.wpasec_api_key.is_empty());
+        assert!(ds.pending_wpasec_key.is_none());
+        assert!(ds.discord_webhook_url.is_empty());
+        assert!(!ds.discord_enabled);
+        assert!(ds.pending_discord_config.is_none());
     }
 
     #[test]
@@ -1456,6 +1670,8 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("card-whitelist"), "missing whitelist card");
         assert!(DASHBOARD_HTML.contains("card-channels"), "missing channels card");
         assert!(DASHBOARD_HTML.contains("card-logs"), "missing logs card");
+        assert!(DASHBOARD_HTML.contains("card-wpasec"), "missing wpasec card");
+        assert!(DASHBOARD_HTML.contains("card-discord"), "missing discord card");
     }
 
     #[test]
@@ -1480,6 +1696,11 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("/api/whitelist"), "missing /api/whitelist");
         assert!(DASHBOARD_HTML.contains("/api/channels"), "missing /api/channels");
         assert!(DASHBOARD_HTML.contains("/api/logs"), "missing /api/logs");
+        assert!(DASHBOARD_HTML.contains("/api/wpasec"), "missing /api/wpasec");
+        assert!(DASHBOARD_HTML.contains("/api/discord"), "missing /api/discord");
+        assert!(DASHBOARD_HTML.contains("/api/restart-pi"), "missing /api/restart-pi");
+        assert!(DASHBOARD_HTML.contains("/api/restart-ssh"), "missing /api/restart-ssh");
+        assert!(DASHBOARD_HTML.contains("/api/download/"), "missing /api/download");
     }
 
     #[test]
