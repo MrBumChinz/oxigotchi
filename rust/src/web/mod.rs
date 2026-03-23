@@ -129,6 +129,17 @@ pub struct DaemonState {
     // -- plugins --
     pub plugin_list: Vec<PluginInfo>,
     pub pending_plugin_updates: Vec<PluginUpdate>,
+
+    // -- nearby APs --
+    pub ap_list: Vec<ApEntry>,
+
+    // -- whitelist --
+    pub whitelist: Vec<WhitelistEntry>,
+    pub pending_whitelist_add: Option<WhitelistAdd>,
+    pub pending_whitelist_remove: Option<String>,
+
+    // -- channel config --
+    pub pending_channel_config: Option<ChannelConfig>,
 }
 
 impl DaemonState {
@@ -210,6 +221,11 @@ impl DaemonState {
             pending_bt_toggle: None,
             plugin_list: Vec::new(),
             pending_plugin_updates: Vec::new(),
+            ap_list: Vec::new(),
+            whitelist: Vec::new(),
+            pending_whitelist_add: None,
+            pending_whitelist_remove: None,
+            pending_channel_config: None,
         }
     }
 }
@@ -442,6 +458,50 @@ pub struct PluginUpdate {
     pub y: Option<i32>,
 }
 
+/// A nearby access point entry returned by /api/aps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApEntry {
+    pub bssid: String,
+    pub ssid: String,
+    pub rssi: i16,
+    pub channel: u8,
+    pub clients: u32,
+    pub has_handshake: bool,
+}
+
+/// A whitelist entry returned by /api/whitelist.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistEntry {
+    pub value: String,
+    pub entry_type: String,
+}
+
+/// Request body for POST /api/whitelist/add.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistAdd {
+    pub value: String,
+    pub entry_type: String,
+}
+
+/// Request body for POST /api/whitelist/remove.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WhitelistRemove {
+    pub value: String,
+}
+
+/// Channel configuration request for POST /api/channels.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelConfig {
+    pub channels: Option<Vec<u8>>,
+    pub dwell_ms: Option<u64>,
+}
+
+/// Logs response returned by GET /api/logs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogsResponse {
+    pub lines: Vec<String>,
+}
+
 // ---------------------------------------------------------------------------
 // API route constants
 // ---------------------------------------------------------------------------
@@ -466,6 +526,11 @@ pub const API_WHITELIST: &str = "/api/whitelist";
 pub const API_CRACKED: &str = "/api/cracked";
 pub const API_HEALTH: &str = "/api/health";
 pub const API_RATE: &str = "/api/rate";
+pub const API_APS: &str = "/api/aps";
+pub const API_WHITELIST_ADD: &str = "/api/whitelist/add";
+pub const API_WHITELIST_REMOVE: &str = "/api/whitelist/remove";
+pub const API_CHANNELS: &str = "/api/channels";
+pub const API_LOGS: &str = "/api/logs";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -826,6 +891,75 @@ async fn plugins_post_handler(
     })
 }
 
+/// GET /api/aps -> JSON list of nearby access points (sorted by RSSI)
+async fn aps_handler(State(state): State<SharedState>) -> Json<Vec<ApEntry>> {
+    let s = state.lock().unwrap();
+    let mut aps = s.ap_list.clone();
+    aps.sort_by(|a, b| a.rssi.cmp(&b.rssi)); // strongest (least negative) last; JS will display strongest first
+    Json(aps)
+}
+
+/// GET /api/whitelist -> JSON list of whitelist entries
+async fn whitelist_get_handler(State(state): State<SharedState>) -> Json<Vec<WhitelistEntry>> {
+    let s = state.lock().unwrap();
+    Json(s.whitelist.clone())
+}
+
+/// POST /api/whitelist/add -> add a whitelist entry
+async fn whitelist_add_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<WhitelistAdd>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_whitelist_add = Some(body);
+    Json(ActionResponse {
+        ok: true,
+        message: "Whitelist add queued".into(),
+    })
+}
+
+/// POST /api/whitelist/remove -> remove a whitelist entry
+async fn whitelist_remove_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<WhitelistRemove>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_whitelist_remove = Some(body.value);
+    Json(ActionResponse {
+        ok: true,
+        message: "Whitelist remove queued".into(),
+    })
+}
+
+/// POST /api/channels -> update channel configuration
+async fn channels_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<ChannelConfig>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_channel_config = Some(body);
+    Json(ActionResponse {
+        ok: true,
+        message: "Channel config update queued".into(),
+    })
+}
+
+/// GET /api/logs -> last 50 lines of journalctl output
+async fn logs_handler() -> Json<LogsResponse> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(output) = std::process::Command::new("journalctl")
+            .args(["-u", "rusty-oxigotchi", "-n", "50", "--no-pager"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+            return Json(LogsResponse { lines });
+        }
+    }
+    Json(LogsResponse { lines: Vec::new() })
+}
+
 // ---------------------------------------------------------------------------
 // Display framebuffer endpoint
 // ---------------------------------------------------------------------------
@@ -979,6 +1113,12 @@ pub fn build_router(state: SharedState) -> Router {
         .route(API_DISPLAY, get(display_handler))
         .route("/api/download/all", get(download_zip_handler))
         .route("/api/plugins", get(plugins_get_handler).post(plugins_post_handler))
+        .route(API_APS, get(aps_handler))
+        .route(API_WHITELIST, get(whitelist_get_handler))
+        .route(API_WHITELIST_ADD, post(whitelist_add_handler))
+        .route(API_WHITELIST_REMOVE, post(whitelist_remove_handler))
+        .route(API_CHANNELS, post(channels_handler))
+        .route(API_LOGS, get(logs_handler))
         .with_state(state)
 }
 
@@ -1098,6 +1238,11 @@ mod tests {
         assert_eq!(API_CRACKED, "/api/cracked");
         assert_eq!(API_HEALTH, "/api/health");
         assert_eq!(API_RATE, "/api/rate");
+        assert_eq!(API_APS, "/api/aps");
+        assert_eq!(API_WHITELIST_ADD, "/api/whitelist/add");
+        assert_eq!(API_WHITELIST_REMOVE, "/api/whitelist/remove");
+        assert_eq!(API_CHANNELS, "/api/channels");
+        assert_eq!(API_LOGS, "/api/logs");
     }
 
     #[test]
@@ -1307,6 +1452,10 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("card-mode"), "missing mode card");
         assert!(DASHBOARD_HTML.contains("card-actions"), "missing actions card");
         assert!(DASHBOARD_HTML.contains("card-plugins"), "missing plugins card");
+        assert!(DASHBOARD_HTML.contains("card-aps"), "missing APs card");
+        assert!(DASHBOARD_HTML.contains("card-whitelist"), "missing whitelist card");
+        assert!(DASHBOARD_HTML.contains("card-channels"), "missing channels card");
+        assert!(DASHBOARD_HTML.contains("card-logs"), "missing logs card");
     }
 
     #[test]
@@ -1327,6 +1476,10 @@ mod tests {
         assert!(DASHBOARD_HTML.contains("/api/restart"), "missing /api/restart");
         assert!(DASHBOARD_HTML.contains("/api/shutdown"), "missing /api/shutdown");
         assert!(DASHBOARD_HTML.contains("/api/plugins"), "missing /api/plugins");
+        assert!(DASHBOARD_HTML.contains("/api/aps"), "missing /api/aps");
+        assert!(DASHBOARD_HTML.contains("/api/whitelist"), "missing /api/whitelist");
+        assert!(DASHBOARD_HTML.contains("/api/channels"), "missing /api/channels");
+        assert!(DASHBOARD_HTML.contains("/api/logs"), "missing /api/logs");
     }
 
     #[test]
@@ -1711,6 +1864,7 @@ mod tests {
             "/api/battery", "/api/wifi", "/api/bluetooth",
             "/api/personality", "/api/system", "/api/attacks",
             "/api/recovery", "/api/cracked", "/api/plugins",
+            "/api/aps", "/api/whitelist", "/api/logs",
         ];
         for endpoint in endpoints {
             let (status, _) = get(&router, endpoint).await;

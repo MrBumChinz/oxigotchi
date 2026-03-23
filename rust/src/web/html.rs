@@ -65,6 +65,25 @@ input:checked+.slider:before{transform:translateX(22px)}
 .progress-fill{height:100%;background:#00d4aa;border-radius:3px;transition:width .3s}
 .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .sub{color:#888;font-size:11px;margin-bottom:8px}
+.ap-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+.ap-table th{color:#888;font-size:11px;text-align:left;padding:4px 6px;border-bottom:1px solid #0f3460}
+.ap-table td{padding:4px 6px;border-bottom:1px solid #0f346033;color:#e0e0e0}
+.ap-table tr:last-child td{border-bottom:none}
+.ap-scroll{max-height:300px;overflow-y:auto;margin-top:4px}
+.wl-input{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;width:100%}
+.wl-input:focus{outline:none;border-color:#00d4aa}
+.wl-select{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit}
+.wl-btn{padding:8px 16px;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:bold;cursor:pointer;transition:.2s}
+.wl-btn:active{transform:scale(0.95)}
+.wl-btn-add{background:#00d4aa;color:#1a1a2e}
+.wl-btn-rm{background:#e94560;color:#fff;padding:4px 10px;font-size:11px;border:none;border-radius:4px;cursor:pointer}
+.wl-btn-rm:active{transform:scale(0.95)}
+.ch-input{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;width:100%}
+.ch-input:focus{outline:none;border-color:#00d4aa}
+.ch-slider{width:100%;accent-color:#00d4aa;margin:8px 0}
+.logs-pre{background:#0a1628;color:#aaa;font-size:11px;font-family:'SF Mono','Fira Code',monospace;padding:10px;border-radius:6px;max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;margin-top:8px}
+.collapse-btn{background:none;border:1px solid #0f3460;color:#888;border-radius:6px;padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer;transition:.2s}
+.collapse-btn:hover{border-color:#00d4aa;color:#00d4aa}
 </style>
 </head>
 <body>
@@ -252,10 +271,10 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- 14. Mode switch -->
 <div class="card" id="card-mode">
 <div class="card-title">Mode</div>
-<div class="sub">AO Mode = AngryOxide attacks. PWN Mode = stock bettercap. Switching takes ~90s.</div>
+<div class="sub">RAGE = all attacks max aggression. SAFE = passive scanning only. Switching takes ~90s.</div>
 <div class="mode-btns">
-<button class="mode-btn active" id="mode-ao" onclick="switchMode('AO')">AO Mode</button>
-<button class="mode-btn" id="mode-pwn" onclick="switchMode('PWN')">PWN Mode</button>
+<button class="mode-btn active" id="mode-rage" onclick="switchMode('RAGE')">RAGE</button>
+<button class="mode-btn" id="mode-safe" onclick="switchMode('SAFE')">SAFE</button>
 </div>
 </div>
 
@@ -275,6 +294,57 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card-title">Plugins</div>
 <div class="sub">Lua plugins control display indicators. Toggle on/off and set x,y positions.</div>
 <div id="plugins-list"><div style="color:#555;font-size:12px">Loading...</div></div>
+</div>
+
+<!-- 17. Nearby Networks (AP List) -->
+<div class="card" id="card-aps">
+<div class="card-title">Nearby Networks</div>
+<div class="sub">Access points detected by monitor mode, sorted by signal strength.</div>
+<div class="ap-scroll">
+<table class="ap-table" id="ap-table">
+<thead><tr><th>SSID</th><th>BSSID</th><th>RSSI</th><th>CH</th><th>Cli</th><th>Status</th></tr></thead>
+<tbody id="ap-tbody"><tr><td colspan="6" style="color:#555">Loading...</td></tr></tbody>
+</table>
+</div>
+</div>
+
+<!-- 18. Whitelist Management -->
+<div class="card" id="card-whitelist">
+<div class="card-title">Whitelist</div>
+<div class="sub">Networks and MACs excluded from attacks. Changes apply next epoch.</div>
+<div id="wl-list"><div style="color:#555;font-size:12px">Loading...</div></div>
+<div style="margin-top:10px;padding-top:10px;border-top:1px solid #0f3460;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+<input type="text" id="wl-value" class="wl-input" placeholder="MAC or SSID" style="flex:2;min-width:120px">
+<select id="wl-type" class="wl-select" style="flex:0 0 80px"><option value="MAC">MAC</option><option value="SSID">SSID</option></select>
+<button class="wl-btn wl-btn-add" onclick="addWhitelist()">Add</button>
+</div>
+</div>
+
+<!-- 19. Channel Configuration -->
+<div class="card" id="card-channels">
+<div class="card-title">Channel Config</div>
+<div class="sub">Configure which channels to scan and dwell time per channel.</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Channels (comma-separated)</div>
+<input type="text" id="ch-list" class="ch-input" placeholder="1,6,11" value="">
+</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Dwell Time: <span id="ch-dwell-val">2000</span>ms</div>
+<input type="range" id="ch-dwell" class="ch-slider" min="500" max="10000" step="100" value="2000" oninput="document.getElementById('ch-dwell-val').textContent=this.value">
+</div>
+<div style="color:#e67e22;font-size:11px;padding:6px 8px;background:#5a300033;border-radius:6px;margin-bottom:8px">Warning: Some channels may cause BCM43436B0 firmware crashes. Stick to 1,6,11 for stability.</div>
+<button class="wl-btn wl-btn-add" onclick="applyChannels()">Apply</button>
+</div>
+
+<!-- 20. Logs Panel -->
+<div class="card" id="card-logs">
+<div class="card-title" style="display:flex;justify-content:space-between;align-items:center">
+<span>Logs</span>
+<button class="collapse-btn" id="logs-toggle" onclick="toggleLogs()">Show</button>
+</div>
+<div id="logs-panel" style="display:none">
+<pre class="logs-pre" id="logs-content">Loading...</pre>
+</div>
 </div>
 
 <div style="text-align:center;color:#555;font-size:10px;margin-top:8px">Auto-refreshes every 5s &bull; Rusty Oxigotchi</div>
@@ -318,8 +388,8 @@ function refreshStatus() {
         document.getElementById('s-epoch').textContent = d.epoch;
         document.getElementById('s-uptime').textContent = d.uptime;
         // Mode buttons
-        document.getElementById('mode-ao').classList.toggle('active', d.mode === 'AO');
-        document.getElementById('mode-pwn').classList.toggle('active', d.mode === 'PWN');
+        document.getElementById('mode-rage').classList.toggle('active', d.mode === 'RAGE' || d.mode === 'AO');
+        document.getElementById('mode-safe').classList.toggle('active', d.mode === 'SAFE' || d.mode === 'PWN');
     });
 }
 
@@ -360,6 +430,11 @@ function refreshWifi() {
         document.getElementById('wifi-aps').textContent = d.aps_tracked;
         document.getElementById('wifi-channels').textContent = d.channels.join(', ') || '-';
         document.getElementById('wifi-dwell').textContent = d.dwell_ms + 'ms';
+        // Populate channel config card with current values
+        var chInput = document.getElementById('ch-list');
+        if (chInput && !chInput.matches(':focus')) chInput.value = d.channels.join(',');
+        var dwInput = document.getElementById('ch-dwell');
+        if (dwInput && !dwInput.matches(':active')) { dwInput.value = d.dwell_ms; document.getElementById('ch-dwell-val').textContent = d.dwell_ms; }
     });
 }
 
@@ -461,7 +536,98 @@ function refreshCracked() {
     });
 }
 
+function refreshAps() {
+    api('GET', '/api/aps').then(function(aps) {
+        var el = document.getElementById('ap-tbody');
+        if (!aps || !aps.length) {
+            el.innerHTML = '<tr><td colspan="6" style="color:#555">No APs detected</td></tr>';
+            return;
+        }
+        // Sort by RSSI descending (strongest first)
+        aps.sort(function(a,b){ return b.rssi - a.rssi; });
+        el.innerHTML = aps.map(function(ap) {
+            var rssiColor = ap.rssi > -50 ? '#00d4aa' : (ap.rssi > -70 ? '#f0c040' : '#e94560');
+            var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake captured">&#9734;</span>' : '';
+            return '<tr><td>' + esc(ap.ssid || '<hidden>') + '</td>' +
+                '<td style="color:#888;font-size:10px">' + esc(ap.bssid) + '</td>' +
+                '<td style="color:' + rssiColor + '">' + ap.rssi + '</td>' +
+                '<td>' + ap.channel + '</td>' +
+                '<td>' + ap.clients + '</td>' +
+                '<td>' + hsIcon + '</td></tr>';
+        }).join('');
+    });
+}
+
+function refreshWhitelist() {
+    api('GET', '/api/whitelist').then(function(entries) {
+        var el = document.getElementById('wl-list');
+        if (!entries || !entries.length) {
+            el.innerHTML = '<div style="color:#555;font-size:12px">No whitelist entries</div>';
+            return;
+        }
+        var html = '<table class="ap-table"><thead><tr><th>Value</th><th>Type</th><th></th></tr></thead><tbody>';
+        entries.forEach(function(e) {
+            html += '<tr><td>' + esc(e.value) + '</td><td>' + esc(e.entry_type) + '</td>' +
+                '<td><button class="wl-btn-rm" onclick="removeWhitelist(\'' + esc(e.value) + '\')">Remove</button></td></tr>';
+        });
+        html += '</tbody></table>';
+        el.innerHTML = html;
+    });
+}
+
+function refreshLogs() {
+    var panel = document.getElementById('logs-panel');
+    if (panel.style.display === 'none') return;
+    api('GET', '/api/logs').then(function(d) {
+        if (!d) return;
+        var el = document.getElementById('logs-content');
+        el.textContent = d.lines.join('\n') || 'No logs available';
+        el.scrollTop = el.scrollHeight;
+    });
+}
+
 // --- Action functions ---
+
+function addWhitelist() {
+    var val = document.getElementById('wl-value').value.trim();
+    var typ = document.getElementById('wl-type').value;
+    if (!val) { toast('Enter a value'); return; }
+    api('POST', '/api/whitelist/add', {value: val, entry_type: typ}).then(function(r) {
+        if (r && r.ok) { toast('Added to whitelist'); document.getElementById('wl-value').value = ''; refreshWhitelist(); }
+    });
+}
+
+function removeWhitelist(val) {
+    api('POST', '/api/whitelist/remove', {value: val}).then(function(r) {
+        if (r && r.ok) { toast('Removed from whitelist'); refreshWhitelist(); }
+    });
+}
+
+function applyChannels() {
+    var chStr = document.getElementById('ch-list').value.trim();
+    var dwell = parseInt(document.getElementById('ch-dwell').value) || 2000;
+    var channels = null;
+    if (chStr) {
+        channels = chStr.split(',').map(function(c){ return parseInt(c.trim()); }).filter(function(c){ return !isNaN(c) && c > 0 && c <= 14; });
+        if (!channels.length) { toast('Invalid channel list'); return; }
+    }
+    api('POST', '/api/channels', {channels: channels, dwell_ms: dwell}).then(function(r) {
+        if (r && r.ok) toast('Channel config applied');
+    });
+}
+
+function toggleLogs() {
+    var panel = document.getElementById('logs-panel');
+    var btn = document.getElementById('logs-toggle');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'block';
+        btn.textContent = 'Hide';
+        refreshLogs();
+    } else {
+        panel.style.display = 'none';
+        btn.textContent = 'Show';
+    }
+}
 
 function toggleAttack(name, val) {
     var data = {};
@@ -547,6 +713,8 @@ setTimeout(refreshPersonality, 3500);
 setTimeout(refreshSystem, 4000);
 setTimeout(refreshCracked, 4500);
 setTimeout(refreshPlugins, 5000);
+setTimeout(refreshAps, 5500);
+setTimeout(refreshWhitelist, 6000);
 
 setInterval(refreshStatus, 5000);
 setInterval(refreshBattery, 15000);
@@ -559,6 +727,9 @@ setInterval(refreshPersonality, 10000);
 setInterval(refreshSystem, 15000);
 setInterval(refreshCracked, 60000);
 setInterval(refreshPlugins, 15000);
+setInterval(refreshAps, 10000);
+setInterval(refreshWhitelist, 30000);
+setInterval(refreshLogs, 10000);
 setInterval(function(){ document.getElementById('eink-img').src='/api/display.png?t='+Date.now(); }, 5000);
 </script>
 </body>
