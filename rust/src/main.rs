@@ -456,10 +456,11 @@ impl Daemon {
     fn run_attack_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Attack
         let attackable = self.wifi.tracker.attackable();
-        // Read attack toggles from web state
+        // Read attack toggles from web state (all 6 types)
         let enabled_types = {
             let s = self.shared_state.lock().unwrap();
-            [s.attack_deauth, s.attack_pmkid, s.attack_csa, s.attack_disassoc]
+            [s.attack_deauth, s.attack_pmkid, s.attack_csa, s.attack_disassoc,
+             s.attack_anon_reassoc, s.attack_rogue_m2]
         };
         for ap in &attackable {
             if self.attacks.is_whitelisted(&ap.bssid) {
@@ -661,8 +662,9 @@ impl Daemon {
 
         if let Some(rate) = rate_change {
             any_command = true;
-            info!("web: rate change to {rate}");
+            info!("web: rate change to {rate}, restarting AO");
             self.ao.set_rate(rate);
+            let _ = self.ao.restart();
         }
 
         if restart {
@@ -693,6 +695,15 @@ impl Daemon {
             } else {
                 self.bluetooth.hide();
             }
+        }
+
+        // Process pending attack toggle (trigger persistence)
+        let attack_toggle = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_attack_toggle.take()
+        };
+        if attack_toggle.is_some() {
+            any_command = true; // triggers save_runtime_state
         }
 
         // Process BT scan request
@@ -749,23 +760,20 @@ impl Daemon {
             (s.pending_whitelist_add.take(), s.pending_whitelist_remove.take())
         };
         if let Some(add) = wl_add {
-            // Parse MAC address string to [u8; 6]
-            let parts: Vec<&str> = add.value.split(':').collect();
-            if parts.len() == 6 {
-                let mut mac = [0u8; 6];
-                let mut ok = true;
-                for (i, p) in parts.iter().enumerate() {
-                    match u8::from_str_radix(p, 16) {
-                        Ok(b) => mac[i] = b,
-                        Err(_) => { ok = false; break; }
-                    }
-                }
-                if ok {
+            let entry = wifi::parse_whitelist_entry(&add.value);
+            match entry {
+                wifi::WhitelistEntry::Bssid(mac) => {
                     if !self.attacks.is_whitelisted(&mac) {
                         self.attacks.whitelist.push(mac);
-                        info!("web: whitelist added {}", add.value);
+                        info!("web: whitelist added MAC {}", add.value);
                         any_command = true;
                     }
+                }
+                wifi::WhitelistEntry::Ssid(ssid) => {
+                    // Add to wifi tracker's SSID whitelist
+                    self.wifi.tracker.add_ssid_whitelist(&ssid);
+                    info!("web: whitelist added SSID {ssid}");
+                    any_command = true;
                 }
             }
         }
@@ -812,6 +820,9 @@ impl Daemon {
                 self.autohunt = autohunt;
                 info!("web: autohunt set to {autohunt}");
             }
+            // Restart AO so new channel/dwell/autohunt settings take effect
+            info!("web: restarting AO with new channel config");
+            let _ = self.ao.restart();
         }
 
         // Process pending WPA-SEC key
@@ -1146,6 +1157,8 @@ impl Daemon {
         s.bt_ip = bt_ip;
         s.bt_internet_available = bt_inet;
         s.bt_retry_count = self.bluetooth.retry_count;
+        s.bt_device_name = self.bluetooth.config.phone_name.clone();
+        s.bt_phone_mac = self.bluetooth.config.phone_mac.clone();
 
         s.ao_state = ao_state;
         s.ao_pid = ao_pid;
@@ -1160,6 +1173,10 @@ impl Daemon {
         s.recovery_total = self.recovery.total_recoveries;
         s.recovery_soft_retries = self.recovery.soft_retry_count;
         s.recovery_hard_retries = self.recovery.hard_retry_count;
+        s.recovery_last_str = match self.recovery.last_recovery {
+            Some(t) => format!("{}s ago", t.elapsed().as_secs()),
+            None => "never".into(),
+        };
 
         // Copy framebuffer for web display preview
         s.screen_width = self.screen.fb.width;
@@ -1194,7 +1211,7 @@ impl Daemon {
                 ap_entries.push(web::ApEntry {
                     bssid: bssid_fmt,
                     ssid: "(AO)".into(),
-                    rssi: 0, // no RSSI from stdout
+                    rssi: -100, // unknown RSSI — sorts to bottom
                     channel: ao_ap.channel,
                     clients: ao_ap.hit_count,
                     has_handshake: ao_ap.captured,

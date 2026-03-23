@@ -140,6 +140,8 @@ impl ChannelConfig {
 #[derive(Debug, Default)]
 pub struct ApTracker {
     aps: HashMap<[u8; 6], AccessPoint>,
+    /// SSIDs excluded from attacks.
+    pub ssid_whitelist: Vec<String>,
 }
 
 impl ApTracker {
@@ -175,6 +177,13 @@ impl ApTracker {
         let mut aps: Vec<_> = self.aps.values().collect();
         aps.sort_by(|a, b| b.rssi.cmp(&a.rssi));
         aps
+    }
+
+    /// Add an SSID to the whitelist.
+    pub fn add_ssid_whitelist(&mut self, ssid: &str) {
+        if !self.ssid_whitelist.iter().any(|s| s == ssid) {
+            self.ssid_whitelist.push(ssid.to_string());
+        }
     }
 
     /// Remove APs not seen for more than `max_age` seconds.

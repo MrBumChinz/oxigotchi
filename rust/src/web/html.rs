@@ -412,7 +412,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- 21. Settings -->
 <div class="card" id="card-settings">
 <div class="card-title">Settings</div>
-<div class="sub">Device configuration. Changes are saved to config.toml.</div>
+<div class="sub">Device configuration. Changes are persisted across restarts.</div>
 <div style="margin-bottom:10px">
 <div style="font-size:12px;color:#888;margin-bottom:4px">Device Name</div>
 <div style="display:flex;gap:6px">
@@ -448,7 +448,7 @@ function fmtBytes(b) {
     if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
     return (b/1048576).toFixed(1) + ' MB';
 }
-function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/'/g, '&#39;'); }
 
 // --- Refresh functions ---
 

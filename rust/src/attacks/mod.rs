@@ -17,6 +17,10 @@ pub enum AttackType {
     Csa,
     /// Disassociation attack.
     Disassoc,
+    /// Anonymous reassociation (PMKID from stubborn routers).
+    AnonReassoc,
+    /// Rogue M2 (fake AP for handshake capture).
+    RogueM2,
 }
 
 /// Result of a single attack attempt.
@@ -76,11 +80,13 @@ impl RateLimiter {
 }
 
 /// All attack types in scheduling order (module-level constant).
-const ATTACK_TYPES: [AttackType; 4] = [
+const ATTACK_TYPES: [AttackType; 6] = [
     AttackType::Deauth,
     AttackType::Pmkid,
     AttackType::Csa,
     AttackType::Disassoc,
+    AttackType::AnonReassoc,
+    AttackType::RogueM2,
 ];
 
 /// Attack scheduler deciding which APs to target and when.
@@ -125,7 +131,7 @@ impl AttackScheduler {
     /// Schedule the next attack, cycling through enabled types.
     /// `enabled` maps to [deauth, pmkid, csa, disassoc].
     /// Returns None if rate-limited or all types disabled.
-    pub fn next_attack(&mut self, _target_bssid: &[u8; 6], enabled: &[bool; 4]) -> Option<AttackType> {
+    pub fn next_attack(&mut self, _target_bssid: &[u8; 6], enabled: &[bool; 6]) -> Option<AttackType> {
         if !enabled.iter().any(|&e| e) {
             return None; // all disabled, don't consume rate token
         }
@@ -204,7 +210,7 @@ mod tests {
     fn test_next_attack_respects_rate() {
         let mut scheduler = AttackScheduler::new(1);
         let bssid = [0; 6];
-        let enabled = [true, true, true, true];
+        let enabled = [true, true, true, true, true, true];
         assert!(scheduler.next_attack(&bssid, &enabled).is_some());
         assert!(scheduler.next_attack(&bssid, &enabled).is_none()); // rate limited
     }
@@ -254,7 +260,7 @@ mod tests {
 
     #[test]
     fn test_next_attack_cycles_types() {
-        let enabled = [true, true, false, false]; // deauth + pmkid on, csa + disassoc off
+        let enabled = [true, true, false, false, false, false]; // deauth + pmkid on, csa + disassoc off
         let mut scheduler = AttackScheduler::new(10);
         let bssid = [0; 6];
 
@@ -271,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_next_attack_all_disabled() {
-        let enabled = [false, false, false, false];
+        let enabled = [false, false, false, false, false, false];
         let mut scheduler = AttackScheduler::new(10);
         let bssid = [0; 6];
         assert_eq!(scheduler.next_attack(&bssid, &enabled), None);
@@ -279,7 +285,7 @@ mod tests {
 
     #[test]
     fn test_next_attack_single_type() {
-        let enabled = [false, false, true, false]; // only CSA
+        let enabled = [false, false, true, false, false, false]; // only CSA
         let mut scheduler = AttackScheduler::new(10);
         let bssid = [0; 6];
         assert_eq!(scheduler.next_attack(&bssid, &enabled), Some(AttackType::Csa));
