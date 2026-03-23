@@ -14,6 +14,7 @@ mod personality;
 mod pisugar;
 mod network;
 mod recovery;
+mod migration;
 mod web;
 mod wifi;
 mod lua;
@@ -752,15 +753,18 @@ impl Daemon {
         s.screen_height = self.screen.fb.height;
         s.screen_bytes = self.screen.fb.as_bytes().to_vec();
 
-        // Sync AP list for web dashboard
+        // Sync AP list for web dashboard (cross-reference with captures for handshake status)
         s.ap_list = self.wifi.tracker.sorted_by_rssi().iter().map(|ap| {
+            let has_hs = self.captures.files.iter().any(|f| {
+                f.has_handshake && f.bssid == ap.bssid
+            });
             web::ApEntry {
                 bssid: ap.bssid_str(),
                 ssid: if ap.ssid.is_empty() { "(hidden)".into() } else { ap.ssid.clone() },
                 rssi: ap.rssi as i16,
                 channel: ap.channel,
                 clients: ap.client_count,
-                has_handshake: false, // TODO: cross-reference with captures
+                has_handshake: has_hs,
             }
         }).collect();
 
@@ -1057,26 +1061,26 @@ impl Daemon {
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    // Load oxigotchi config, or migrate from pwnagotchi config on first run
-    let config = if std::path::Path::new("/etc/oxigotchi/config.toml").exists() {
-        config::Config::load_or_default("/etc/oxigotchi/config.toml")
-    } else if std::path::Path::new("/etc/pwnagotchi/config.toml").exists() {
-        info!("migrating settings from /etc/pwnagotchi/config.toml");
-        let mut cfg = config::Config::load_or_default("/etc/pwnagotchi/config.toml");
-        // Keep pwnagotchi's whitelist, display, attack settings
-        // but use our own name and identity
-        cfg.main.name = "oxigotchi".into();
-        cfg.name = "oxigotchi".into();
-        // Save migrated config so we don't re-migrate
-        if let Err(e) = std::fs::create_dir_all("/etc/oxigotchi") {
-            log::warn!("could not create /etc/oxigotchi: {e}");
-        }
-        if let Ok(toml_str) = toml::to_string_pretty(&cfg) {
-            if let Err(e) = std::fs::write("/etc/oxigotchi/config.toml", &toml_str) {
-                log::warn!("could not save config: {e}");
-            }
-        }
-        cfg
+    // Run first-boot migration if needed (pwnagotchi -> oxigotchi)
+    let legacy = migration::LegacyPaths::default();
+    let oxi_paths = migration::OxiPaths::default();
+    let migration_result = migration::run_migration(&legacy, &oxi_paths);
+    if migration_result.success() && migration_result.config_migrated {
+        info!(
+            "migration: config migrated, {} captures imported (of {} found)",
+            migration_result.captures_imported, migration_result.captures_found
+        );
+    }
+    for w in &migration_result.warnings {
+        log::warn!("migration: {w}");
+    }
+    for e in &migration_result.errors {
+        log::error!("migration: {e}");
+    }
+
+    // Load oxigotchi config (may have been created by migration above)
+    let config = if oxi_paths.config.exists() {
+        config::Config::load_or_default(oxi_paths.config.to_str().unwrap_or("/etc/oxigotchi/config.toml"))
     } else {
         config::Config::defaults()
     };
