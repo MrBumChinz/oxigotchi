@@ -24,6 +24,23 @@ use log::info;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Ensure tmpfs capture directory exists for AO output.
+/// Creates /tmp/ao_captures/ if it doesn't exist.
+/// On Pi, /tmp is already a tmpfs mount, so this is just mkdir.
+#[cfg(unix)]
+fn ensure_tmpfs_capture_dir() -> String {
+    let dir = "/tmp/ao_captures";
+    let _ = std::fs::create_dir_all(dir);
+    dir.to_string()
+}
+
+#[cfg(not(unix))]
+fn ensure_tmpfs_capture_dir() -> String {
+    let dir = std::env::temp_dir().join("ao_captures");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.to_string_lossy().to_string()
+}
+
 /// Epoch duration in seconds.
 const EPOCH_DURATION_SECS: u64 = 30;
 /// Attack rate (attacks per second). Rate 2+ crashes BCM43436B0.
@@ -76,6 +93,8 @@ struct Daemon {
     upload_queue: capture::UploadQueue,
     discord_webhook_url: String,
     discord_enabled: bool,
+    /// tmpfs directory for AO captures (validated before moving to SD).
+    tmpfs_capture_dir: String,
 }
 
 impl Daemon {
@@ -129,6 +148,7 @@ impl Daemon {
             upload_queue: capture::UploadQueue::new(),
             discord_webhook_url: String::new(),
             discord_enabled: false,
+            tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
         }
     }
 
@@ -230,6 +250,10 @@ impl Daemon {
         } else {
             info!("usb0 not present, skipping network setup");
         }
+
+        // Point AO output to tmpfs — captures are validated there before moving to SD
+        self.ao.config.output_dir = self.tmpfs_capture_dir.clone();
+        info!("capture pipeline: AO output -> tmpfs ({})", self.tmpfs_capture_dir);
 
         // Start AngryOxide subprocess
         match self.ao.start() {
@@ -429,31 +453,52 @@ impl Daemon {
         }
     }
 
-    /// Capture phase: scan for new handshake files from AngryOxide.
+    /// Capture phase: scan tmpfs for new AO captures, validate, move handshakes to SD.
     fn run_capture_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Capture
         result.associations = self.wifi.tracker.total_clients();
 
+        // 1. Scan tmpfs for new AO captures
+        let tmpfs_dir = std::path::Path::new(&self.tmpfs_capture_dir);
+        let mut tmpfs_manager = capture::CaptureManager::new(
+            &self.tmpfs_capture_dir,
+        );
+        let _ = tmpfs_manager.scan_directory();
+
+        // 2. Convert new captures in tmpfs via hcxpcapngtool
+        if !tmpfs_manager.files.is_empty() {
+            let (converted, _no_hs, failed) = capture::batch_convert(&mut tmpfs_manager);
+            if converted > 0 {
+                info!("tmpfs: converted {converted} capture(s) to .22000");
+            }
+            if failed > 0 {
+                log::warn!("tmpfs: {failed} conversion(s) failed");
+            }
+        }
+
+        // 3. Move validated captures to SD, delete junk from tmpfs
+        let permanent_dir = self.captures.capture_dir.clone();
+        let (moved, deleted) = capture::move_validated_captures(
+            tmpfs_dir,
+            &permanent_dir,
+            &mut self.captures,
+        );
+        if moved > 0 || deleted > 0 {
+            info!("capture pipeline: {moved} saved to SD, {deleted} junk deleted from RAM");
+        }
+
+        // 4. Scan permanent dir for upload tracking + new handshake detection
         let handshakes_before = self.captures.handshake_count();
         match self.captures.scan_directory() {
             Ok(new) => {
                 if new > 0 {
-                    info!("capture scan: {new} new file(s)");
+                    info!("capture scan: {new} new file(s) on SD");
                 }
             }
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
 
-        // Convert new pcapng files to .22000 format for hashcat
-        let (converted, _no_hs, failed) = capture::batch_convert(&mut self.captures);
-        if converted > 0 {
-            info!("hashcat: converted {converted} capture(s) to .22000");
-        }
-        if failed > 0 {
-            log::warn!("hashcat: {failed} conversion(s) failed");
-        }
-
-        // Upload pending .22000 files to WPA-SEC
+        // 5. Upload pending .22000 files to WPA-SEC
         let (uploaded, upload_failed) = capture::upload_all_pending(
             &mut self.captures,
             &self.wpasec_config,

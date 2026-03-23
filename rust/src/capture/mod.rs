@@ -960,6 +960,92 @@ pub fn auto_backup(
     Err("auto-backup requires Unix (tar)".into())
 }
 
+// ---------------------------------------------------------------------------
+// tmpfs capture pipeline: validate in RAM, move handshakes to SD
+// ---------------------------------------------------------------------------
+
+/// Move validated captures (.pcapng + .22000) from tmpfs to permanent storage.
+/// Delete junk (pcapng files that produced no .22000 and are older than 60s) from tmpfs.
+/// Returns (moved_count, deleted_count).
+#[cfg(unix)]
+pub fn move_validated_captures(
+    tmpfs_dir: &Path,
+    permanent_dir: &Path,
+    manager: &mut CaptureManager,
+) -> (usize, usize) {
+    use std::fs;
+    let mut moved = 0;
+    let mut deleted = 0;
+
+    // Ensure permanent dir exists
+    let _ = fs::create_dir_all(permanent_dir);
+
+    let entries: Vec<_> = match fs::read_dir(tmpfs_dir) {
+        Ok(e) => e.filter_map(|e| e.ok()).collect(),
+        Err(_) => return (0, 0),
+    };
+
+    for entry in &entries {
+        let path = entry.path();
+        if path.extension().map(|e| e == "pcapng").unwrap_or(false) {
+            let companion = path.with_extension("22000");
+            if companion.exists() && companion.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                // Valid handshake — move both files to permanent storage
+                let pcapng_dest = permanent_dir.join(path.file_name().unwrap());
+                let companion_dest = permanent_dir.join(companion.file_name().unwrap());
+                if fs::copy(&path, &pcapng_dest).is_ok() {
+                    let _ = fs::copy(&companion, &companion_dest);
+                    let _ = fs::remove_file(&path);
+                    let _ = fs::remove_file(&companion);
+                    moved += 1;
+                    log::info!("capture: moved validated {} to SD",
+                        path.file_name().unwrap().to_string_lossy());
+                }
+            } else {
+                // Check if conversion was attempted (file is old enough).
+                // Only delete if file hasn't been modified in last 60 seconds
+                // (give batch_convert time to process it first).
+                if let Ok(meta) = path.metadata() {
+                    let age = meta.modified().ok()
+                        .and_then(|m| m.elapsed().ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if age > 60 {
+                        let _ = fs::remove_file(&path);
+                        deleted += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Also clean up any orphaned .22000 files in tmpfs
+    for entry in &entries {
+        let path = entry.path();
+        if path.extension().map(|e| e == "22000").unwrap_or(false) {
+            if !path.with_extension("pcapng").exists() {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+
+    // Re-scan permanent dir to pick up newly moved files
+    if moved > 0 {
+        let _ = manager.scan_directory();
+    }
+
+    (moved, deleted)
+}
+
+#[cfg(not(unix))]
+pub fn move_validated_captures(
+    _tmpfs_dir: &Path,
+    _permanent_dir: &Path,
+    _manager: &mut CaptureManager,
+) -> (usize, usize) {
+    (0, 0)
+}
+
 // ===========================================================================
 // Tests
 // ===========================================================================
