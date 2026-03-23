@@ -1423,6 +1423,13 @@ impl Daemon {
                 #[cfg(unix)]
                 {
                     use std::process::Command;
+                    // Bring down all WiFi interfaces first — modprobe -r fails with
+                    // "Module brcmfmac is in use" if interfaces are still up
+                    info!("bringing down WiFi interfaces before rmmod");
+                    let _ = Command::new("ip").args(["link", "set", "wlan0mon", "down"]).output();
+                    let _ = Command::new("iw").args(["dev", "wlan0mon", "del"]).output();
+                    let _ = Command::new("ip").args(["link", "set", "wlan0", "down"]).output();
+                    std::thread::sleep(Duration::from_secs(1));
                     info!("removing brcmfmac module");
                     let _ = Command::new("modprobe").args(["-r", "brcmfmac"]).output();
                     std::thread::sleep(Duration::from_secs(2));
@@ -1480,8 +1487,19 @@ impl Daemon {
                 let _ = recovery::trigger_reboot();
             }
             recovery::RecoveryAction::GiveUp => {
-                log::error!("WiFi recovery exhausted, giving up");
+                log::error!("WiFi recovery exhausted — rebooting as last resort");
                 self.epoch_loop.personality.set_override(personality::Face::Broken);
+                self.recovery.log(
+                    recovery::DiagLevel::Error,
+                    "all recovery attempts exhausted — rebooting",
+                );
+                self.update_display();
+                #[cfg(unix)]
+                {
+                    let _ = std::process::Command::new("sudo")
+                        .args(["reboot"])
+                        .output();
+                }
             }
         }
     }
