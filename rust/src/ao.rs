@@ -491,16 +491,39 @@ pub fn parse_ao_line(line: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-/// Reader thread: reads AO stdout line-by-line, parses for AP count.
+/// Extract a 12-hex-char BSSID from a line (e.g., "[a0ab1bce191f]" or "a0ab1bce191f").
+fn extract_bssid(line: &str) -> Option<String> {
+    // Look for 12 consecutive hex chars (MAC without colons)
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i + 12 <= bytes.len() {
+        let candidate = &line[i..i + 12];
+        if candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+            // Avoid matching timestamps or other long hex strings
+            let before_ok = i == 0 || !bytes[i - 1].is_ascii_hexdigit();
+            let after_ok = i + 12 >= bytes.len() || !bytes[i + 12].is_ascii_hexdigit();
+            if before_ok && after_ok {
+                return Some(candidate.to_ascii_lowercase());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Reader thread: reads AO stdout line-by-line, counts unique BSSIDs as APs.
 #[cfg(unix)]
 fn ao_stdout_reader(
     stdout: std::process::ChildStdout,
     ap_count: Arc<AtomicU32>,
     shutdown: Arc<AtomicBool>,
 ) {
+    use std::collections::HashSet;
     use std::io::{BufRead, BufReader};
 
     let reader = BufReader::new(stdout);
+    let mut seen_bssids: HashSet<String> = HashSet::new();
+
     for line_result in reader.lines() {
         if shutdown.load(Ordering::Relaxed) {
             info!("AO stdout reader: shutdown signaled");
@@ -508,10 +531,25 @@ fn ao_stdout_reader(
         }
         match line_result {
             Ok(line) => {
+                // Try explicit AP count from status line first
                 if let Some(count) = parse_ao_line(&line) {
                     ap_count.store(count, Ordering::Relaxed);
                 }
-                // Log capture events (informational only)
+
+                // Track unique BSSIDs from attack/info lines
+                if line.contains("Retrieval")
+                    || line.contains("Disassoc")
+                    || line.contains("Deauth")
+                    || line.contains("PMKID")
+                    || line.contains("Association")
+                {
+                    if let Some(bssid) = extract_bssid(&line) {
+                        seen_bssids.insert(bssid);
+                        ap_count.store(seen_bssids.len() as u32, Ordering::Relaxed);
+                    }
+                }
+
+                // Log capture events
                 let lower = line.to_ascii_lowercase();
                 if lower.contains("handshake")
                     || lower.contains("pmkid")
