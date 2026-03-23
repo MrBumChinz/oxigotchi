@@ -199,6 +199,25 @@ impl Daemon {
             info!("PiSugar not detected");
         }
 
+        // Disable legacy Python/Go services — Rusty Oxigotchi replaces them.
+        // Saves ~66MB RAM (bettercap ~36MB + pwnagotchi ~30MB).
+        #[cfg(unix)]
+        {
+            use std::process::Command;
+            for svc in &["pwnagotchi", "bettercap"] {
+                let active = Command::new("systemctl")
+                    .args(["is-active", "--quiet", svc])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if active {
+                    info!("disabling legacy service: {svc}");
+                    let _ = Command::new("systemctl").args(["stop", svc]).output();
+                    let _ = Command::new("systemctl").args(["disable", svc]).output();
+                }
+            }
+        }
+
         // Start WiFi monitor mode first — RAGE is the default mode.
         // BT only connects when user switches to SAFE mode via button.
         // BCM43436B0 shares UART: whichever starts first gets it.
