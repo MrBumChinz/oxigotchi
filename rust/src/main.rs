@@ -354,10 +354,22 @@ impl Daemon {
 
         // Health check on WiFi (RAGE mode only — SAFE mode intentionally has no monitor)
         if self.mode == OperatingMode::Rage && self.recovery.should_check() {
-            let health = if self.wifi.state == wifi::WifiState::Monitor {
+            // Check actual interface existence, not just internal state.
+            // Firmware crashes remove the interface without updating wifi.state.
+            #[cfg(unix)]
+            let iface_exists = std::path::Path::new("/sys/class/net/wlan0mon").exists();
+            #[cfg(not(unix))]
+            let iface_exists = self.wifi.state == wifi::WifiState::Monitor;
+
+            let health = if iface_exists {
                 recovery::HealthCheck::Ok
             } else {
-                recovery::HealthCheck::Unresponsive
+                // Interface gone — likely firmware crash. Reset internal state.
+                if self.wifi.state == wifi::WifiState::Monitor {
+                    log::warn!("wlan0mon disappeared — firmware crash detected");
+                    self.wifi.state = wifi::WifiState::Down;
+                }
+                recovery::HealthCheck::Missing
             };
             let action = self.recovery.process_health(health);
             self.handle_recovery_action(action);
@@ -1185,13 +1197,46 @@ impl Daemon {
                     log::warn!("recovery cooldown active, skipping soft recovery");
                     return;
                 }
-                info!("attempting soft WiFi recovery");
+                info!("attempting soft WiFi recovery (modprobe cycle)");
                 self.epoch_loop.personality.set_override(personality::Face::WifiDown);
-                match self.wifi.stop_monitor() {
-                    Ok(()) => {
-                        let _ = self.wifi.start_monitor();
+
+                // Stop AO first — it's using the interface
+                self.ao.stop();
+
+                // Stop monitor mode (may fail if interface is gone — that's OK)
+                let _ = self.wifi.stop_monitor();
+
+                // Full brcmfmac modprobe cycle (matches Python's _try_fw_recovery)
+                #[cfg(unix)]
+                {
+                    use std::process::Command;
+                    info!("removing brcmfmac module");
+                    let _ = Command::new("modprobe").args(["-r", "brcmfmac"]).output();
+                    std::thread::sleep(Duration::from_secs(2));
+                    info!("reloading brcmfmac module");
+                    let _ = Command::new("modprobe").arg("brcmfmac").output();
+                    // Poll for wlan0 to reappear (firmware load is async)
+                    let wlan0 = std::path::Path::new("/sys/class/net/wlan0");
+                    for i in 0..10 {
+                        if wlan0.exists() {
+                            info!("wlan0 back after {}s", i + 2);
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_secs(1));
                     }
-                    Err(e) => log::error!("soft recovery failed: {e}"),
+                }
+
+                // Re-enter monitor mode
+                match self.wifi.start_monitor() {
+                    Ok(()) => {
+                        info!("soft recovery: monitor mode restored");
+                        // Restart AO
+                        match self.ao.start() {
+                            Ok(()) => info!("soft recovery: AO restarted (PID {})", self.ao.pid),
+                            Err(e) => log::error!("soft recovery: AO restart failed: {e}"),
+                        }
+                    }
+                    Err(e) => log::error!("soft recovery: monitor mode failed: {e}"),
                 }
                 self.recovery.record_recovery();
             }
