@@ -767,8 +767,12 @@ impl Daemon {
             ao_uptime_str: ao_uptime,
             ao_uptime_secs: ao_up_secs,
             ao_channels: {
-                let ch = self.ao.channel();
-                if ch > 0 { ch.to_string() } else { "AH".to_string() }
+                let chs = &self.wifi.channel_config.channels;
+                if chs.is_empty() {
+                    "AH".to_string()
+                } else {
+                    chs.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",")
+                }
             },
             battery_level: bat_level,
             battery_charging: bat_charging,
