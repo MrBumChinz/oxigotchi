@@ -627,7 +627,7 @@ impl Daemon {
     fn process_web_commands(&mut self) {
         let mut any_command = false;
 
-        let (mode_switch, rate_change, restart, shutdown, bt_toggle, pwn_restart) = {
+        let (mode_switch, rate_change, restart, shutdown, bt_toggle) = {
             let mut s = self.shared_state.lock().unwrap();
             let mode = s.pending_mode_switch.take();
             let rate = s.pending_rate_change.take();
@@ -636,9 +636,7 @@ impl Daemon {
             let shutdown = s.pending_shutdown;
             s.pending_shutdown = false;
             let bt_toggle = s.pending_bt_toggle.take();
-            let pwn_restart = s.pending_pwnagotchi_restart;
-            s.pending_pwnagotchi_restart = false;
-            (mode, rate, restart, shutdown, bt_toggle, pwn_restart)
+            (mode, rate, restart, shutdown, bt_toggle)
         };
 
         if let Some(mode) = mode_switch {
@@ -683,17 +681,6 @@ impl Daemon {
             {
                 let _ = std::process::Command::new("sudo")
                     .args(["shutdown", "-h", "now"])
-                    .spawn();
-            }
-        }
-
-        if pwn_restart {
-            any_command = true;
-            info!("web: oxigotchi service restart requested");
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("sudo")
-                    .args(["systemctl", "restart", "rusty-oxigotchi"])
                     .spawn();
             }
         }
@@ -1094,6 +1081,8 @@ impl Daemon {
         if let Some(name) = state.get("name").and_then(|v| v.as_str()) {
             if !name.is_empty() {
                 self.config.name = name.to_string();
+                let mut s = self.shared_state.lock().unwrap();
+                s.name = name.to_string();
             }
         }
 

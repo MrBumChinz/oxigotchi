@@ -516,6 +516,8 @@ function refreshWifi() {
         if (chInput && !chInput.matches(':focus')) chInput.value = d.channels.join(',');
         var dwInput = document.getElementById('ch-dwell');
         if (dwInput && !dwInput.matches(':active')) { dwInput.value = d.dwell_ms; document.getElementById('ch-dwell-val').textContent = d.dwell_ms; }
+        var ahToggle = document.getElementById('autohunt-toggle');
+        if (ahToggle) ahToggle.checked = d.autohunt_enabled;
     });
 }
 

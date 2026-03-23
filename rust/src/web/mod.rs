@@ -126,7 +126,6 @@ pub struct DaemonState {
     pub pending_rate_change: Option<u32>,
     pub pending_restart: bool,
     pub pending_shutdown: bool,
-    pub pending_pwnagotchi_restart: bool,
     pub pending_attack_toggle: Option<AttackToggle>,
     pub pending_bt_toggle: Option<bool>,
     pub pending_bt_pair: Option<String>,
@@ -235,7 +234,7 @@ impl DaemonState {
             pending_rate_change: None,
             pending_restart: false,
             pending_shutdown: false,
-            pending_pwnagotchi_restart: false,
+
             pending_attack_toggle: None,
             pending_bt_toggle: None,
             pending_bt_pair: None,
@@ -394,6 +393,7 @@ pub struct WifiInfo {
     pub aps_tracked: usize,
     pub channels: Vec<u8>,
     pub dwell_ms: u64,
+    pub autohunt_enabled: bool,
 }
 
 /// Bluetooth info returned by /api/bluetooth.
@@ -793,6 +793,7 @@ async fn wifi_handler(State(state): State<SharedState>) -> Json<WifiInfo> {
         aps_tracked: s.wifi_aps_tracked,
         channels: s.wifi_channels.clone(),
         dwell_ms: s.wifi_dwell_ms,
+        autohunt_enabled: s.autohunt_enabled,
     })
 }
 
@@ -1575,6 +1576,7 @@ mod tests {
         let info = WifiInfo {
             state: "Monitor".into(), channel: 6,
             aps_tracked: 15, channels: vec![1, 6, 11], dwell_ms: 250,
+            autohunt_enabled: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"state\":\"Monitor\""));
