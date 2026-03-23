@@ -236,16 +236,29 @@ The BCM43436B0 WiFi chip on the Pi Zero 2W is prone to firmware crashes, especia
 
 ### Recovery Levels
 
-| Level | What happened | What it does |
-|-------|--------------|-------------|
-| **Healthy** | Everything is fine | Nothing |
-| **Soft recovery** | WiFi interface is unresponsive | `rmmod brcmfmac` + `modprobe brcmfmac` to reload the driver |
-| **Hard recovery** | Soft recovery failed | GPIO power cycle of the WiFi chip via WL_REG_ON |
-| **Reboot** | All recovery attempts exhausted | Triggers a full Pi reboot |
+| Level | Trigger | Action | Max attempts |
+|-------|---------|--------|-------------|
+| **Healthy** | Everything is fine | Nothing | — |
+| **Soft recovery** | `wlan0mon` missing OR AO crashed 3+ times | `rmmod brcmfmac` + `modprobe brcmfmac` + restart AO | 3 |
+| **Hard recovery** | Soft recovery failed | GPIO power cycle of WiFi chip via WL_REG_ON | 2 |
+| **Give up** | All recovery attempts exhausted | Stop trying — daemon stays up, web dashboard accessible | — |
+
+**Safety guarantees:**
+- 60-second cooldown between recovery attempts (no rapid-fire loops)
+- Maximum 5 total attempts (3 soft + 2 hard) then stops
+- The daemon **never reboots** from crash recovery — only gives up gracefully
+- USB networking and web dashboard remain accessible even when WiFi is dead
+- AO crash counter resets after successful recovery to prevent immediate re-trigger
+
+### AO Crash Loop Detection
+
+Over extended operation (~2.5 hours), the BCM43436B0 firmware can enter a degraded state where `wlan0mon` still exists but the radio is sick (PSM watchdog wedged). AO detects the broken radio and exits with SIGABRT. Without crash loop detection, AO would restart and crash forever.
+
+The daemon detects this: when AO crashes 3+ times consecutively, it reports the firmware as "unresponsive" and triggers the soft recovery path (full modprobe cycle). This reloads the firmware from disk with the patched v5 binary, giving the radio a fresh start.
 
 ### AO Auto-Restart
 
-If AngryOxide crashes (which happens after firmware recovery), the daemon automatically restarts it with exponential backoff. The crash counter and recovery status are visible on the Recovery Status card in the dashboard.
+If AngryOxide crashes (which happens after firmware recovery), the daemon automatically restarts it with exponential backoff (5s, 10s, 20s... up to 5 minutes). After 10 stable epochs (~5 minutes), the crash counter resets. The crash counter and recovery status are visible on the Recovery Status card in the dashboard.
 
 ### GPS Auto-Detection
 
