@@ -1027,6 +1027,8 @@ impl Daemon {
             "discord_enabled": self.discord_enabled,
             "autohunt": self.autohunt,
             "name": self.config.name,
+            "wifi_channels": self.wifi.channel_config.channels,
+            "wifi_dwell_ms": self.wifi.channel_config.dwell_ms,
         });
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
@@ -1117,6 +1119,22 @@ impl Daemon {
         }
         if let Some(autohunt) = state.get("autohunt").and_then(|v| v.as_bool()) {
             self.autohunt = autohunt;
+        }
+        if let Some(channels_arr) = state.get("wifi_channels").and_then(|v| v.as_array()) {
+            let channels: Vec<u8> = channels_arr.iter()
+                .filter_map(|v| v.as_u64().map(|n| n as u8))
+                .collect();
+            if !channels.is_empty() {
+                self.wifi.channel_config.channels = channels.clone();
+                // Also sync to AO config so next start uses these
+                if !self.autohunt {
+                    self.ao.config.channels = channels;
+                }
+            }
+        }
+        if let Some(dwell) = state.get("wifi_dwell_ms").and_then(|v| v.as_u64()) {
+            self.wifi.channel_config.dwell_ms = dwell;
+            self.ao.config.dwell = (dwell / 1000).max(1) as u32;
         }
         if let Some(name) = state.get("name").and_then(|v| v.as_str()) {
             if !name.is_empty() {
