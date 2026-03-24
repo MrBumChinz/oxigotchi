@@ -1,11 +1,11 @@
 -- ao_status.lua: AO session status on e-ink top line.
--- Format: "AO: {aps}/{captures} | {uptime} | CH:{channels}" when running
---   aps     = APs currently tracked by AO
---   captures = total validated capture files on SD
+-- Format: "AO: {handshakes}/{captures} | {uptime} | CH:{channels}" when running
+--   handshakes = validated captures moved to SD this session
+--   captures   = pcapng files created by AO in tmpfs this session
 -- "AO: off" when stopped, "AO: ERR" when failed
 plugin = {}
 plugin.name    = "ao_status"
-plugin.version = "3.0.0"
+plugin.version = "4.0.0"
 plugin.author  = "oxigotchi"
 plugin.tag     = "default"
 
@@ -40,7 +40,7 @@ function on_epoch(state)
     elseif state.ao_state == "STOPPED" then
         s = "AO: off"
     else
-        s = "AO: " .. state.aps_seen .. "/" .. state.captures_total
+        s = "AO: " .. state.session_handshakes .. "/" .. state.session_captures
             .. " | " .. compact_uptime(state.ao_uptime_secs)
             .. " | CH:" .. state.ao_channels
     end
