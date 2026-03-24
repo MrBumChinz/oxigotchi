@@ -1,9 +1,11 @@
--- ao_status.lua: AO status matching Python format.
--- Format: "AO: {session}/{total} | {compact_uptime}" when running
---         "AO: off" when stopped, "AO: ERR" when failed
+-- ao_status.lua: AO session status on e-ink top line.
+-- Format: "AO: {aps}/{captures} | {uptime} | CH:{channels}" when running
+--   aps     = APs currently tracked by AO
+--   captures = total validated capture files on SD
+-- "AO: off" when stopped, "AO: ERR" when failed
 plugin = {}
 plugin.name    = "ao_status"
-plugin.version = "2.0.0"
+plugin.version = "3.0.0"
 plugin.author  = "oxigotchi"
 plugin.tag     = "default"
 
@@ -38,7 +40,7 @@ function on_epoch(state)
     elseif state.ao_state == "STOPPED" then
         s = "AO: off"
     else
-        s = "AO: " .. state.handshakes .. "/" .. state.captures_total
+        s = "AO: " .. state.aps_seen .. "/" .. state.captures_total
             .. " | " .. compact_uptime(state.ao_uptime_secs)
             .. " | CH:" .. state.ao_channels
     end
