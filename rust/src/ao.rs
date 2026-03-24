@@ -665,21 +665,20 @@ fn ao_stdout_reader(
                     }
                 }
 
-                // Detect new pcapng file creation events from AO stdout.
-                // AO logs "New file" or "Writing" when it creates capture files.
+                // Count EAPOL exchanges as capture events.
+                // "New Eapol: ... (Message 1)" = AO started collecting a new handshake.
+                // This is the most reliable indicator of capture activity.
                 let lower = line.to_ascii_lowercase();
-                if (lower.contains("new file") || lower.contains("writing"))
-                    && lower.contains("pcapng")
-                {
+                if lower.contains("new eapol") && lower.contains("message 1") {
                     session_captures.fetch_add(1, Ordering::Relaxed);
-                    info!("AO new capture file: {}", &line[..line.len().min(120)]);
                 }
 
-                // Log capture events and mark AP as captured
+                // Log completed captures and mark AP
                 let is_capture = lower.contains("handshake")
                     || lower.contains("pmkid")
                     || lower.contains("captured")
-                    || lower.contains("hash");
+                    || lower.contains("hash")
+                    || (lower.contains("new eapol") && lower.contains("message 4"));
                 if is_capture {
                     info!("AO capture event: {}", &line[..line.len().min(120)]);
                     // Mark the AP in this line as captured

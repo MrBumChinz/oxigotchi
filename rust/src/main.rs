@@ -605,17 +605,8 @@ impl Daemon {
         );
         let _ = tmpfs_manager.scan_directory();
 
-        // Update session_captures from tmpfs scan (catches files stdout parsing missed)
-        let pcapng_count = tmpfs_manager.files.iter()
-            .filter(|f| f.path.extension().map(|e| e == "pcapng").unwrap_or(false))
-            .count() as u32;
-        if pcapng_count > 0 {
-            // Use store with max to only ratchet upward (stdout reader may have counted more)
-            let current = self.ao.session_captures.load(std::sync::atomic::Ordering::Relaxed);
-            if pcapng_count > current {
-                self.ao.session_captures.store(pcapng_count, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
+        // session_captures is tracked by the AO stdout reader (EAPOL Message 1 events).
+        // session_handshakes is incremented below when validated captures move to SD.
 
         // Truncate kismet file if it exceeds 50MB to prevent tmpfs exhaustion
         let kismet_path = format!("{}/capture.kismet", self.tmpfs_capture_dir);
