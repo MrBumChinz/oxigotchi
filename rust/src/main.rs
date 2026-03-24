@@ -295,8 +295,10 @@ impl Daemon {
             info!("usb0 not present, skipping network setup");
         }
 
-        // Point AO output to tmpfs — captures are validated there before moving to SD
-        self.ao.config.output_dir = self.tmpfs_capture_dir.clone();
+        // Point AO output prefix inside the tmpfs capture directory.
+        // AO uses --output as a filename prefix, appending -TIMESTAMP.pcapng.
+        // So /tmp/ao_captures/capture → /tmp/ao_captures/capture-2026-03-24_12-00-00.pcapng
+        self.ao.config.output_dir = format!("{}/capture", self.tmpfs_capture_dir);
         info!("capture pipeline: AO output -> tmpfs ({})", self.tmpfs_capture_dir);
 
         // Start AngryOxide subprocess
