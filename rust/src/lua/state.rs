@@ -22,6 +22,10 @@ pub struct EpochState {
     pub ao_uptime_str: String,
     pub ao_uptime_secs: u64,
     pub ao_channels: String,
+    /// Session capture count: pcapng files created by AO in tmpfs this session.
+    pub session_captures: u32,
+    /// Session handshake count: validated captures moved to SD this session.
+    pub session_handshakes: u32,
 
     // battery
     pub battery_level: u8,
@@ -82,6 +86,8 @@ impl EpochState {
         t.set("ao_uptime_str", self.ao_uptime_str.as_str())?;
         t.set("ao_uptime_secs", self.ao_uptime_secs)?;
         t.set("ao_channels", self.ao_channels.as_str())?;
+        t.set("session_captures", self.session_captures)?;
+        t.set("session_handshakes", self.session_handshakes)?;
 
         t.set("battery_level", self.battery_level)?;
         t.set("battery_charging", self.battery_charging)?;

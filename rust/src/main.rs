@@ -1141,6 +1141,8 @@ impl Daemon {
                 let ch = self.ao.channel();
                 if ch > 0 { ch.to_string() } else { "?".to_string() }
             },
+            session_captures: self.ao.session_captures(),
+            session_handshakes: self.ao.session_handshakes(),
             battery_level: bat_level,
             battery_charging: bat_charging,
             battery_voltage_mv: bat_mv,
