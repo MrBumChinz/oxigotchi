@@ -397,9 +397,15 @@ impl Daemon {
             self.channel_scorer.mark_visited(current_ch);
             self.channel_scorer.tick_epoch();
 
-            // When autohunt is ON, update AO's channel config with the best channels
+            // When autohunt is ON, update AO's channel config with the best channels.
+            // Cold-start guard: use safe 1,6,11 for the first 10 epochs so the
+            // scorer collects real AP data before making decisions.
             if self.autohunt {
-                let best = self.channel_scorer.top_channels();
+                let best = if self.epoch_loop.metrics.epoch < 10 {
+                    vec![1, 6, 11]
+                } else {
+                    self.channel_scorer.top_channels()
+                };
                 if !best.is_empty() {
                     self.wifi.channel_config.channels = best.clone();
                     self.ao.config.channels = best;
