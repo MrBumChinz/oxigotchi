@@ -124,7 +124,6 @@ impl EpochLoop {
     }
 
     /// Get a status message for the current epoch.
-    #[allow(dead_code)] // useful but not yet wired to Lua state
     pub fn status_message(&self) -> String {
         match self.phase {
             EpochPhase::Scan => format!(

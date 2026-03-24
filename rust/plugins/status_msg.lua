@@ -15,5 +15,9 @@ function on_load(config)
 end
 
 function on_epoch(state)
-    set_indicator("status_msg", state.status_message)
+    local msg = state.epoch_phase_status or ""
+    if msg == "" or msg == "Sleeping..." then
+        msg = state.status_message
+    end
+    set_indicator("status_msg", msg)
 end

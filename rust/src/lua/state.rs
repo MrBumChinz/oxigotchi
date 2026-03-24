@@ -47,6 +47,7 @@ pub struct EpochState {
     pub level: u32,
     pub xp: u64,
     pub status_message: String,
+    pub epoch_phase_status: String,
 
     // system
     pub cpu_temp: f32,
@@ -97,6 +98,7 @@ impl EpochState {
         t.set("level", self.level)?;
         t.set("xp", self.xp)?;
         t.set("status_message", self.status_message.as_str())?;
+        t.set("epoch_phase_status", self.epoch_phase_status.as_str())?;
 
         t.set("cpu_temp", self.cpu_temp)?;
         t.set("mem_used_mb", self.mem_used_mb)?;
