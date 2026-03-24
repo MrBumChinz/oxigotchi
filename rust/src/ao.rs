@@ -109,6 +109,10 @@ pub struct AoManager {
     pub gpsd_detected: bool,
     /// Structured AP data parsed from AO stdout (shared with reader thread).
     pub ao_ap_list: SharedApMap,
+    /// Session capture count: incremented when AO creates a new pcapng in tmpfs.
+    pub session_captures: Arc<AtomicU32>,
+    /// Session handshake count: incremented when a validated capture moves to SD.
+    pub session_handshakes: Arc<AtomicU32>,
 }
 
 impl AoManager {
@@ -130,6 +134,8 @@ impl AoManager {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             gpsd_detected: false,
             ao_ap_list: Arc::new(Mutex::new(HashMap::new())),
+            session_captures: Arc::new(AtomicU32::new(0)),
+            session_handshakes: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -146,6 +152,16 @@ impl AoManager {
     /// Get the current channel parsed from AO stdout.
     pub fn channel(&self) -> u32 {
         self.ao_channel.load(Ordering::Relaxed)
+    }
+
+    /// Get the session capture count (pcapng files created by AO in tmpfs).
+    pub fn session_captures(&self) -> u32 {
+        self.session_captures.load(Ordering::Relaxed)
+    }
+
+    /// Get the session handshake count (validated captures moved to SD).
+    pub fn session_handshakes(&self) -> u32 {
+        self.session_handshakes.load(Ordering::Relaxed)
     }
 
     /// Build the command-line arguments for angryoxide.
@@ -248,11 +264,12 @@ impl AoManager {
                         let channel = Arc::clone(&self.ao_channel);
                         let shutdown = Arc::clone(&self.shutdown_flag);
                         let ap_list = Arc::clone(&self.ao_ap_list);
+                        let sess_captures = Arc::clone(&self.session_captures);
                         if let Err(e) = std::thread::Builder::new()
                             .name("ao-stdout-reader".into())
                             .spawn(move || {
                                 info!("AO stdout reader thread started");
-                                ao_stdout_reader(stdout, ap_count, channel, shutdown, ap_list);
+                                ao_stdout_reader(stdout, ap_count, channel, shutdown, ap_list, sess_captures);
                             })
                         {
                             error!("failed to spawn AO stderr reader: {e}");
@@ -458,6 +475,8 @@ impl AoManager {
     pub fn reset(&mut self) {
         self.crash_count = 0;
         self.stable_epochs = 0;
+        self.session_captures.store(0, Ordering::Relaxed);
+        self.session_handshakes.store(0, Ordering::Relaxed);
         if self.state == AoState::Failed {
             self.state = AoState::Stopped;
         }
@@ -578,6 +597,7 @@ fn ao_stdout_reader(
     ao_channel: Arc<AtomicU32>,
     shutdown: Arc<AtomicBool>,
     ap_list: SharedApMap,
+    session_captures: Arc<AtomicU32>,
 ) {
     use std::io::{BufRead, BufReader};
 
@@ -645,8 +665,17 @@ fn ao_stdout_reader(
                     }
                 }
 
-                // Log capture events and mark AP as captured
+                // Detect new pcapng file creation events from AO stdout.
+                // AO logs "New file" or "Writing" when it creates capture files.
                 let lower = line.to_ascii_lowercase();
+                if (lower.contains("new file") || lower.contains("writing"))
+                    && lower.contains("pcapng")
+                {
+                    session_captures.fetch_add(1, Ordering::Relaxed);
+                    info!("AO new capture file: {}", &line[..line.len().min(120)]);
+                }
+
+                // Log capture events and mark AP as captured
                 let is_capture = lower.contains("handshake")
                     || lower.contains("pmkid")
                     || lower.contains("captured")
