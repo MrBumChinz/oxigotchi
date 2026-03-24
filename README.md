@@ -113,7 +113,7 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **Fast boot** — Under 5 seconds from power-on to scanning. No Python, no venv, no log parsing.
 - **RAGE/SAFE mode** — PiSugar3 button or dashboard toggles between WiFi attack mode (RAGE) and BT internet tethering mode (SAFE). The BCM43436B0's shared UART prevents both simultaneously.
 - **Self-healing stack** — PSM watchdog counter reset every 15 minutes, crash loop detection (3+ SIGABRT triggers modprobe recovery), exponential AO restart backoff, GPIO power cycle, graceful give-up (daemon stays up, never reboots).
-- **tmpfs capture pipeline** — AO writes to RAM. Only proven handshakes move to SD card. Near-zero SD card wear during attacks.
+- **tmpfs capture pipeline** — AO writes to RAM (`/tmp`, 150MB tmpfs). Every 30 seconds the daemon validates captures, converts to hashcat `.22000`, and moves proven handshakes to SD card (`/home/pi/captures/`). Junk is deleted from RAM. Only a reboot within the last 30-second window loses an unprocessed capture. Near-zero SD card wear during attacks.
 - **State persistence** — Attack toggles, whitelist, WPA-SEC key, Discord config, and channel settings survive restarts (saved to `/var/lib/oxigotchi/state.json`).
 - **Reproducible image builds** — `tools/bake_v3.sh` builds a complete SD card image from the repo. Single binary flash, no venv, no pip.
 - **Legacy auto-disable** — Stops and disables pwnagotchi and bettercap services on first boot, freeing ~66 MB of RAM.
@@ -236,6 +236,35 @@ Every mood has its own bull. Here are 26 faces:
 - **AO watchdog** — Restarts crashed AO with exponential backoff (5s, 10s, 20s... up to 5 minutes).
 - **USB lifeline** — SSH always available at `10.0.0.2`, even when WiFi is dead.
 - **Safe apt upgrades** — Kernel and firmware packages held, apt hooks auto-protect the patched firmware binary.
+
+## Capture Pipeline
+
+Captures flow through a RAM-based pipeline that protects the SD card from write wear:
+
+```
+AO (angryoxide)
+ │  writes to /tmp/ao_captures/ (tmpfs, 150MB RAM)
+ │  files: capture-TIMESTAMP.pcapng + capture.kismet
+ ▼
+Daemon (every 30s epoch)
+ │  1. Scans /tmp/ao_captures/ for new .pcapng files
+ │  2. Converts to .22000 (hashcat-ready) via hcxpcapngtool
+ │  3. Moves validated captures to /home/pi/captures/ (SD card)
+ │  4. Deletes junk from tmpfs (failed conversions, empty captures)
+ ▼
+SD card: /home/pi/captures/
+   capture-2026-03-24_12-00-00.pcapng  (original)
+   capture-2026-03-24_12-00-00.22000   (hashcat-ready)
+```
+
+**Key details:**
+- `/tmp` is a 150MB tmpfs (RAM). AO's `.kismet` tracking file can grow to 20-60MB during long sessions, plus pcapng files at ~1-5MB each. The 150MB limit gives comfortable headroom.
+- Only the last 30 seconds of captures are at risk on a sudden reboot — everything processed in a prior epoch is safe on SD.
+- The `.22000` companion file is hashcat-ready. Every capture on SD has one.
+- WPA-SEC auto-upload (if configured) queues validated captures for cloud cracking.
+- The dashboard's "Captures" card shows file count, handshake count, pending uploads, and total size. Individual files can be downloaded from the dashboard.
+
+**If `/tmp` fills up**, AO crashes because it can't write. The daemon detects this and restarts AO, but the real fix is to ensure `/tmp` doesn't fill. The 150MB default handles typical sessions (several hours). For marathon sessions (12+ hours), the `.kismet` file may grow large — the buffer-cleaner timer runs every 5 minutes and helps, but extremely long sessions at rate 2+ in dense environments may need monitoring.
 
 ## Bluetooth Tethering
 
