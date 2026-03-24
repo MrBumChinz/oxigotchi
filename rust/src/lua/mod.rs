@@ -468,6 +468,106 @@ impl PluginRuntime {
     }
 }
 
+// ── Plugin file watcher (inotify on Linux, stub elsewhere) ──────────────
+
+/// Watches the plugin directory for .lua file changes using inotify (Linux).
+/// On non-Linux platforms, this is a no-op stub.
+#[cfg(target_os = "linux")]
+pub struct PluginWatcher {
+    fd: i32,
+    wd: i32,
+    dir: String,
+}
+
+#[cfg(target_os = "linux")]
+impl PluginWatcher {
+    /// Create a watcher on the given plugin directory.
+    pub fn new(dir: &str) -> Result<Self, String> {
+        unsafe {
+            let fd = libc::inotify_init1(libc::IN_NONBLOCK);
+            if fd < 0 {
+                return Err(format!("inotify_init1 failed: {}", std::io::Error::last_os_error()));
+            }
+            let c_dir = std::ffi::CString::new(dir).map_err(|e| e.to_string())?;
+            let wd = libc::inotify_add_watch(
+                fd,
+                c_dir.as_ptr(),
+                (libc::IN_MODIFY | libc::IN_CREATE | libc::IN_DELETE) as u32,
+            );
+            if wd < 0 {
+                libc::close(fd);
+                return Err(format!("inotify_add_watch failed: {}", std::io::Error::last_os_error()));
+            }
+            log::info!("plugin watcher: watching {dir} (fd={fd}, wd={wd})");
+            Ok(Self { fd, wd, dir: dir.to_string() })
+        }
+    }
+
+    /// Non-blocking check for changed .lua files. Returns plugin names (without .lua extension).
+    pub fn check(&self) -> Vec<String> {
+        let mut buf = vec![0u8; 4096];
+        let mut changed = Vec::new();
+        unsafe {
+            let n = libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len());
+            if n <= 0 {
+                return changed;
+            }
+            let mut offset = 0;
+            while offset < n as usize {
+                let event = &*(buf.as_ptr().add(offset) as *const libc::inotify_event);
+                if event.len > 0 {
+                    let name_ptr = buf.as_ptr().add(offset + std::mem::size_of::<libc::inotify_event>());
+                    let name = std::ffi::CStr::from_ptr(name_ptr as *const _)
+                        .to_string_lossy()
+                        .to_string();
+                    if name.ends_with(".lua") {
+                        let plugin_name = name.trim_end_matches(".lua").to_string();
+                        if !changed.contains(&plugin_name) {
+                            changed.push(plugin_name);
+                        }
+                    }
+                }
+                offset += std::mem::size_of::<libc::inotify_event>() + event.len as usize;
+            }
+        }
+        changed
+    }
+
+    /// Directory this watcher monitors.
+    pub fn dir(&self) -> &str {
+        &self.dir
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PluginWatcher {
+    fn drop(&mut self) {
+        unsafe {
+            libc::inotify_rm_watch(self.fd, self.wd);
+            libc::close(self.fd);
+        }
+    }
+}
+
+/// Stub watcher for non-Linux platforms (no-op).
+#[cfg(not(target_os = "linux"))]
+pub struct PluginWatcher {
+    dir: String,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl PluginWatcher {
+    pub fn new(dir: &str) -> Result<Self, String> {
+        Ok(Self { dir: dir.to_string() })
+    }
+    pub fn check(&self) -> Vec<String> {
+        Vec::new()
+    }
+    pub fn dir(&self) -> &str {
+        &self.dir
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
