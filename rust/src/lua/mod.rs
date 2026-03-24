@@ -228,6 +228,45 @@ impl PluginRuntime {
         self.plugins.iter().find(|p| p.name == plugin_name).map(|p| p.enabled).unwrap_or(false)
     }
 
+    /// Unload a plugin: remove its indicators and drop it from the plugin list.
+    pub fn unload_plugin(&mut self, name: &str) {
+        // Remove indicators registered by this plugin
+        if let Ok(mut indicators) = self.indicators.lock() {
+            indicators.retain(|k, _| !k.starts_with(&format!("{}_", name)) && k != name);
+        }
+        // Remove the plugin's registry key from Lua and drop it from our list
+        self.plugins.retain(|p| p.name != name);
+        log::info!("plugin {name}: unloaded");
+    }
+
+    /// Reload a plugin from disk: unload the old version, read the new source, load it.
+    /// Preserves the plugin's current config (position, enabled state).
+    pub fn reload_plugin(&mut self, name: &str, plugin_dir: &str) -> Result<(), String> {
+        let path = format!("{}/{}.lua", plugin_dir, name);
+        let source = std::fs::read_to_string(&path)
+            .map_err(|e| format!("read {path}: {e}"))?;
+
+        // Preserve existing config for this plugin (position, enabled state)
+        let config = self.plugins.iter()
+            .find(|p| p.name == name)
+            .map(|p| PluginConfig {
+                name: p.name.clone(),
+                enabled: p.enabled,
+                x: p.config_x,
+                y: p.config_y,
+                extra: std::collections::HashMap::new(),
+            });
+
+        // Unload old version
+        self.unload_plugin(name);
+
+        // Load new version — use preserved config or a default
+        let config = config.unwrap_or_else(|| PluginConfig::default_for(name, 0, 0));
+        self.load_plugin_from_str(name, &source, &config)?;
+        log::info!("plugin {name}: reloaded from {path}");
+        Ok(())
+    }
+
     /// Update a plugin's base config position (called when web dashboard changes position).
     /// Also updates all indicator positions for immediate visual effect.
     pub fn update_plugin_position(&mut self, plugin_name: &str, x: i32, y: i32) {
@@ -743,5 +782,122 @@ mod tests {
         let loaded = rt.load_plugins_from_dir(dir.path().to_str().unwrap(), &[cfg]);
         assert_eq!(loaded, 0);
         assert_eq!(rt.get_indicators().len(), 0);
+    }
+
+    #[test]
+    fn test_unload_plugin_removes_indicators() {
+        let mut rt = PluginRuntime::new();
+        let lua_code = r#"
+            plugin = {}
+            plugin.name = "removeme"
+            plugin.version = "1.0.0"
+            plugin.author = "tester"
+            plugin.tag = "default"
+
+            function on_load(config)
+                register_indicator("removeme", {
+                    x = config.x or 0,
+                    y = config.y or 0,
+                    font = "small",
+                })
+                register_indicator("removeme_extra", {
+                    x = 50,
+                    y = 50,
+                    font = "small",
+                })
+            end
+
+            function on_epoch(state) end
+        "#;
+        let config = PluginConfig::default_for("removeme", 0, 0);
+        rt.load_plugin_from_str("removeme", lua_code, &config).unwrap();
+        assert_eq!(rt.plugin_count(), 1);
+        assert_eq!(rt.get_indicators().len(), 2);
+
+        rt.unload_plugin("removeme");
+        assert_eq!(rt.plugin_count(), 0);
+        assert_eq!(rt.get_indicators().len(), 0);
+    }
+
+    #[test]
+    fn test_unload_does_not_affect_other_plugins() {
+        let mut rt = PluginRuntime::new();
+        for (name, ind_name) in &[("keep", "keep_ind"), ("drop", "drop_ind")] {
+            let code = format!(r#"
+                plugin = {{}}
+                plugin.name = "{name}"
+                plugin.version = "1.0.0"
+                plugin.author = "t"
+                plugin.tag = "default"
+                function on_load(config)
+                    register_indicator("{ind_name}", {{ x = 0, y = 0, font = "small" }})
+                end
+                function on_epoch(state) end
+            "#);
+            let config = PluginConfig::default_for(name, 0, 0);
+            rt.load_plugin_from_str(name, &code, &config).unwrap();
+        }
+        assert_eq!(rt.plugin_count(), 2);
+        assert_eq!(rt.get_indicators().len(), 2);
+
+        rt.unload_plugin("drop");
+        assert_eq!(rt.plugin_count(), 1);
+        assert_eq!(rt.get_indicators().len(), 1);
+        assert_eq!(rt.get_indicators()[0].name, "keep_ind");
+    }
+
+    #[test]
+    fn test_reload_plugin_from_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write v1
+        std::fs::write(dir.path().join("hot.lua"), r#"
+            plugin = {}
+            plugin.name = "hot"
+            plugin.version = "1.0.0"
+            plugin.author = "test"
+            plugin.tag = "default"
+            function on_load(config)
+                register_indicator("hot", { x = config.x, y = config.y, font = "small" })
+            end
+            function on_epoch(state)
+                set_indicator("hot", "v1")
+            end
+        "#).unwrap();
+
+        let mut rt = PluginRuntime::new();
+        let config = PluginConfig::default_for("hot", 10, 20);
+        let loaded = rt.load_plugins_from_dir(dir.path().to_str().unwrap(), &[config]);
+        assert_eq!(loaded, 1);
+
+        let state = state::EpochState::default();
+        rt.tick_epoch(&state);
+        assert_eq!(rt.get_indicators()[0].value, "v1");
+
+        // Write v2 with different epoch output
+        std::fs::write(dir.path().join("hot.lua"), r#"
+            plugin = {}
+            plugin.name = "hot"
+            plugin.version = "2.0.0"
+            plugin.author = "test"
+            plugin.tag = "default"
+            function on_load(config)
+                register_indicator("hot", { x = config.x, y = config.y, font = "small" })
+            end
+            function on_epoch(state)
+                set_indicator("hot", "v2")
+            end
+        "#).unwrap();
+
+        // Reload
+        rt.reload_plugin("hot", dir.path().to_str().unwrap()).unwrap();
+        assert_eq!(rt.plugin_count(), 1);
+
+        rt.tick_epoch(&state);
+        let indicators = rt.get_indicators();
+        assert_eq!(indicators.len(), 1);
+        assert_eq!(indicators[0].value, "v2");
+        // Config position preserved
+        assert_eq!(indicators[0].x, 10);
+        assert_eq!(indicators[0].y, 20);
     }
 }
