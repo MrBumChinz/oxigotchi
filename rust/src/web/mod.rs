@@ -156,6 +156,11 @@ pub struct DaemonState {
     pub discord_webhook_url: String,
     pub discord_enabled: bool,
     pub pending_discord_config: Option<DiscordConfig>,
+
+    // -- radio lock manager --
+    pub radio_mode: String,
+    pub radio_pid: u32,
+    pub pending_radio_request: Option<String>,
 }
 
 impl DaemonState {
@@ -253,6 +258,9 @@ impl DaemonState {
             discord_webhook_url: String::new(),
             discord_enabled: false,
             pending_discord_config: None,
+            radio_mode: "FREE".into(),
+            radio_pid: 0,
+            pending_radio_request: None,
         }
     }
 }
@@ -355,6 +363,20 @@ pub struct ModeSwitch {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RateChange {
     pub rate: u32,
+}
+
+/// Radio status response for GET /api/radio.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RadioResponse {
+    pub mode: String,
+    pub pid: u32,
+    pub owner: String,
+}
+
+/// Radio request for POST /api/radio.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RadioRequest {
+    pub request: String,
 }
 
 /// Generic action response.
@@ -617,6 +639,7 @@ pub const API_RESTART_PWN: &str = "/api/restart-pwn";
 pub const API_SETTINGS: &str = "/api/settings";
 pub const API_BT_SCAN: &str = "/api/bluetooth/scan";
 pub const API_BT_PAIR: &str = "/api/bluetooth/pair";
+pub const API_RADIO: &str = "/api/radio";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -924,6 +947,38 @@ async fn mode_handler(
         ok: true,
         message: format!("Mode switch to {} queued", mode),
     })
+}
+
+/// GET /api/radio -> current radio lock status
+async fn radio_get_handler(State(state): State<SharedState>) -> Json<RadioResponse> {
+    let s = state.lock().unwrap();
+    Json(RadioResponse {
+        mode: s.radio_mode.clone(),
+        pid: s.radio_pid,
+        owner: "daemon".into(),
+    })
+}
+
+/// POST /api/radio -> request a radio mode switch
+async fn radio_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<RadioRequest>,
+) -> Json<ActionResponse> {
+    let request = body.request.to_uppercase();
+    match request.as_str() {
+        "WIFI" | "BT" | "FREE" => {
+            let mut s = state.lock().unwrap();
+            s.pending_radio_request = Some(request.clone());
+            Json(ActionResponse {
+                ok: true,
+                message: format!("Radio mode switch to {} queued", request),
+            })
+        }
+        _ => Json(ActionResponse {
+            ok: false,
+            message: format!("Invalid radio mode: {}. Use WIFI, BT, or FREE", request),
+        }),
+    }
 }
 
 /// POST /api/rate -> change attack rate
@@ -1428,6 +1483,7 @@ pub fn build_router(state: SharedState) -> Router {
         .route(API_SETTINGS, post(settings_handler))
         .route(API_BT_SCAN, get(bt_scan_results_handler).post(bt_scan_handler))
         .route(API_BT_PAIR, post(bt_pair_handler))
+        .route(API_RADIO, get(radio_get_handler).post(radio_post_handler))
         .with_state(state)
 }
 

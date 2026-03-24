@@ -13,6 +13,7 @@ mod epoch;
 mod personality;
 mod pisugar;
 mod network;
+mod radio;
 mod recovery;
 mod migration;
 mod web;
@@ -85,6 +86,7 @@ struct Daemon {
     recovery: recovery::RecoveryManager,
     watchdog: recovery::Watchdog,
     ao: ao::AoManager,
+    radio: radio::RadioManager,
     mode: OperatingMode,
     shared_state: web::SharedState,
     prev_cpu_sample: Option<personality::CpuSample>,
@@ -142,6 +144,7 @@ impl Daemon {
             recovery,
             watchdog,
             ao,
+            radio: radio::RadioManager::new(),
             mode: OperatingMode::Rage,
             shared_state,
             prev_cpu_sample: None,
@@ -284,6 +287,11 @@ impl Daemon {
                 log::error!("AO failed to start: {e}");
                 self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
             }
+        }
+
+        // Acquire radio lock — WIFI is the default boot mode
+        if let Err(e) = self.radio.acquire_lock(radio::RadioMode::Wifi) {
+            log::warn!("failed to acquire WIFI radio lock on boot: {e}");
         }
 
         // Load persisted runtime state (attack toggles, whitelist, WPA-SEC key, Discord)
@@ -718,6 +726,29 @@ impl Daemon {
                 self.bluetooth.show();
             } else {
                 self.bluetooth.hide();
+            }
+        }
+
+        // Process pending radio request (from /api/radio)
+        let radio_request = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_radio_request.take()
+        };
+        if let Some(req) = radio_request {
+            any_command = true;
+            info!("web: radio request: {req}");
+            match req.as_str() {
+                "WIFI" if self.mode == OperatingMode::Safe => self.enter_rage_mode(),
+                "BT" if self.mode == OperatingMode::Rage => self.enter_safe_mode(),
+                "FREE" => {
+                    // Release the radio lock (stop everything)
+                    self.ao.stop();
+                    let _ = self.wifi.stop_monitor();
+                    self.bluetooth.power_off();
+                    let _ = self.radio.release_lock();
+                    info!("radio: released to FREE");
+                }
+                _ => info!("web: radio request {req} ignored (already in requested mode)"),
             }
         }
 
@@ -1235,6 +1266,11 @@ impl Daemon {
         s.ao_uptime = ao_uptime;
         s.gpsd_available = self.ao.gpsd_detected;
 
+        // Radio lock state
+        s.radio_mode = self.radio.mode.as_str().to_string();
+        let (_, radio_pid) = self.radio.read_lock();
+        s.radio_pid = radio_pid;
+
         s.xp = self.epoch_loop.personality.xp.xp;
         s.level = self.epoch_loop.personality.xp.level;
 
@@ -1437,56 +1473,49 @@ impl Daemon {
         personality::Face::Grateful,
     ];
 
-    /// Transition from RAGE to SAFE mode.
+    /// Transition from RAGE to SAFE mode via radio lock manager.
     fn enter_safe_mode(&mut self) {
         info!("mode: RAGE -> SAFE");
         let face = Self::random_face(Self::SAFE_FACES);
         self.show_transition(face, "Switching to SAFE...");
 
-        // Stop attacks
-        self.ao.stop();
-
-        // Exit WiFi monitor mode
-        if let Err(e) = self.wifi.stop_monitor() {
-            log::warn!("WiFi monitor stop failed: {e}");
-        }
-
-        // Reset shared UART — WiFi monitor mode leaves it in a state where
-        // BT HCI commands time out (BCM43436B0 shared UART).
-        bluetooth::reset_hci_uart();
-
-        // Connect Bluetooth
-        match self.bluetooth.setup() {
-            Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
-            Err(e) => log::warn!("BT setup failed: {e}"),
+        // Atomic transition: WiFi -> BT via radio lock manager
+        match self.radio.transition_to_bt(&mut self.ao, &mut self.wifi, &mut self.bluetooth) {
+            Ok(()) => {
+                info!("radio: WIFI -> BT transition complete");
+                // Now set up BT PAN connection
+                match self.bluetooth.setup() {
+                    Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
+                    Err(e) => log::warn!("BT setup failed: {e}"),
+                }
+            }
+            Err(e) => {
+                log::error!("radio transition to BT failed: {e}");
+                // Radio manager already rolled back to WIFI
+                return;
+            }
         }
 
         self.mode = OperatingMode::Safe;
         self.epoch_loop.personality.set_override(face);
     }
 
-    /// Transition from SAFE to RAGE mode.
+    /// Transition from SAFE to RAGE mode via radio lock manager.
     fn enter_rage_mode(&mut self) {
         info!("mode: SAFE -> RAGE");
         let face = Self::random_face(Self::RAGE_FACES);
         self.show_transition(face, "Switching to RAGE...");
 
-        // Power off Bluetooth adapter to free radio for WiFi
-        self.bluetooth.power_off();
-
-        // Wait for UART to settle after BT release
-        std::thread::sleep(Duration::from_secs(2));
-
-        // Enter WiFi monitor mode
-        match self.wifi.start_monitor() {
-            Ok(()) => info!("WiFi monitor mode started"),
-            Err(e) => log::error!("WiFi monitor failed: {e}"),
-        }
-
-        // Start AngryOxide
-        match self.ao.start() {
-            Ok(()) => info!("AO started: PID {}", self.ao.pid),
-            Err(e) => log::error!("AO start failed: {e}"),
+        // Atomic transition: BT -> WiFi via radio lock manager
+        match self.radio.transition_to_wifi(&mut self.ao, &mut self.wifi, &mut self.bluetooth) {
+            Ok(()) => {
+                info!("radio: BT -> WIFI transition complete");
+            }
+            Err(e) => {
+                log::error!("radio transition to WIFI failed: {e}");
+                // Radio manager already rolled back to BT
+                return;
+            }
         }
 
         self.mode = OperatingMode::Rage;
