@@ -1165,9 +1165,9 @@ mod tests {
         let mut p = Personality::new();
         p.on_handshake();
         assert_eq!(p.xp.xp_total, XpTracker::XP_HANDSHAKE);
-        // 100 XP from level 1 (needs 5): multi-level-up to level 6, xp=22, xp_needed(6)=32
-        assert_eq!(p.xp.xp, 22);
-        assert_eq!(p.xp.level, 6);
+        // 100 XP from level 1: multi-level-up to level 5, xp=33, xp_needed(5)=40
+        assert_eq!(p.xp.xp, 33);
+        assert_eq!(p.xp.level, 5);
     }
 
     #[test]
@@ -1197,7 +1197,7 @@ mod tests {
         // Level 1 needs 5 XP. Handshake = 100 XP, so this should level up (multiple times).
         let leveled = p.on_handshake();
         assert!(leveled);
-        assert_eq!(p.xp.level, 6);
+        assert_eq!(p.xp.level, 5);
         // Mood should have handshake boost + level up boost
         // 0.5 + 0.1 (handshake) + 0.2 (level up) = 0.8
         assert!((p.mood.value() - 0.8).abs() < 0.001);
@@ -1339,7 +1339,7 @@ mod tests {
         assert_eq!(xp.level, 2);
         assert_eq!(xp.xp, 0);
         assert_eq!(xp.xp_total, 5);
-        assert_eq!(xp.xp_to_next_level(), 10);
+        assert_eq!(xp.xp_to_next_level(), 12); // xp_needed(2) = 2^1.3 * 5 ≈ 12
     }
 
     #[test]
@@ -1355,22 +1355,22 @@ mod tests {
     #[test]
     fn test_xp_award_multi_levelup() {
         let mut xp = XpTracker::new();
-        // Level 1: 5, Level 2: 10 = 15 total (cumsum(3)) for level 3 with no remainder
-        let leveled = xp.award(15);
+        // Level 1: 5, Level 2: 12 = 17 total (cumsum to L3) for level 3 with no remainder
+        let leveled = xp.award(17);
         assert!(leveled);
         assert_eq!(xp.level, 3);
         assert_eq!(xp.xp, 0);
-        assert_eq!(xp.xp_total, 15);
+        assert_eq!(xp.xp_total, 17);
     }
 
     #[test]
     fn test_xp_award_multi_levelup_with_remainder() {
         let mut xp = XpTracker::new();
-        // cumsum(3)=15; award 20 = 15 + 5, arrives at level 3 with 5 remaining
-        // (level 3 needs 15, so 5 < 15 stays as remainder)
+        // cumsum to L3=17; award 20 = 17 + 3, arrives at level 3 with 3 remaining
+        // (level 3 needs 20, so 3 < 20 stays as remainder)
         xp.award(20);
         assert_eq!(xp.level, 3);
-        assert_eq!(xp.xp, 5);
+        assert_eq!(xp.xp, 3);
         assert_eq!(xp.xp_total, 20);
     }
 
@@ -1393,24 +1393,25 @@ mod tests {
     #[test]
     fn test_xp_display_str_after_xp() {
         let mut xp = XpTracker::new();
-        // award(50) from level 1 (needs 5): lands at level 4, xp=20, xp_needed(4)=21
-        // 20/21 * 10 = 9 filled blocks
+        // award(50) from level 1: lands at level 4, xp=13, xp_needed(4)=30
+        // 13/30 * 10 = 4 filled blocks
         xp.award(50);
         let s = xp.display_str();
         assert!(s.starts_with("Lv 4  Exp|"), "got: {s}");
-        assert_eq!(s.matches('\u{2588}').count(), 9, "should have 9 filled blocks: {s}");
+        assert_eq!(s.matches('\u{2588}').count(), 4, "should have 4 filled blocks: {s}");
     }
 
     #[test]
     fn test_xp_display_str_level_22() {
         let mut xp = XpTracker::new();
-        // cumsum(22)=1303; add 64 remainder (64/128 = 50% → 5 filled blocks)
-        xp.award(1303 + 64);
+        // cumsum_to_reach_level(22)=2510; add 139 remainder (139/278 = 50% → 5 filled blocks)
+        // xp_needed(22) = 22^1.3 * 5 = 278
+        xp.award(2510 + 139);
         assert_eq!(xp.level, 22);
-        assert_eq!(xp.xp, 64);
+        assert_eq!(xp.xp, 139);
         let s = xp.display_str();
         assert!(s.starts_with("Lv 22  Exp|"), "got: {s}");
-        // 64/128 = 50% → 5 filled blocks
+        // 139/278 = 50% → 5 filled blocks
         assert_eq!(s.matches('\u{2588}').count(), 5, "got: {s}");
     }
 
@@ -1576,8 +1577,9 @@ mod tests {
         let path = dir.path().join("high_level.json");
 
         let mut xp = XpTracker::with_save_path(&path);
-        // Award enough for level 50: cumsum(50) = 7239
-        xp.award(7239);
+        // Award enough for level 50: cumsum_to_reach_level(50) = sum(xp_needed(1..49))
+        let cumsum_50: u64 = (1u32..50).map(XpTracker::xp_needed_for_level).sum();
+        xp.award(cumsum_50);
         assert_eq!(xp.level, 50);
         assert_eq!(xp.xp, 0);
         xp.save(0.9).unwrap();
@@ -1585,7 +1587,7 @@ mod tests {
         let (loaded, mood) = XpTracker::load(&path);
         assert_eq!(loaded.level, 50);
         assert_eq!(loaded.xp, 0);
-        assert_eq!(loaded.xp_total, 7239);
+        assert_eq!(loaded.xp_total, cumsum_50);
         assert!((mood - 0.9).abs() < 0.001);
     }
 
@@ -1815,7 +1817,7 @@ mod tests {
         p.context.last_handshake_ssid = Some("CoffeeShop".into());
         let leveled = p.on_handshake();
         assert!(leveled); // 100 XP = level up (multiple times with new formula)
-        assert_eq!(p.xp.level, 7);
+        assert_eq!(p.xp.level, 6);
         assert!(p.status_msg().contains("Battery") || p.status_msg().contains("Captured"));
 
         p.reset_epoch_context();
@@ -1890,8 +1892,9 @@ mod tests {
     #[test]
     fn test_xp_max_level_boundary() {
         let mut xp = XpTracker::new();
-        // Push to max level: cumsum(999) = 3_434_125
-        xp.award(3_434_125);
+        // Push to max level: cumsum_to_reach_level(999) = sum(xp_needed(1..998))
+        let cumsum_999: u64 = (1u32..999).map(XpTracker::xp_needed_for_level).sum();
+        xp.award(cumsum_999);
         assert_eq!(xp.level, 999);
         assert_eq!(xp.xp, 0);
         // Awarding more XP at MAX_LEVEL (999) is silently discarded (xp stays 0)
