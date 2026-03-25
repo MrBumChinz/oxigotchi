@@ -949,6 +949,7 @@ impl Daemon {
         }
 
         // Process pending whitelist adds (batch — supports multiple per epoch)
+        let mut whitelist_changed = false;
         let (wl_adds, wl_removes) = {
             let mut s = self.shared_state.lock().unwrap();
             (std::mem::take(&mut s.pending_whitelist_adds), std::mem::take(&mut s.pending_whitelist_removes))
@@ -961,13 +962,15 @@ impl Daemon {
                         self.attacks.whitelist.push(mac);
                         info!("web: whitelist added MAC {}", add.value);
                         any_command = true;
+                        whitelist_changed = true;
                     }
                 }
                 wifi::WhitelistEntry::Ssid(ssid) => {
                     self.wifi.tracker.add_ssid_whitelist(&ssid);
                     self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
-                    info!("web: whitelist added SSID {ssid} (AO restart needed)");
+                    info!("web: whitelist added SSID {ssid}");
                     any_command = true;
+                    whitelist_changed = true;
                 }
             }
         }
@@ -986,8 +989,16 @@ impl Daemon {
                     self.attacks.whitelist.retain(|m| m != &mac);
                     info!("web: whitelist removed {}", remove);
                     any_command = true;
+                    whitelist_changed = true;
                 }
             }
+        }
+
+        // If whitelist changed, restart AO so it picks up the new --whitelist file
+        if whitelist_changed && self.ao.state == ao::AoState::Running {
+            self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
+            info!("web: whitelist changed, restarting AO");
+            let _ = self.ao.restart();
         }
 
         // Process pending channel config
