@@ -116,7 +116,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="stat" style="cursor:help" title="Current WiFi channel being monitored"><div class="label">CH</div><div class="value" id="s-ch">-</div></div>
 <div class="stat" style="cursor:help" title="Total unique access points spotted across all sessions — lifetime herd count"><div class="label">COWS</div><div class="value" id="s-aps">-</div></div>
 <div class="stat" style="cursor:help" title="Total handshakes and PMKIDs captured across all sessions — persists across restarts"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
-<div class="stat" style="cursor:help" title="Epoch counter — each epoch is one full attack cycle (channel hop + attack pass)"><div class="label">EPOCH</div><div class="value" id="s-epoch">-</div></div>
+<div class="stat" style="cursor:help" title="Charge counter — each charge is one full attack cycle (channel hop + attack pass)"><div class="label">CHARGES</div><div class="value" id="s-epoch">-</div></div>
 <div class="stat" style="cursor:help" title="Time since rusty-oxigotchi service started"><div class="label">UPTIME</div><div class="value" id="s-uptime">-</div></div>
 <div class="stat" style="cursor:help" title="AngryOxide attack rate. Rate 1 is max safe for BCM43436B0 — higher rates cause firmware crashes"><div class="label">RATE</div><div class="value" id="s-rate">-</div></div>
 </div>
@@ -257,8 +257,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 
 <!-- 10. Captures (merged: stats + list + download) -->
 <div class="card" id="card-captures">
-<div class="card-title">Captures</div>
-<div class="sub">Validated capture files from AO monitor mode.</div>
+<div class="card-title">Trophies</div>
+<div class="sub">Validated capture files — each one a trophy from a pwned cow.</div>
 <div class="status-grid" style="margin-bottom:8px">
 <div class="label">Total Files</div><div class="value" id="cap-total">-</div>
 <div class="label">Handshakes</div><div class="value" id="cap-hs">-</div>
@@ -273,8 +273,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 
 <!-- 11. Cracked passwords -->
 <div class="card" id="card-cracked">
-<div class="card-title">Cracked Passwords</div>
-<div class="sub">Passwords cracked from captured handshakes.</div>
+<div class="card-title">Milk</div>
+<div class="sub">Passwords milked from pwned cows.</div>
 <div id="cracked-list"><div style="color:#555;font-size:12px">No cracked passwords yet</div></div>
 </div>
 
