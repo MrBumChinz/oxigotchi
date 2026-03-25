@@ -80,7 +80,7 @@ For the full technical deep dive, see **[docs/RUSTY_V3.md](docs/RUSTY_V3.md)** a
 | **SD card lifespan** | ~1-2 years | 10+ years (tmpfs capture pipeline, near-zero writes) |
 | **Binary size** | 150MB+ (Python venv + Go) | ~5 MB static binary |
 | **Self-healing** | Manual reboot | PSM reset, crash loop detection, modprobe cycle, GPIO recovery |
-| **XP/Leveling** | Basic (level^3/2 curve) | Exponential (level^1.05*5), cap 999, passive + active XP |
+| **XP/Leveling** | Basic (level^3/2 curve) | Exponential (level^1.3*5), cap 999, passive + active XP, ~1 year to max |
 
 **Key point:** Even if you never use AngryOxide, the firmware patch alone makes stock pwnagotchi dramatically more stable. Switch to PWN mode and enjoy a bettercap that actually works.
 
@@ -106,7 +106,7 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **26 bull faces** — Custom 1-bit e-ink art for every mood and system state. Each face is a diagnostic indicator, not decoration.
 - **Auto-crack integration** — Captures automatically upload to WPA-SEC for cloud cracking. Cracked passwords appear in the dashboard.
 - **Discord notifications** — Optional webhook integration sends a Discord message every time a handshake is captured. Disabled by default.
-- **XP & leveling** — The bull earns XP passively (+1 per epoch just for scanning, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). An exponential curve (`level^1.05 * 5`) makes early levels fast and high levels a grind — max level 999 takes about 7 months of daily use. XP persists across reboots.
+- **XP & leveling** — The bull earns XP passively (+1 per epoch just for scanning, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). An exponential curve (`level^1.3 * 5`) makes early levels fast and high levels a serious grind — max level **999** takes about **1 year** of daily use. XP persists across reboots.
 - **Live channel display** — The current AO channel updates on the e-ink screen every 5 seconds, parsed from AO's stdout.
 - **Channel hopping** — Default channels are 1, 6, 11 (non-overlapping 2.4GHz). Configurable from the dashboard with 13 toggleable channel buttons and a dwell time slider. Autohunt mode lets AO choose channels intelligently.
 - **Smart Skip** — Auto-whitelists APs with existing captures, focusing on new targets.
@@ -312,7 +312,7 @@ Get a free API key from [wpa-sec.stanev.org](https://wpa-sec.stanev.org), paste 
 Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use different drivers). Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i spi`
 
 **How does XP and leveling work?**
-Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.05 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 56 XP), but high levels are a grind (Lv 500 needs 3,900 XP, Lv 999 needs ~18,000 XP per level). Max level is **999** — reaching it takes roughly **7 months** of daily use (8 hours/day, ~16 APs). XP persists across reboots.
+Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
 
 **Can I change the attack rate?**
 The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive). **Rate 1 is the default and recommended.** Rate 2 works well at home or in low-density areas, but in busy environments (walking through a city, near many APs) the heavy TX load can overwhelm the BCM43436B0 firmware — WiFi freezes and needs a reboot. This isn't a hard hardware limit — it's a firmware timing issue under high AP density + rapid channel hopping + movement. Rate 1 still uses all 6 attack types, just sends fewer frames per second. Rate 3 is experimental and will likely crash in most environments. If you plug in an external WiFi dongle (Alfa, RT5370, etc.) and configure AO to use it instead of the built-in chip, rate 2 and 3 work perfectly — the limitation is specific to the BCM43436B0.

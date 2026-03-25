@@ -689,11 +689,11 @@ impl XpTracker {
 
     /// XP needed to complete the given level.
     ///
-    /// Exponential curve: level^1.05 * 5. Early levels are fast,
-    /// high levels are a grind. ~7 months of daily use to reach 999.
-    /// Lv1=5, Lv10=56, Lv100=630, Lv500=3900, Lv999=18000.
+    /// Exponential curve: level^1.3 * 5. Early levels are fast,
+    /// high levels are a serious grind. ~1 year of daily use to reach 999.
+    /// Lv1=5, Lv10=99, Lv100=1990, Lv500=16129, Lv999=39664.
     pub fn xp_needed_for_level(level: u32) -> u64 {
-        ((level as f64).powf(1.05) * 5.0).max(1.0) as u64
+        ((level as f64).powf(1.3) * 5.0).max(1.0) as u64
     }
 
     /// Maximum level.
@@ -1311,12 +1311,12 @@ mod tests {
 
     #[test]
     fn test_xp_needed_formula() {
-        // ((level as f64).powf(1.05) * 5.0).max(1.0) as u64
+        // ((level as f64).powf(1.3) * 5.0).max(1.0) as u64
         assert_eq!(XpTracker::xp_needed_for_level(1), 5);
-        assert_eq!(XpTracker::xp_needed_for_level(2), 10);
-        assert_eq!(XpTracker::xp_needed_for_level(10), 56);
-        assert_eq!(XpTracker::xp_needed_for_level(22), 128);
-        assert_eq!(XpTracker::xp_needed_for_level(100), 629);
+        assert_eq!(XpTracker::xp_needed_for_level(2), 12);
+        assert_eq!(XpTracker::xp_needed_for_level(10), 99);
+        assert_eq!(XpTracker::xp_needed_for_level(100), 1990);
+        assert_eq!(XpTracker::xp_needed_for_level(999), 39664);
     }
 
     #[test]
