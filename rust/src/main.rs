@@ -107,6 +107,8 @@ struct Daemon {
     channel_scorer: wifi::ChannelScorer,
     /// tmpfs directory for AO captures (validated before moving to SD).
     tmpfs_capture_dir: String,
+    /// Cumulative APs seen across all previous sessions (loaded from state.json).
+    lifetime_aps_base: u64,
 }
 
 impl Daemon {
@@ -168,6 +170,7 @@ impl Daemon {
             skip_captured: true,
             channel_scorer: wifi::ChannelScorer::new(3),
             tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
+            lifetime_aps_base: 0,
         }
     }
 
@@ -1232,6 +1235,7 @@ impl Daemon {
             "name": self.config.name,
             "wifi_channels": self.wifi.channel_config.channels,
             "wifi_dwell_ms": self.wifi.channel_config.dwell_ms,
+            "lifetime_aps": self.lifetime_aps_base + self.ao.ap_count() as u64,
         });
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
@@ -1348,6 +1352,9 @@ impl Daemon {
                 }
             }
         }
+        if let Some(lifetime_aps) = state.get("lifetime_aps").and_then(|v| v.as_u64()) {
+            self.lifetime_aps_base = lifetime_aps;
+        }
         if let Some(dwell) = state.get("wifi_dwell_ms").and_then(|v| v.as_u64()) {
             self.wifi.channel_config.dwell_ms = dwell;
             self.ao.config.dwell = (dwell / 1000).max(1) as u32;
@@ -1376,7 +1383,7 @@ impl Daemon {
         s.mode = self.mode.as_str().to_string();
         s.epoch = m.epoch;
         s.channel = { let ch = self.ao.channel(); if ch > 0 { ch as u8 } else { m.channel } };
-        s.aps_seen = self.ao.ap_count();
+        s.aps_seen = (self.lifetime_aps_base + self.ao.ap_count() as u64) as u32;
         s.handshakes = self.captures.handshake_count() as u32;
         s.blind_epochs = m.blind_epochs;
         s.mood = self.epoch_loop.personality.mood.value();

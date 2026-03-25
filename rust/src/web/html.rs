@@ -114,7 +114,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card-title">Overview</div>
 <div class="stat-row">
 <div class="stat" style="cursor:help" title="Current WiFi channel being monitored"><div class="label">CH</div><div class="value" id="s-ch">-</div></div>
-<div class="stat" style="cursor:help" title="Unique access points seen by AngryOxide this session"><div class="label">APS</div><div class="value" id="s-aps">-</div></div>
+<div class="stat" style="cursor:help" title="Total unique access points spotted across all sessions — lifetime herd count"><div class="label">COWS</div><div class="value" id="s-aps">-</div></div>
 <div class="stat" style="cursor:help" title="Total handshakes and PMKIDs captured across all sessions — persists across restarts"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
 <div class="stat" style="cursor:help" title="Epoch counter — each epoch is one full attack cycle (channel hop + attack pass)"><div class="label">EPOCH</div><div class="value" id="s-epoch">-</div></div>
 <div class="stat" style="cursor:help" title="Time since rusty-oxigotchi service started"><div class="label">UPTIME</div><div class="value" id="s-uptime">-</div></div>
