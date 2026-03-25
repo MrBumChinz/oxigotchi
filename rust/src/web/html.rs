@@ -111,11 +111,11 @@ input:checked+.slider:before{transform:translateX(22px)}
 
 <!-- 3. Core stats -->
 <div class="card" id="card-stats">
-<div class="card-title">Core Stats</div>
+<div class="card-title">Overview</div>
 <div class="stat-row">
 <div class="stat" style="cursor:help" title="Current WiFi channel being monitored"><div class="label">CH</div><div class="value" id="s-ch">-</div></div>
-<div class="stat" style="cursor:help" title="Unique access points seen by AngryOxide across all attack events"><div class="label">APS</div><div class="value" id="s-aps">-</div></div>
-<div class="stat" style="cursor:help" title="Handshakes or PMKIDs captured — networks successfully &quot;pwned&quot; (hashes ready to crack)"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
+<div class="stat" style="cursor:help" title="Unique access points seen by AngryOxide this session"><div class="label">APS</div><div class="value" id="s-aps">-</div></div>
+<div class="stat" style="cursor:help" title="Total handshakes and PMKIDs captured across all sessions — persists across restarts"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
 <div class="stat" style="cursor:help" title="Epoch counter — each epoch is one full attack cycle (channel hop + attack pass)"><div class="label">EPOCH</div><div class="value" id="s-epoch">-</div></div>
 <div class="stat" style="cursor:help" title="Time since rusty-oxigotchi service started"><div class="label">UPTIME</div><div class="value" id="s-uptime">-</div></div>
 <div class="stat" style="cursor:help" title="AngryOxide attack rate. Rate 1 is max safe for BCM43436B0 — higher rates cause firmware crashes"><div class="label">RATE</div><div class="value" id="s-rate">-</div></div>
@@ -227,22 +227,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 </div>
 
-<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
-<div class="toggle-info"><div class="toggle-label">Smart Skip</div><div class="toggle-desc">Skip APs that already have captured handshakes</div></div>
-<label class="switch"><input type="checkbox" id="skip-captured-toggle" checked onchange="toggleSkipCaptured(this.checked)"><span class="slider"></span></label>
-</div>
-</div>
-
-<!-- 9. Channel Config + Autohunt -->
-<div class="card" id="card-channels">
-<div class="card-title">Channel Config</div>
-<div class="sub">Configure which channels to scan and dwell time per channel.</div>
-
-<div class="toggle-row" style="border-bottom:1px solid #0f3460;padding-bottom:10px;margin-bottom:10px">
-<div class="toggle-info"><div class="toggle-label">Autohunt</div><div class="toggle-desc">Let AO automatically pick channels to hunt on</div></div>
-<label class="switch"><input type="checkbox" id="autohunt-toggle" checked onchange="toggleAutohunt(this.checked)"><span class="slider"></span></label>
-</div>
-
+<div style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
 <div style="margin-bottom:8px">
 <div style="font-size:12px;color:#888;margin-bottom:4px">Channels</div>
 <input type="hidden" id="ch-list" value="1,6,11">
@@ -254,6 +239,17 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 <div style="color:#e67e22;font-size:11px;padding:6px 8px;background:#5a300033;border-radius:6px;margin-bottom:8px">Warning: Some channels may cause BCM43436B0 firmware crashes. Stick to 1,6,11 for stability.</div>
 <button class="wl-btn wl-btn-add" onclick="applyChannels()">Apply</button>
+</div>
+
+<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div class="toggle-info"><div class="toggle-label">Autohunt</div><div class="toggle-desc">Let AO automatically pick channels to hunt on</div></div>
+<label class="switch"><input type="checkbox" id="autohunt-toggle" checked onchange="toggleAutohunt(this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div class="toggle-info"><div class="toggle-label">Smart Skip</div><div class="toggle-desc">Skip APs that already have captured handshakes</div></div>
+<label class="switch"><input type="checkbox" id="skip-captured-toggle" checked onchange="toggleSkipCaptured(this.checked)"><span class="slider"></span></label>
+</div>
 </div>
 
 <!-- ═══════ LOOT ═══════ -->

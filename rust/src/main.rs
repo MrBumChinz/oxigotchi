@@ -1377,7 +1377,7 @@ impl Daemon {
         s.epoch = m.epoch;
         s.channel = { let ch = self.ao.channel(); if ch > 0 { ch as u8 } else { m.channel } };
         s.aps_seen = self.ao.ap_count();
-        s.handshakes = m.handshakes;
+        s.handshakes = self.captures.handshake_count() as u32;
         s.blind_epochs = m.blind_epochs;
         s.mood = self.epoch_loop.personality.mood.value();
         s.face = self.epoch_loop.current_face().as_str().to_string();
