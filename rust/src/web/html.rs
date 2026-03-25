@@ -113,12 +113,12 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card" id="card-stats">
 <div class="card-title">Core Stats</div>
 <div class="stat-row">
-<div class="stat"><div class="label">CH</div><div class="value" id="s-ch">-</div></div>
-<div class="stat"><div class="label">APS</div><div class="value" id="s-aps">-</div></div>
-<div class="stat"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
-<div class="stat"><div class="label">EPOCH</div><div class="value" id="s-epoch">-</div></div>
-<div class="stat"><div class="label">UPTIME</div><div class="value" id="s-uptime">-</div></div>
-<div class="stat"><div class="label">RATE</div><div class="value" id="s-rate">-</div></div>
+<div class="stat" style="cursor:help" title="Current WiFi channel being monitored"><div class="label">CH</div><div class="value" id="s-ch">-</div></div>
+<div class="stat" style="cursor:help" title="Unique access points seen by AngryOxide across all attack events"><div class="label">APS</div><div class="value" id="s-aps">-</div></div>
+<div class="stat" style="cursor:help" title="Handshakes or PMKIDs captured — networks successfully &quot;pwned&quot; (hashes ready to crack)"><div class="label">PWND</div><div class="value" id="s-pwnd">-</div></div>
+<div class="stat" style="cursor:help" title="Epoch counter — each epoch is one full attack cycle (channel hop + attack pass)"><div class="label">EPOCH</div><div class="value" id="s-epoch">-</div></div>
+<div class="stat" style="cursor:help" title="Time since rusty-oxigotchi service started"><div class="label">UPTIME</div><div class="value" id="s-uptime">-</div></div>
+<div class="stat" style="cursor:help" title="AngryOxide attack rate. Rate 1 is max safe for BCM43436B0 — higher rates cause firmware crashes"><div class="label">RATE</div><div class="value" id="s-rate">-</div></div>
 </div>
 </div>
 
