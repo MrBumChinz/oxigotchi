@@ -78,6 +78,8 @@ pub struct CaptureManager {
     pub max_files: usize,
     /// Tracks path -> mtime for change detection.
     tracked_mtimes: HashMap<PathBuf, SystemTime>,
+    /// BSSID -> last known RSSI (dBm) from capture frames.
+    pub bssid_rssi: HashMap<[u8; 6], i16>,
 }
 
 impl CaptureManager {
@@ -88,6 +90,7 @@ impl CaptureManager {
             files: Vec::new(),
             max_files: 0,
             tracked_mtimes: HashMap::new(),
+            bssid_rssi: HashMap::new(),
         }
     }
 
@@ -98,6 +101,7 @@ impl CaptureManager {
             files: Vec::new(),
             max_files,
             tracked_mtimes: HashMap::new(),
+            bssid_rssi: HashMap::new(),
         }
     }
 
@@ -243,7 +247,78 @@ impl CaptureManager {
                 }
             }
         }
+        self.refresh_bssid_info();
         Ok(count)
+    }
+
+    /// Rebuild the BSSID→RSSI cache by running hcxpcapngtool --lts on all pcapng files.
+    /// Also populates any missing SSIDs in captures.files from the lts output.
+    /// Raw RSSI from pcapng radiotap is an unsigned byte; dBm = raw - 256.
+    fn refresh_bssid_info(&mut self) {
+        let dir = self.capture_dir.clone();
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.extension().is_some_and(|e| e == "pcapng") {
+                continue;
+            }
+            let output = match std::process::Command::new("hcxpcapngtool")
+                .arg("--lts=/dev/stdout")
+                .arg(&path)
+                .output()
+            {
+                Ok(o) => o,
+                Err(_) => continue,
+            };
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                // Format: timestamp \t rssi_raw \t bssid_hex \t essid
+                let fields: Vec<&str> = line.splitn(4, '\t').collect();
+                if fields.len() < 3 {
+                    continue;
+                }
+                let rssi_raw: i16 = match fields[1].trim().parse::<u8>() {
+                    Ok(v) => v as i16 - 256,
+                    Err(_) => continue,
+                };
+                let bssid_hex = fields[2].trim();
+                if bssid_hex.len() != 12 {
+                    continue;
+                }
+                let mut bssid = [0u8; 6];
+                let mut ok = true;
+                for i in 0..6 {
+                    match u8::from_str_radix(&bssid_hex[i * 2..i * 2 + 2], 16) {
+                        Ok(b) => bssid[i] = b,
+                        Err(_) => { ok = false; break; }
+                    }
+                }
+                if !ok { continue; }
+                // Keep latest (last) RSSI per BSSID (lts output is chronological)
+                self.bssid_rssi.insert(bssid, rssi_raw);
+                // Backfill SSID on any capture file that has a zeroed/empty SSID
+                if fields.len() == 4 {
+                    let essid = fields[3].trim();
+                    if !essid.is_empty() {
+                        for f in self.files.iter_mut() {
+                            if f.bssid == bssid && f.ssid.is_empty() {
+                                f.ssid = essid.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up the SSID for a BSSID from known capture files.
+    pub fn ssid_for(&self, bssid: &[u8; 6]) -> Option<&str> {
+        self.files
+            .iter()
+            .find(|f| &f.bssid == bssid && !f.ssid.is_empty())
+            .map(|f| f.ssid.as_str())
     }
 
     /// Remove oldest captures if over the file limit. Returns number removed.

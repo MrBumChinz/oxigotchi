@@ -1497,10 +1497,17 @@ impl Daemon {
                 let has_hs = ao_ap.captured || self.captures.files.iter().any(|f| {
                     f.has_handshake && f.bssid == ao_bssid_bytes
                 });
+                let ssid = self.captures.ssid_for(&ao_bssid_bytes)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "(AO)".into());
+                let rssi = self.captures.bssid_rssi
+                    .get(&ao_bssid_bytes)
+                    .copied()
+                    .unwrap_or(-100);
                 ap_entries.push(web::ApEntry {
                     bssid: bssid_fmt,
-                    ssid: "(AO)".into(),
-                    rssi: -100, // unknown RSSI — sorts to bottom
+                    ssid,
+                    rssi,
                     channel: ao_ap.channel,
                     clients: ao_ap.hit_count,
                     has_handshake: has_hs,
