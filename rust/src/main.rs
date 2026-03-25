@@ -101,6 +101,8 @@ struct Daemon {
     discord_enabled: bool,
     /// Whether AO should auto-hunt channels vs use the configured channel list.
     autohunt: bool,
+    /// Smart Skip: skip APs that already have captured handshakes on SD.
+    skip_captured: bool,
     /// Adaptive channel scorer: ranks channels 1-13 by AP density, RSSI, etc.
     channel_scorer: wifi::ChannelScorer,
     /// tmpfs directory for AO captures (validated before moving to SD).
@@ -163,6 +165,7 @@ impl Daemon {
             discord_webhook_url: String::new(),
             discord_enabled: false,
             autohunt: true,
+            skip_captured: true,
             channel_scorer: wifi::ChannelScorer::new(3),
             tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
         }
@@ -574,8 +577,21 @@ impl Daemon {
             [s.attack_deauth, s.attack_pmkid, s.attack_csa, s.attack_disassoc,
              s.attack_anon_reassoc, s.attack_rogue_m2]
         };
+        // Smart Skip: collect BSSIDs that already have handshakes on SD
+        let captured_bssids: std::collections::HashSet<[u8; 6]> = if self.skip_captured {
+            self.captures.files.iter()
+                .filter(|f| f.has_handshake)
+                .map(|f| f.bssid)
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
         for ap in &attackable {
             if self.attacks.is_whitelisted(&ap.bssid) {
+                continue;
+            }
+            // Smart Skip: skip APs with existing handshakes
+            if self.skip_captured && captured_bssids.contains(&ap.bssid) {
                 continue;
             }
             if let Some(attack_type) = self.attacks.next_attack(&ap.bssid, &enabled_types) {
@@ -1005,6 +1021,17 @@ impl Daemon {
             let _ = self.ao.restart();
         }
 
+        // Process pending skip_captured toggle (Smart Skip)
+        let skip_captured_toggle = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_skip_captured.take()
+        };
+        if let Some(skip) = skip_captured_toggle {
+            self.skip_captured = skip;
+            info!("web: skip_captured set to {skip}");
+            any_command = true;
+        }
+
         // Process pending WPA-SEC key
         let wpasec_key = {
             let mut s = self.shared_state.lock().unwrap();
@@ -1154,6 +1181,7 @@ impl Daemon {
             xp: self.epoch_loop.personality.xp.xp,
             status_message: self.epoch_loop.personality.status_msg(),
             epoch_phase_status: self.epoch_loop.status_message(),
+            skip_captured: self.skip_captured,
             fw_crash_suppress: self.firmware_monitor.crash_suppress,
             fw_hardfault: self.firmware_monitor.hardfault,
             fw_health: format!("{:?}", self.firmware_monitor.health()),
@@ -1184,6 +1212,7 @@ impl Daemon {
             "discord_webhook_url": self.discord_webhook_url,
             "discord_enabled": self.discord_enabled,
             "autohunt": self.autohunt,
+            "skip_captured": self.skip_captured,
             "name": self.config.name,
             "wifi_channels": self.wifi.channel_config.channels,
             "wifi_dwell_ms": self.wifi.channel_config.dwell_ms,
@@ -1288,6 +1317,9 @@ impl Daemon {
         if let Some(autohunt) = state.get("autohunt").and_then(|v| v.as_bool()) {
             self.autohunt = autohunt;
         }
+        if let Some(v) = state.get("skip_captured").and_then(|v| v.as_bool()) {
+            self.skip_captured = v;
+        }
         if let Some(channels_arr) = state.get("wifi_channels").and_then(|v| v.as_array()) {
             let channels: Vec<u8> = channels_arr.iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
@@ -1368,6 +1400,7 @@ impl Daemon {
         s.wifi_channels = self.wifi.channel_config.channels.clone();
         s.wifi_dwell_ms = self.wifi.channel_config.dwell_ms;
         s.autohunt_enabled = self.autohunt;
+        s.skip_captured = self.skip_captured;
 
         s.bt_state = self.bluetooth.status_str().to_string(); // long form for web
         s.bt_connected = bt_conn;

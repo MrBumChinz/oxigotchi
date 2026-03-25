@@ -219,6 +219,11 @@ input:checked+.slider:before{transform:translateX(22px)}
 <button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Danger</span></button>
 </div>
 </div>
+
+<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div class="toggle-info"><div class="toggle-label">Smart Skip</div><div class="toggle-desc">Skip APs that already have captured handshakes</div></div>
+<label class="switch"><input type="checkbox" id="skip-captured-toggle" checked onchange="toggleSkipCaptured(this.checked)"><span class="slider"></span></label>
+</div>
 </div>
 
 <!-- 9. Channel Config + Autohunt -->
@@ -526,6 +531,8 @@ function refreshWifi() {
         if (dwInput && !dwInput.matches(':active')) { dwInput.value = d.dwell_ms; document.getElementById('ch-dwell-val').textContent = d.dwell_ms; }
         var ahToggle = document.getElementById('autohunt-toggle');
         if (ahToggle) ahToggle.checked = d.autohunt_enabled;
+        var scToggle = document.getElementById('skip-captured-toggle');
+        if (scToggle) scToggle.checked = d.skip_captured;
     });
 }
 
@@ -825,6 +832,12 @@ function toggleAutohunt(enabled) {
     });
 }
 
+function toggleSkipCaptured(on) {
+    api('POST', '/api/wifi', {skip_captured: on}).then(function(r) {
+        if (r && r.ok) toast('Smart Skip ' + (on ? 'ON — skipping captured APs' : 'OFF — attacking all APs'));
+    });
+}
+
 function toggleLogs() {
     var panel = document.getElementById('logs-panel');
     var btn = document.getElementById('logs-toggle');
@@ -1034,6 +1047,8 @@ function updateWifiFromWs(d) {
     if (dwInput && !dwInput.matches(':active')) { dwInput.value = d.dwell_ms; document.getElementById('ch-dwell-val').textContent = d.dwell_ms; }
     var ahToggle = document.getElementById('autohunt-toggle');
     if (ahToggle) ahToggle.checked = d.autohunt_enabled;
+    var scToggle = document.getElementById('skip-captured-toggle');
+    if (scToggle) scToggle.checked = d.skip_captured;
 }
 
 function updateAttacksFromWs(d) {

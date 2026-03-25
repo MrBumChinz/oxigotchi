@@ -58,6 +58,9 @@ pub struct EpochState {
     pub fw_hardfault: u32,
     pub fw_health: String,
 
+    // smart skip
+    pub skip_captured: bool,
+
     // system
     pub cpu_temp: f32,
     pub mem_used_mb: u32,
@@ -114,6 +117,8 @@ impl EpochState {
         t.set("fw_crash_suppress", self.fw_crash_suppress)?;
         t.set("fw_hardfault", self.fw_hardfault)?;
         t.set("fw_health", self.fw_health.as_str())?;
+
+        t.set("skip_captured", self.skip_captured)?;
 
         t.set("cpu_temp", self.cpu_temp)?;
         t.set("mem_used_mb", self.mem_used_mb)?;

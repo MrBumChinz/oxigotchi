@@ -82,6 +82,7 @@ pub struct DaemonState {
     pub wifi_channels: Vec<u8>,
     pub wifi_dwell_ms: u64,
     pub autohunt_enabled: bool,
+    pub skip_captured: bool,
 
     // -- bluetooth --
     pub bt_state: String,
@@ -161,6 +162,9 @@ pub struct DaemonState {
     // -- channel config --
     pub pending_channel_config: Option<ChannelConfig>,
 
+    // -- smart skip --
+    pub pending_skip_captured: Option<bool>,
+
     // -- wpa-sec --
     pub wpasec_api_key: String,
     pub pending_wpasec_key: Option<String>,
@@ -220,6 +224,7 @@ impl DaemonState {
             wifi_channels: vec![1, 6, 11],
             wifi_dwell_ms: 2000,
             autohunt_enabled: true,
+            skip_captured: true,
             bt_state: "Off".into(),
             bt_connected: false,
             bt_device_name: String::new(),
@@ -271,6 +276,7 @@ impl DaemonState {
             pending_whitelist_adds: Vec::new(),
             pending_whitelist_removes: Vec::new(),
             pending_channel_config: None,
+            pending_skip_captured: None,
             wpasec_api_key: String::new(),
             pending_wpasec_key: None,
             discord_webhook_url: String::new(),
@@ -404,6 +410,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             channels: s.wifi_channels.clone(),
             dwell_ms: s.wifi_dwell_ms,
             autohunt_enabled: s.autohunt_enabled,
+            skip_captured: s.skip_captured,
         },
         bluetooth: BluetoothInfo {
             connected: s.bt_connected,
@@ -637,6 +644,13 @@ pub struct WifiInfo {
     pub channels: Vec<u8>,
     pub dwell_ms: u64,
     pub autohunt_enabled: bool,
+    pub skip_captured: bool,
+}
+
+/// WiFi update request for POST /api/wifi.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WifiUpdate {
+    pub skip_captured: Option<bool>,
 }
 
 /// Bluetooth info returned by /api/bluetooth.
@@ -1043,6 +1057,22 @@ async fn wifi_handler(State(state): State<SharedState>) -> Json<WifiInfo> {
         channels: s.wifi_channels.clone(),
         dwell_ms: s.wifi_dwell_ms,
         autohunt_enabled: s.autohunt_enabled,
+        skip_captured: s.skip_captured,
+    })
+}
+
+/// POST /api/wifi -> update wifi settings (e.g. smart skip toggle)
+async fn wifi_update_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<WifiUpdate>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    if let Some(skip) = body.skip_captured {
+        s.pending_skip_captured = Some(skip);
+    }
+    Json(ActionResponse {
+        ok: true,
+        message: "WiFi settings update queued".into(),
     })
 }
 
@@ -1743,7 +1773,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_CAPTURES, get(captures_handler))
         .route(API_HEALTH, get(health_handler))
         .route(API_BATTERY, get(battery_handler))
-        .route(API_WIFI, get(wifi_handler))
+        .route(API_WIFI, get(wifi_handler).post(wifi_update_handler))
         .route(API_BLUETOOTH, get(bluetooth_handler).post(bluetooth_toggle_handler))
         .route(API_PERSONALITY, get(personality_handler))
         .route(API_SYSTEM, get(system_handler))
@@ -1922,11 +1952,12 @@ mod tests {
         let info = WifiInfo {
             state: "Monitor".into(), channel: 6,
             aps_tracked: 15, channels: vec![1, 6, 11], dwell_ms: 250,
-            autohunt_enabled: true,
+            autohunt_enabled: true, skip_captured: true,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"state\":\"Monitor\""));
         assert!(json.contains("\"aps_tracked\":15"));
+        assert!(json.contains("\"skip_captured\":true"));
     }
 
     #[test]
@@ -2253,6 +2284,7 @@ mod tests {
             s.wifi_aps_tracked = 25;
             s.wifi_channels = vec![1, 6, 11];
             s.wifi_dwell_ms = 2000;
+            s.skip_captured = true;
         }
         let (status, body) = get(&router, "/api/wifi").await;
         assert_eq!(status, 200);
@@ -2262,6 +2294,7 @@ mod tests {
         assert_eq!(resp.aps_tracked, 25);
         assert_eq!(resp.channels, vec![1, 6, 11]);
         assert_eq!(resp.dwell_ms, 2000);
+        assert!(resp.skip_captured);
     }
 
     #[tokio::test]
