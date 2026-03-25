@@ -175,7 +175,14 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="sub">Access points detected by monitor mode, sorted by signal strength.</div>
 <div class="ap-scroll">
 <table class="ap-table" id="ap-table">
-<thead><tr><th>SSID</th><th>BSSID</th><th>RSSI</th><th>CH</th><th>Cli</th><th>Status</th></tr></thead>
+<thead><tr>
+<th style="cursor:help" title="Network name. (hidden) = SSID broadcast off. (AO) = seen by AngryOxide only, no beacon captured.">SSID</th>
+<th style="cursor:help" title="Hardware MAC address of the access point.">BSSID</th>
+<th style="cursor:help" title="Signal strength in dBm. Green &gt; -50 (strong), yellow &gt; -70 (ok), red ≤ -70 (weak). -100 = unknown.">RSSI</th>
+<th style="cursor:help" title="WiFi channel number (1–13 = 2.4 GHz).">CH</th>
+<th style="cursor:help" title="Associated client count. For AO-only APs this shows attack event count instead.">Cli</th>
+<th style="cursor:help" title="★ = handshake or PMKID captured — hash is saved and ready to crack.">Status</th>
+</tr></thead>
 <tbody id="ap-tbody"><tr><td colspan="6" style="color:#555">Loading...</td></tr></tbody>
 </table>
 </div>
@@ -659,7 +666,7 @@ function refreshAps() {
         aps.sort(function(a,b){ return b.rssi - a.rssi; });
         el.innerHTML = aps.map(function(ap) {
             var rssiColor = ap.rssi > -50 ? '#00d4aa' : (ap.rssi > -70 ? '#f0c040' : '#e94560');
-            var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake captured">&#9734;</span>' : '';
+            var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake or PMKID captured — hash saved, ready to crack">&#9733;</span>' : '';
             return '<tr><td>' + esc(ap.ssid || '<hidden>') + '</td>' +
                 '<td style="color:#888;font-size:10px">' + esc(ap.bssid) + '</td>' +
                 '<td style="color:' + rssiColor + '">' + ap.rssi + '</td>' +
@@ -1150,7 +1157,7 @@ function updateApsFromWs(aps) {
     aps.sort(function(a,b){ return b.rssi - a.rssi; });
     el.innerHTML = aps.map(function(ap) {
         var rssiColor = ap.rssi > -50 ? '#00d4aa' : (ap.rssi > -70 ? '#f0c040' : '#e94560');
-        var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake captured">&#9734;</span>' : '';
+        var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake or PMKID captured — hash saved, ready to crack">&#9733;</span>' : '';
         return '<tr><td>' + esc(ap.ssid || '<hidden>') + '</td>' +
             '<td style="color:#888;font-size:10px">' + esc(ap.bssid) + '</td>' +
             '<td style="color:' + rssiColor + '">' + ap.rssi + '</td>' +
