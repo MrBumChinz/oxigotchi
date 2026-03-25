@@ -67,6 +67,8 @@ pub struct DaemonState {
     pub session_captures: u32,
     /// Session handshakes: validated captures moved to SD this session.
     pub session_handshakes: u32,
+    /// Whether Collect All mode is active (AO writes directly to SD).
+    pub capture_all: bool,
 
     // -- battery --
     pub battery_level: u8,
@@ -165,6 +167,9 @@ pub struct DaemonState {
     // -- smart skip --
     pub pending_skip_captured: Option<bool>,
 
+    // -- capture mode --
+    pub pending_capture_all: Option<bool>,
+
     // -- wpa-sec --
     pub wpasec_api_key: String,
     pub pending_wpasec_key: Option<String>,
@@ -213,6 +218,7 @@ impl DaemonState {
             capture_list: Vec::new(),
             session_captures: 0,
             session_handshakes: 0,
+            capture_all: false,
             battery_level: 100,
             battery_charging: false,
             battery_voltage_mv: 4200,
@@ -277,6 +283,7 @@ impl DaemonState {
             pending_whitelist_removes: Vec::new(),
             pending_channel_config: None,
             pending_skip_captured: None,
+            pending_capture_all: None,
             wpasec_api_key: String::new(),
             pending_wpasec_key: None,
             discord_webhook_url: String::new(),
@@ -469,6 +476,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             total_size_bytes: s.total_capture_size,
             session_captures: s.session_captures,
             session_handshakes: s.session_handshakes,
+            capture_all: s.capture_all,
             files: s.capture_list.clone(),
         },
         cracked: s.cracked.clone(),
@@ -556,6 +564,7 @@ pub struct CaptureInfo {
     pub total_size_bytes: u64,
     pub session_captures: u32,
     pub session_handshakes: u32,
+    pub capture_all: bool,
     pub files: Vec<CaptureEntry>,
 }
 
@@ -564,6 +573,10 @@ pub struct CaptureInfo {
 pub struct CaptureEntry {
     pub filename: String,
     pub size_bytes: u64,
+    pub ssid: String,
+    pub bssid_mac: String,
+    pub captured_date: String,
+    pub has_handshake: bool,
 }
 
 /// Health response returned by /api/health.
@@ -878,6 +891,7 @@ pub const API_SETTINGS: &str = "/api/settings";
 pub const API_BT_SCAN: &str = "/api/bluetooth/scan";
 pub const API_BT_PAIR: &str = "/api/bluetooth/pair";
 pub const API_RADIO: &str = "/api/radio";
+pub const API_CAPTURE_ALL: &str = "/api/capture-all";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -1013,8 +1027,27 @@ async fn captures_handler(State(state): State<SharedState>) -> Json<CaptureInfo>
         total_size_bytes: s.total_capture_size,
         session_captures: s.session_captures,
         session_handshakes: s.session_handshakes,
+        capture_all: s.capture_all,
         files: s.capture_list.clone(),
     })
+}
+
+/// POST /api/capture-all -> toggle collect-all capture mode
+async fn capture_all_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<CaptureAllRequest>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_capture_all = Some(body.enabled);
+    Json(ActionResponse {
+        ok: true,
+        message: "Capture mode update queued — AO restarting".into(),
+    })
+}
+
+#[derive(Debug, Deserialize)]
+struct CaptureAllRequest {
+    enabled: bool,
 }
 
 /// GET /api/health -> JSON system health
@@ -1803,6 +1836,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_SCAN, get(bt_scan_results_handler).post(bt_scan_handler))
         .route(API_BT_PAIR, post(bt_pair_handler))
         .route(API_RADIO, get(radio_get_handler).post(radio_post_handler))
+        .route(API_CAPTURE_ALL, post(capture_all_handler))
         .with_state(app)
 }
 
@@ -2068,6 +2102,7 @@ mod tests {
             total_files: 10, handshake_files: 3,
             pending_upload: 2, total_size_bytes: 1024000,
             session_captures: 5, session_handshakes: 2,
+            capture_all: false,
             files: vec![],
         };
         let json = serde_json::to_string(&info).unwrap();
@@ -2395,7 +2430,7 @@ mod tests {
             s.capture_files = 5;
             s.handshake_files = 2;
             s.capture_list = vec![
-                CaptureEntry { filename: "test.pcapng".into(), size_bytes: 1024 },
+                CaptureEntry { filename: "test.pcapng".into(), size_bytes: 1024, ssid: String::new(), bssid_mac: String::new(), captured_date: String::new(), has_handshake: false },
             ];
         }
         let (status, body) = get(&router, "/api/captures").await;

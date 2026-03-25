@@ -258,20 +258,50 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- 10. Captures (merged: stats + list + download) -->
 <div class="card" id="card-captures">
 <div class="card-title">Trophies</div>
-<div class="sub">Validated capture files — each one a trophy from a pwned cow.</div>
 <div class="status-grid" style="margin-bottom:8px">
 <div class="label">Total Files</div><div class="value" id="cap-total">-</div>
-<div class="label">Handshakes</div><div class="value" id="cap-hs">-</div>
+<div class="label">Crackable</div><div class="value" id="cap-hs">-</div>
 <div class="label">Pending Upload</div><div class="value" id="cap-pending">-</div>
 <div class="label">Total Size</div><div class="value" id="cap-size">-</div>
 </div>
-<div class="action-btns" style="margin-bottom:8px">
-<a href="/api/download/all" class="action-btn btn-restart" style="text-decoration:none;text-align:center">Download All (ZIP)</a>
+
+<div style="border-top:1px solid #0f3460;padding-top:10px;margin-top:2px;margin-bottom:10px">
+<div style="font-size:12px;color:#888;margin-bottom:6px">Capture Mode</div>
+<div style="font-size:12px;color:#aaa;margin-bottom:8px">Default: AO captures go to RAM first. Only verified handshakes (with crackable hash) get written to SD. Protects the SD card from wear.</div>
+<div class="toggle-row" style="margin-bottom:6px">
+<div class="toggle-info"><div class="toggle-label">Collect All</div><div class="toggle-desc">Keep every frame AO sees — partial handshakes, probes, mgmt frames. Writes directly to SD.</div></div>
+<label class="switch"><input type="checkbox" id="capture-all-toggle" onchange="setCaptureAll(this.checked)"><span class="slider"></span></label>
+</div>
+<div id="capture-all-warning" style="display:none;color:#e67e22;font-size:11px;padding:6px 8px;background:#5a300033;border-radius:6px;margin-top:4px">
+Warning: Collect All bypasses RAM buffering and writes everything directly to SD — probe requests, partial handshakes, management frames. Valuable for deeper analysis but causes significant SD wear. Use a high-endurance card and expect it to fill up faster.
+</div>
+</div>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+<div style="display:flex;gap:6px">
+<button class="rate-btn active" id="cap-filter-crack" onclick="setCapFilter('crackable')" style="font-size:11px;padding:4px 8px">Crackable</button>
+<button class="rate-btn" id="cap-filter-all" onclick="setCapFilter('all')" style="font-size:11px;padding:4px 8px">All</button>
+</div>
+<a href="/api/download/all" class="action-btn btn-restart" style="text-decoration:none;text-align:center;font-size:11px;padding:4px 10px">Download ZIP</a>
 </div>
 <div class="captures-list" id="cap-list"><div style="color:#555;font-size:12px">Loading...</div></div>
 </div>
 
-<!-- 11. Cracked passwords -->
+<!-- 11. WPA-SEC Upload -->
+<div class="card" id="card-wpasec">
+<div class="card-title">WPA-SEC Upload</div>
+<div class="sub">Upload captured handshakes to wpa-sec.stanev.org for cloud cracking.</div>
+<div class="status-grid" style="margin-bottom:8px">
+<div class="label">Status</div><div class="value" id="wpasec-status">-</div>
+<div class="label">API Key</div><div class="value" id="wpasec-key">-</div>
+</div>
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+<input type="text" id="wpasec-input" class="wl-input" placeholder="WPA-SEC API key" style="flex:2;min-width:180px">
+<button class="wl-btn wl-btn-add" onclick="saveWpaSec()">Save</button>
+</div>
+</div>
+
+<!-- 12. Cracked passwords -->
 <div class="card" id="card-cracked">
 <div class="card-title">Milk</div>
 <div class="sub">Passwords milked from pwned cows.</div>
@@ -281,7 +311,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- ═══════ CONNECTIVITY ═══════ -->
 <div class="section-label">Connectivity</div>
 
-<!-- 12. Bluetooth -->
+<!-- 13. Bluetooth -->
 <div class="card" id="card-bt">
 <div class="card-title">Bluetooth</div>
 <div class="status-grid" style="margin-bottom:10px">
@@ -301,20 +331,6 @@ input:checked+.slider:before{transform:translateX(22px)}
 <button class="action-btn btn-restart" id="bt-scan-btn" onclick="btScan()">Scan for Devices</button>
 </div>
 <div id="bt-scan-results"></div>
-</div>
-</div>
-
-<!-- 13. WPA-SEC Upload -->
-<div class="card" id="card-wpasec">
-<div class="card-title">WPA-SEC Upload</div>
-<div class="sub">Upload captured handshakes to wpa-sec.stanev.org for cloud cracking.</div>
-<div class="status-grid" style="margin-bottom:8px">
-<div class="label">Status</div><div class="value" id="wpasec-status">-</div>
-<div class="label">API Key</div><div class="value" id="wpasec-key">-</div>
-</div>
-<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
-<input type="text" id="wpasec-input" class="wl-input" placeholder="WPA-SEC API key" style="flex:2;min-width:180px">
-<button class="wl-btn wl-btn-add" onclick="saveWpaSec()">Save</button>
 </div>
 </div>
 
@@ -553,6 +569,49 @@ function refreshAttacks() {
     });
 }
 
+var _capFiles = [];
+var _capFilter = 'crackable';
+
+function setCapFilter(mode) {
+    _capFilter = mode;
+    document.getElementById('cap-filter-crack').classList.toggle('active', mode === 'crackable');
+    document.getElementById('cap-filter-all').classList.toggle('active', mode === 'all');
+    renderCapList();
+}
+
+function setCaptureAll(enabled) {
+    document.getElementById('capture-all-warning').style.display = enabled ? 'block' : 'none';
+    api('POST', '/api/capture-all', {enabled: enabled});
+}
+
+function capDisplayName(f) {
+    var ssid = f.ssid && f.ssid.length ? f.ssid : '(unknown)';
+    var mac = f.bssid_mac && f.bssid_mac !== '00:00:00:00:00:00' ? f.bssid_mac : '';
+    var date = f.captured_date || '';
+    if (mac) return esc(ssid) + ' \u00b7 ' + esc(mac) + (date ? ' \u00b7 ' + esc(date) : '');
+    return esc(f.filename);
+}
+
+function renderCapList() {
+    var el = document.getElementById('cap-list');
+    var files = _capFilter === 'crackable'
+        ? _capFiles.filter(function(f) { return f.has_handshake; })
+        : _capFiles;
+    if (!files.length) {
+        el.innerHTML = '<div style="color:#555;font-size:12px">' +
+            (_capFilter === 'crackable' ? 'No crackable captures yet' : 'No captures yet') + '</div>';
+        return;
+    }
+    el.innerHTML = files.map(function(f) {
+        var badge = f.has_handshake
+            ? '<span style="color:#00d4aa;font-size:10px;margin-left:6px">\u2713 crackable</span>'
+            : '<span style="color:#888;font-size:10px;margin-left:6px">~ partial</span>';
+        return '<div class="capture-item"><a href="/api/download/' + encodeURIComponent(f.filename) +
+            '" style="color:#00d4aa;text-decoration:none">' + capDisplayName(f) + '</a>' +
+            badge + ' <span style="color:#555;font-size:11px">(' + fmtBytes(f.size_bytes) + ')</span></div>';
+    }).join('');
+}
+
 function refreshCaptures() {
     api('GET', '/api/captures').then(function(d) {
         if (!d) return;
@@ -560,14 +619,14 @@ function refreshCaptures() {
         document.getElementById('cap-hs').textContent = d.handshake_files;
         document.getElementById('cap-pending').textContent = d.pending_upload;
         document.getElementById('cap-size').textContent = fmtBytes(d.total_size_bytes);
-        var el = document.getElementById('cap-list');
-        if (!d.files || !d.files.length) {
-            el.innerHTML = '<div style="color:#555;font-size:12px">No captures yet</div>';
-            return;
+        // Sync capture mode toggle
+        var tog = document.getElementById('capture-all-toggle');
+        if (tog && tog.checked !== d.capture_all) {
+            tog.checked = d.capture_all;
+            document.getElementById('capture-all-warning').style.display = d.capture_all ? 'block' : 'none';
         }
-        el.innerHTML = d.files.map(function(f) {
-            return '<div class="capture-item"><a href="/api/download/' + encodeURIComponent(f.filename) + '" style="color:#00d4aa;text-decoration:none">' + esc(f.filename) + '</a> <span style="color:#555">(' + fmtBytes(f.size_bytes) + ')</span></div>';
-        }).join('');
+        _capFiles = d.files || [];
+        renderCapList();
     });
 }
 

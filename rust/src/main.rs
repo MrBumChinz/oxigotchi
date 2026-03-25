@@ -103,6 +103,8 @@ struct Daemon {
     autohunt: bool,
     /// Smart Skip: skip APs that already have captured handshakes on SD.
     skip_captured: bool,
+    /// Collect All: AO writes directly to SD, all frames kept (not just verified handshakes).
+    capture_all: bool,
     /// Adaptive channel scorer: ranks channels 1-13 by AP density, RSSI, etc.
     channel_scorer: wifi::ChannelScorer,
     /// tmpfs directory for AO captures (validated before moving to SD).
@@ -168,6 +170,7 @@ impl Daemon {
             discord_enabled: false,
             autohunt: true,
             skip_captured: true,
+            capture_all: false,
             channel_scorer: wifi::ChannelScorer::new(3),
             tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
             lifetime_aps_base: 0,
@@ -304,9 +307,14 @@ impl Daemon {
         // Load persisted runtime state BEFORE starting AO (whitelist, attack toggles, etc.)
         self.load_runtime_state();
 
-        // Point AO output prefix inside the tmpfs capture directory.
-        self.ao.config.output_dir = format!("{}/capture", self.tmpfs_capture_dir);
-        info!("capture pipeline: AO output -> tmpfs ({})", self.tmpfs_capture_dir);
+        // Point AO output to tmpfs (verified mode) or SD directly (collect-all mode).
+        if self.capture_all {
+            self.ao.config.output_dir = CAPTURE_DIR.to_string();
+            info!("capture pipeline: collect-all mode — AO output -> SD ({})", CAPTURE_DIR);
+        } else {
+            self.ao.config.output_dir = format!("{}/capture", self.tmpfs_capture_dir);
+            info!("capture pipeline: verified mode — AO output -> tmpfs ({})", self.tmpfs_capture_dir);
+        }
 
         // Pass SSID whitelist to AO so it skips our own APs
         self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
@@ -618,55 +626,68 @@ impl Daemon {
         }
     }
 
-    /// Capture phase: scan tmpfs for new AO captures, validate, move handshakes to SD.
+    /// Capture phase: validate and index captures from AO output.
+    /// In verified mode: tmpfs → hcxpcapngtool → move validated to SD, delete junk.
+    /// In collect-all mode: AO writes to SD directly → hcxpcapngtool on SD files, keep all.
     fn run_capture_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Capture
         result.associations = self.wifi.tracker.total_clients();
 
-        // 1. Scan tmpfs for new AO captures
-        let tmpfs_dir = std::path::Path::new(&self.tmpfs_capture_dir);
-        let mut tmpfs_manager = capture::CaptureManager::new(
-            &self.tmpfs_capture_dir,
-        );
-        let _ = tmpfs_manager.scan_directory();
-
         // session_captures is tracked by the AO stdout reader (EAPOL Message 1 events).
-        // session_handshakes is incremented below when validated captures move to SD.
+        // session_handshakes is incremented below.
 
-        // Truncate kismet file if it exceeds 50MB to prevent tmpfs exhaustion
-        let kismet_path = format!("{}/capture.kismet", self.tmpfs_capture_dir);
-        if let Ok(meta) = std::fs::metadata(&kismet_path) {
-            if meta.len() > 50 * 1024 * 1024 {
-                info!("kismet file {}MB, truncating", meta.len() / 1024 / 1024);
-                let _ = std::fs::File::create(&kismet_path); // truncate to zero
+        if !self.capture_all {
+            // === VERIFIED MODE: tmpfs → validate → SD ===
+
+            // 1. Scan tmpfs for new AO captures
+            let tmpfs_dir = std::path::Path::new(&self.tmpfs_capture_dir);
+            let mut tmpfs_manager = capture::CaptureManager::new(&self.tmpfs_capture_dir);
+            let _ = tmpfs_manager.scan_directory();
+
+            // Truncate kismet file if it exceeds 50MB to prevent tmpfs exhaustion
+            let kismet_path = format!("{}/capture.kismet", self.tmpfs_capture_dir);
+            if let Ok(meta) = std::fs::metadata(&kismet_path) {
+                if meta.len() > 50 * 1024 * 1024 {
+                    info!("kismet file {}MB, truncating", meta.len() / 1024 / 1024);
+                    let _ = std::fs::File::create(&kismet_path); // truncate to zero
+                }
             }
-        }
 
-        // 2. Convert new captures in tmpfs via hcxpcapngtool
-        if !tmpfs_manager.files.is_empty() {
-            let (converted, _no_hs, failed) = capture::batch_convert(&mut tmpfs_manager);
+            // 2. Convert new captures in tmpfs via hcxpcapngtool
+            if !tmpfs_manager.files.is_empty() {
+                let (converted, _no_hs, failed) = capture::batch_convert(&mut tmpfs_manager);
+                if converted > 0 {
+                    info!("tmpfs: converted {converted} capture(s) to .22000");
+                }
+                if failed > 0 {
+                    log::warn!("tmpfs: {failed} conversion(s) failed");
+                }
+            }
+
+            // 3. Move validated captures to SD, delete junk from tmpfs
+            let permanent_dir = self.captures.capture_dir.clone();
+            let (moved, deleted) = capture::move_validated_captures(
+                tmpfs_dir,
+                &permanent_dir,
+                &mut self.captures,
+            );
+            if moved > 0 || deleted > 0 {
+                info!("capture pipeline: {moved} saved to SD, {deleted} junk deleted from RAM");
+            }
+            if moved > 0 {
+                self.ao.session_handshakes.fetch_add(moved as u32, std::sync::atomic::Ordering::Relaxed);
+            }
+        } else {
+            // === COLLECT ALL MODE: AO writes directly to SD ===
+            // Run hcxpcapngtool on SD files so .22000 companions are created, but keep everything.
+            let (converted, _no_hs, failed) = capture::batch_convert(&mut self.captures);
             if converted > 0 {
-                info!("tmpfs: converted {converted} capture(s) to .22000");
+                info!("collect-all: converted {converted} capture(s) to .22000 on SD");
+                self.ao.session_handshakes.fetch_add(converted as u32, std::sync::atomic::Ordering::Relaxed);
             }
             if failed > 0 {
-                log::warn!("tmpfs: {failed} conversion(s) failed");
+                log::warn!("collect-all: {failed} conversion(s) failed");
             }
-        }
-
-        // 3. Move validated captures to SD, delete junk from tmpfs
-        let permanent_dir = self.captures.capture_dir.clone();
-        let (moved, deleted) = capture::move_validated_captures(
-            tmpfs_dir,
-            &permanent_dir,
-            &mut self.captures,
-        );
-        if moved > 0 || deleted > 0 {
-            info!("capture pipeline: {moved} saved to SD, {deleted} junk deleted from RAM");
-        }
-
-        // Track validated captures moved to SD as session handshakes
-        if moved > 0 {
-            self.ao.session_handshakes.fetch_add(moved as u32, std::sync::atomic::Ordering::Relaxed);
         }
 
         // 4. Scan permanent dir for upload tracking + new handshake detection
@@ -1051,6 +1072,25 @@ impl Daemon {
             any_command = true;
         }
 
+        // Process pending capture mode change (Verified vs Collect All)
+        let capture_all_toggle = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_capture_all.take()
+        };
+        if let Some(all) = capture_all_toggle {
+            self.capture_all = all;
+            if all {
+                self.ao.config.output_dir = CAPTURE_DIR.to_string();
+                info!("web: capture_all enabled — AO output -> SD directly");
+            } else {
+                self.ao.config.output_dir = format!("{}/capture", self.tmpfs_capture_dir);
+                info!("web: capture_all disabled — AO output -> tmpfs");
+            }
+            info!("web: restarting AO for capture mode change");
+            let _ = self.ao.restart();
+            any_command = true;
+        }
+
         // Process pending WPA-SEC key
         let wpasec_key = {
             let mut s = self.shared_state.lock().unwrap();
@@ -1232,6 +1272,7 @@ impl Daemon {
             "discord_enabled": self.discord_enabled,
             "autohunt": self.autohunt,
             "skip_captured": self.skip_captured,
+            "capture_all": self.capture_all,
             "name": self.config.name,
             "wifi_channels": self.wifi.channel_config.channels,
             "wifi_dwell_ms": self.wifi.channel_config.dwell_ms,
@@ -1340,6 +1381,9 @@ impl Daemon {
         if let Some(v) = state.get("skip_captured").and_then(|v| v.as_bool()) {
             self.skip_captured = v;
         }
+        if let Some(v) = state.get("capture_all").and_then(|v| v.as_bool()) {
+            self.capture_all = v;
+        }
         if let Some(channels_arr) = state.get("wifi_channels").and_then(|v| v.as_array()) {
             let channels: Vec<u8> = channels_arr.iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
@@ -1402,12 +1446,25 @@ impl Daemon {
         s.total_capture_size = self.captures.total_size();
         s.session_captures = self.ao.session_captures();
         s.session_handshakes = self.ao.session_handshakes();
+        s.capture_all = self.capture_all;
         s.capture_list = self.captures.files.iter().map(|f| {
+            let bssid_mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                f.bssid[0], f.bssid[1], f.bssid[2], f.bssid[3], f.bssid[4], f.bssid[5]);
+            let captured_date = f.mtime
+                .map(|t| {
+                    let dt: chrono::DateTime<chrono::Utc> = t.into();
+                    dt.format("%Y-%m-%d").to_string()
+                })
+                .unwrap_or_else(|| "unknown".to_string());
             web::CaptureEntry {
                 filename: f.path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 size_bytes: f.size,
+                ssid: f.ssid.clone(),
+                bssid_mac,
+                captured_date,
+                has_handshake: f.has_handshake,
             }
         }).collect();
 
@@ -1871,6 +1928,7 @@ impl Daemon {
             total_size_bytes: self.captures.total_size(),
             session_captures: self.ao.session_captures(),
             session_handshakes: self.ao.session_handshakes(),
+            capture_all: self.capture_all,
             files: vec![],
         }
     }
