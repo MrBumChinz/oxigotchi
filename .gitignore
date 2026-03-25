@@ -31,5 +31,8 @@ rust/target/
 # Captures and user data (local backup, not shipped)
 captures/
 
+# Private Pi config (contains personal SSIDs/keys — use pi_config.toml.example as template)
+pi_config.toml
+
 # Claude Code
 .claude/
