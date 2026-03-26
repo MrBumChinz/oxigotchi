@@ -255,6 +255,18 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- ═══════ LOOT ═══════ -->
 <div class="section-label">Loot</div>
 
+<!-- Whitelist -->
+<div class="card" id="card-whitelist">
+<div class="card-title">Whitelist</div>
+<div class="sub">Networks and MACs excluded from attacks. Changes apply next epoch.</div>
+<div id="wl-list"><div style="color:#555;font-size:12px">Loading...</div></div>
+<div style="margin-top:10px;padding-top:10px;border-top:1px solid #0f3460;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+<input type="text" id="wl-value" class="wl-input" placeholder="MAC or SSID" style="flex:2;min-width:120px">
+<select id="wl-type" class="wl-select" style="flex:0 0 80px"><option value="MAC">MAC</option><option value="SSID">SSID</option></select>
+<button class="wl-btn wl-btn-add" onclick="addWhitelist()">Add</button>
+</div>
+</div>
+
 <!-- 10. Captures (merged: stats + list + download) -->
 <div class="card" id="card-captures">
 <div class="card-title">Trophies</div>
@@ -413,18 +425,6 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div class="card-title">Plugins</div>
 <div class="sub">Lua plugins control display indicators. Toggle on/off and set x,y positions.</div>
 <div id="plugins-list"><div style="color:#555;font-size:12px">Loading...</div></div>
-</div>
-
-<!-- 19. Whitelist -->
-<div class="card" id="card-whitelist">
-<div class="card-title">Whitelist</div>
-<div class="sub">Networks and MACs excluded from attacks. Changes apply next epoch.</div>
-<div id="wl-list"><div style="color:#555;font-size:12px">Loading...</div></div>
-<div style="margin-top:10px;padding-top:10px;border-top:1px solid #0f3460;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-<input type="text" id="wl-value" class="wl-input" placeholder="MAC or SSID" style="flex:2;min-width:120px">
-<select id="wl-type" class="wl-select" style="flex:0 0 80px"><option value="MAC">MAC</option><option value="SSID">SSID</option></select>
-<button class="wl-btn wl-btn-add" onclick="addWhitelist()">Add</button>
-</div>
 </div>
 
 <!-- 20. Logs Panel -->
