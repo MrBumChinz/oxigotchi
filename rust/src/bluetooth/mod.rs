@@ -8,6 +8,7 @@
 
 pub mod adapter;
 pub mod attacks;
+pub mod capture;
 pub mod coex;
 pub mod controller;
 pub mod discovery;
