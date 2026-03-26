@@ -295,16 +295,16 @@ impl Daemon {
         // Load Lua plugins — read persisted positions from plugins.toml, fall back to defaults
         let plugin_defaults = vec![
             lua::PluginConfig::default_for("ao_status", 0, 0),
-            lua::PluginConfig::default_for("aps", 178, 112),
+            lua::PluginConfig::default_for("aps", 164, 112),
             lua::PluginConfig::default_for("uptime", 178, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
             lua::PluginConfig::default_for("sys_stats", 125, 85),
             lua::PluginConfig::default_for("ip_display", 0, 95),
             lua::PluginConfig::default_for("crash", 0, 112),
-            lua::PluginConfig::default_for("www", 48, 112),
-            lua::PluginConfig::default_for("bt_status", 86, 112),
-            lua::PluginConfig::default_for("battery", 118, 112),
-            lua::PluginConfig::default_for("mode", 208, 112),
+            lua::PluginConfig::default_for("www", 44, 112),
+            lua::PluginConfig::default_for("bt_status", 76, 112),
+            lua::PluginConfig::default_for("battery", 114, 112),
+            lua::PluginConfig::default_for("mode", 214, 112),
         ];
         let plugin_configs = match lua::config::read_plugins_toml() {
             Some(pt) => {
