@@ -706,9 +706,11 @@ function refreshCracked() {
             return;
         }
         el.innerHTML = list.map(function(c) {
+            var label = esc(c.ssid || c.bssid);
+            if (c.ssid && c.bssid) label += ' \u00b7 ' + esc(c.bssid);
+            if (c.date) label += ' \u00b7 ' + esc(c.date);
             return '<div style="padding:4px 0;border-bottom:1px solid #0f346022">' +
-                '<span style="color:#00d4aa;font-weight:bold">' + esc(c.ssid || c.bssid) + '</span>' +
-                (c.bssid ? ' <span style="color:#666;font-size:10px">[' + esc(c.bssid) + ']</span>' : '') +
+                '<span style="color:#00d4aa;font-weight:bold;font-size:11px">' + label + '</span>' +
                 '<br><span style="color:#f0c040;font-family:monospace;font-size:12px">' + esc(c.password) + '</span></div>';
         }).join('');
     });
@@ -1195,9 +1197,11 @@ function updateCrackedFromWs(list) {
         return;
     }
     el.innerHTML = list.map(function(c) {
+        var label = esc(c.ssid || c.bssid);
+        if (c.ssid && c.bssid) label += ' \u00b7 ' + esc(c.bssid);
+        if (c.date) label += ' \u00b7 ' + esc(c.date);
         return '<div style="padding:4px 0;border-bottom:1px solid #0f346022">' +
-            '<span style="color:#00d4aa;font-weight:bold">' + esc(c.ssid || c.bssid) + '</span>' +
-            (c.bssid ? ' <span style="color:#666;font-size:10px">[' + esc(c.bssid) + ']</span>' : '') +
+            '<span style="color:#00d4aa;font-weight:bold;font-size:11px">' + label + '</span>' +
             '<br><span style="color:#f0c040;font-family:monospace;font-size:12px">' + esc(c.password) + '</span></div>';
     }).join('');
 }

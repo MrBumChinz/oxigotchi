@@ -750,6 +750,9 @@ pub struct CrackedEntry {
     pub ssid: String,
     pub bssid: String,
     pub password: String,
+    /// Date the password was fetched from WPA-SEC (YYYY-MM-DD UTC).
+    #[serde(default)]
+    pub date: String,
 }
 
 /// Plugin info for the web API.
@@ -2059,7 +2062,7 @@ mod tests {
     fn test_cracked_entry_serialize() {
         let entry = CrackedEntry {
             ssid: "MyWifi".into(), bssid: "AA:BB:CC:DD:EE:FF".into(),
-            password: "hunter2".into(),
+            password: "hunter2".into(), date: "2026-01-01".into(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("\"ssid\":\"MyWifi\""));
@@ -2495,6 +2498,7 @@ mod tests {
                 ssid: "MyWifi".into(),
                 bssid: "AA:BB:CC:DD:EE:FF".into(),
                 password: "hunter2".into(),
+                date: "2026-01-01".into(),
             });
         }
         let (status, body) = get(&router, "/api/cracked").await;

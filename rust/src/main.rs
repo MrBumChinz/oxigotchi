@@ -728,8 +728,9 @@ impl Daemon {
             if !cracked.is_empty() {
                 info!("WPA-SEC: fetched {} cracked password(s)", cracked.len());
                 let mut s = self.shared_state.lock().unwrap();
+                let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
                 s.cracked = cracked.into_iter().map(|(bssid, ssid, password)| {
-                    web::CrackedEntry { bssid, ssid, password }
+                    web::CrackedEntry { bssid, ssid, password, date: today.clone() }
                 }).collect();
             }
         }
