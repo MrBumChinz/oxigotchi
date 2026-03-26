@@ -330,6 +330,31 @@ fn idle_message(blind_epochs: u32, mood: &Mood) -> String {
     messages[idx].to_string()
 }
 
+/// Select face based on BT mode activity.
+pub fn bt_mode_face(
+    active_attacks: u32,
+    devices: u32,
+    captures_this_session: u32,
+    patchram_error: bool,
+) -> Face {
+    if patchram_error {
+        return Face::Broken;
+    }
+    if captures_this_session > 0 {
+        return Face::Excited;
+    }
+    if active_attacks > 0 {
+        return Face::Raging;
+    }
+    if devices > 5 {
+        return Face::Intense;
+    }
+    if devices > 0 {
+        return Face::Cool;
+    }
+    Face::Lonely
+}
+
 // ---------------------------------------------------------------------------
 // Personality state machine tracking mood and epoch statistics
 // ---------------------------------------------------------------------------
