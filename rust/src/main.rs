@@ -1397,6 +1397,10 @@ impl Daemon {
             uptime_secs: self.epoch_loop.uptime_secs(),
             epoch: m.epoch,
             mode: self.mode.as_str().to_string(),
+            rage_level: {
+                let s = self.shared_state.lock().unwrap();
+                if s.rage_enabled { s.rage_level } else { 0 }
+            },
             channel: {
                 let ch = self.ao.channel();
                 if ch > 0 { ch as u8 } else { m.channel }

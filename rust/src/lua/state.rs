@@ -9,6 +9,7 @@ pub struct EpochState {
     pub uptime_secs: u64,
     pub epoch: u64,
     pub mode: String,
+    pub rage_level: u8,  // 0 = Custom/off, 1-7 = active RAGE level
 
     // wifi / AO
     pub channel: u8,
@@ -77,6 +78,7 @@ impl EpochState {
         t.set("uptime_secs", self.uptime_secs)?;
         t.set("epoch", self.epoch)?;
         t.set("mode", self.mode.as_str())?;
+        t.set("rage_level", self.rage_level)?;
 
         t.set("channel", self.channel)?;
         t.set("aps_seen", self.aps_seen)?;
