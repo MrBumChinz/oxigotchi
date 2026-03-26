@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use crate::ao;
 use crate::bluetooth;
+use crate::bluetooth::patchram::PatchramManager;
 use crate::wifi;
 
 /// Lock file location.
@@ -327,6 +328,135 @@ impl RadioManager {
         // Step 11: Write BT lock
         self.acquire_lock(RadioMode::Bt)?;
         info!("radio: transition to BT complete");
+        Ok(())
+    }
+
+    /// Atomic transition to BT attack mode with patchram load.
+    ///
+    /// Steps:
+    /// 1. Write TRANSITIONING to lock
+    /// 2. Stop AO
+    /// 3. Wait 500ms for UART settle
+    /// 4. Stop WiFi monitor mode
+    /// 5. Disconnect BT PAN
+    /// 6. Load attack patchram (on failure: set mode=Free, return error)
+    /// 7. Write BT to lock
+    pub fn transition_to_bt_attack(
+        &mut self,
+        ao: &mut ao::AoManager,
+        wifi: &mut wifi::WifiManager,
+        bt: &mut bluetooth::BtTether,
+        patchram: &mut PatchramManager,
+    ) -> Result<(), String> {
+        info!("radio: beginning transition to BT attack mode");
+
+        // Step 1: Mark transitioning
+        self.acquire_lock(RadioMode::Transitioning)?;
+
+        // Step 2: Stop AO
+        info!("radio: step 2 — stopping AO");
+        ao.stop();
+
+        // Step 3: Wait for UART settle
+        info!("radio: step 3 — waiting 500ms for UART settle");
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Step 4: Stop WiFi monitor mode
+        info!("radio: step 4 — stopping WiFi monitor mode");
+        if let Err(e) = wifi.stop_monitor() {
+            warn!("radio: WiFi monitor stop failed: {e} (continuing)");
+        }
+
+        // Step 5: Disconnect BT PAN
+        info!("radio: step 5 — disconnecting BT PAN");
+        bt.disconnect();
+
+        // Step 6: Load attack patchram
+        info!("radio: step 6 — loading attack patchram");
+        if let Err(e) = patchram.load_attack() {
+            error!("radio: attack patchram load failed: {e}, setting mode=Free");
+            let _ = self.acquire_lock(RadioMode::Free);
+            return Err(format!("attack patchram load failed: {e}"));
+        }
+
+        // Step 7: Write BT lock
+        self.acquire_lock(RadioMode::Bt)?;
+        info!("radio: transition to BT attack mode complete");
+        Ok(())
+    }
+
+    /// Atomic transition from BT (attack) back to WiFi mode.
+    ///
+    /// Steps:
+    /// 1. Write TRANSITIONING to lock
+    /// 2. Unload patchram
+    /// 3. Wait 500ms for UART settle
+    /// 4. Start WiFi monitor mode
+    /// 5. Start AO
+    /// 6. Write WIFI to lock
+    pub fn transition_bt_to_wifi(
+        &mut self,
+        ao: &mut ao::AoManager,
+        wifi: &mut wifi::WifiManager,
+        patchram: &mut PatchramManager,
+    ) -> Result<(), String> {
+        info!("radio: beginning transition from BT to WIFI");
+
+        // Step 1: Mark transitioning
+        self.acquire_lock(RadioMode::Transitioning)?;
+
+        // Step 2: Unload patchram
+        info!("radio: step 2 — unloading patchram");
+        patchram.unload()?;
+
+        // Step 3: Wait for UART settle
+        info!("radio: step 3 — waiting 500ms for UART settle");
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Step 4: Start WiFi monitor mode
+        info!("radio: step 4 — starting WiFi monitor mode");
+        if let Err(e) = wifi.start_monitor() {
+            error!("radio: WiFi monitor start failed: {e}");
+            return Err(format!("WiFi monitor start failed: {e}"));
+        }
+
+        // Step 5: Start AO
+        info!("radio: step 5 — starting AO");
+        if let Err(e) = ao.start() {
+            error!("radio: AO start failed: {e}");
+            let _ = wifi.stop_monitor();
+            return Err(format!("AO start failed: {e}"));
+        }
+
+        // Step 6: Write WIFI lock
+        self.acquire_lock(RadioMode::Wifi)?;
+        info!("radio: transition from BT to WIFI complete");
+        Ok(())
+    }
+
+    /// Atomic transition from BT attack to BT safe (stock patchram).
+    ///
+    /// Steps:
+    /// 1. Write TRANSITIONING to lock
+    /// 2. Load stock patchram
+    /// 3. Write BT to lock
+    pub fn transition_bt_to_safe(
+        &mut self,
+        _bt: &mut bluetooth::BtTether,
+        patchram: &mut PatchramManager,
+    ) -> Result<(), String> {
+        info!("radio: beginning transition from BT attack to BT safe");
+
+        // Step 1: Mark transitioning
+        self.acquire_lock(RadioMode::Transitioning)?;
+
+        // Step 2: Load stock patchram
+        info!("radio: step 2 — loading stock patchram");
+        patchram.load_stock()?;
+
+        // Step 3: Write BT lock
+        self.acquire_lock(RadioMode::Bt)?;
+        info!("radio: transition from BT attack to BT safe complete");
         Ok(())
     }
 

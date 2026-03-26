@@ -103,6 +103,7 @@ struct Daemon {
     watchdog: recovery::Watchdog,
     ao: ao::AoManager,
     radio: radio::RadioManager,
+    patchram: bluetooth::patchram::PatchramManager,
     firmware_monitor: firmware::FirmwareMonitor,
     gpu_state: gpu::state::gpu_state::GpuFeatureState,
     gpu_runtime_ingestor: gpu::runtime::ingest::GpuRuntimeIngestor,
@@ -170,6 +171,10 @@ impl Daemon {
         let recovery = recovery::RecoveryManager::default();
         let watchdog = recovery::Watchdog::new(true, 60);
         let ao = ao::AoManager::default();
+        let patchram = bluetooth::patchram::PatchramManager::new(
+            config.bt_attacks.attack_hcd.clone(),
+            config.bt_attacks.stock_hcd.clone(),
+        );
 
         Self {
             config,
@@ -189,6 +194,7 @@ impl Daemon {
             watchdog,
             ao,
             radio: radio::RadioManager::new(),
+            patchram,
             firmware_monitor: firmware::FirmwareMonitor::new(),
             gpu_state: gpu::state::gpu_state::GpuFeatureState {
                 mode: gpu_mode,
@@ -2256,29 +2262,50 @@ impl Daemon {
     const SAFE_FACES: &'static [personality::Face] =
         &[personality::Face::Debug, personality::Face::Grateful];
 
-    /// Transition from RAGE to SAFE mode via radio lock manager.
+    /// Transition from RAGE or BT to SAFE mode via radio lock manager.
     fn enter_safe_mode(&mut self) {
-        info!("mode: RAGE -> SAFE");
+        info!("mode: {} -> SAFE", self.mode.as_str());
         let face = Self::random_face(Self::SAFE_FACES);
         self.show_transition(face, "Switching to SAFE...");
 
-        // Atomic transition: WiFi -> BT via radio lock manager
-        match self
-            .radio
-            .transition_to_bt(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
-        {
-            Ok(()) => {
-                info!("radio: WIFI -> BT transition complete");
-                // Now set up BT PAN connection
-                match self.bluetooth.setup() {
-                    Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
-                    Err(e) => log::warn!("BT setup failed: {e}"),
+        if self.mode == OperatingMode::Bt {
+            // BT attack mode → SAFE: swap attack patchram for stock
+            match self.radio.transition_bt_to_safe(
+                &mut self.bluetooth,
+                &mut self.patchram,
+            ) {
+                Ok(()) => {
+                    info!("radio: BT attack -> BT safe transition complete (stock patchram)");
+                    // Set up BT PAN connection with stock firmware
+                    match self.bluetooth.setup() {
+                        Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
+                        Err(e) => log::warn!("BT setup failed: {e}"),
+                    }
+                }
+                Err(e) => {
+                    log::error!("radio transition BT->SAFE failed: {e}");
+                    return;
                 }
             }
-            Err(e) => {
-                log::error!("radio transition to BT failed: {e}");
-                // Radio manager already rolled back to WIFI
-                return;
+        } else {
+            // RAGE mode → SAFE: standard WiFi -> BT transition
+            match self
+                .radio
+                .transition_to_bt(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
+            {
+                Ok(()) => {
+                    info!("radio: WIFI -> BT transition complete");
+                    // Now set up BT PAN connection
+                    match self.bluetooth.setup() {
+                        Ok(()) => info!("BT connected: {}", self.bluetooth.status_str()),
+                        Err(e) => log::warn!("BT setup failed: {e}"),
+                    }
+                }
+                Err(e) => {
+                    log::error!("radio transition to BT failed: {e}");
+                    // Radio manager already rolled back to WIFI
+                    return;
+                }
             }
         }
 
@@ -2288,31 +2315,69 @@ impl Daemon {
         display::driver::request_reinit();
     }
 
-    /// Transition into BT attack mode (stub — radio handoff added in Task 4).
+    /// Transition into BT attack mode — tears down WiFi, loads attack patchram.
     fn enter_bt_mode(&mut self) {
         info!("mode: {} -> BT", self.mode.as_str());
-        self.mode = OperatingMode::Bt;
-        log::info!("Entering BT attack mode");
+        let face = Self::random_face(Self::RAGE_FACES);
+        self.show_transition(face, "Switching to BT Attack...");
+
+        // Atomic transition: stop AO + WiFi, load attack patchram
+        match self.radio.transition_to_bt_attack(
+            &mut self.ao,
+            &mut self.wifi,
+            &mut self.bluetooth,
+            &mut self.patchram,
+        ) {
+            Ok(()) => {
+                info!("radio: transition to BT attack complete");
+                self.mode = OperatingMode::Bt;
+                self.bt_feature.set_mode(bluetooth::model::config::BtMode::Attack);
+                self.epoch_loop.personality.set_override(face);
+                // Radio transition disrupts SPI bus — force display reinit
+                display::driver::request_reinit();
+            }
+            Err(e) => {
+                log::error!("radio transition to BT attack failed: {e}");
+                // Radio manager already set mode=Free on failure
+            }
+        }
     }
 
-    /// Transition from SAFE to RAGE mode via radio lock manager.
+    /// Transition from SAFE or BT to RAGE mode via radio lock manager.
     fn enter_rage_mode(&mut self) {
-        info!("mode: SAFE -> RAGE");
+        info!("mode: {} -> RAGE", self.mode.as_str());
         let face = Self::random_face(Self::RAGE_FACES);
         self.show_transition(face, "Switching to RAGE...");
 
-        // Atomic transition: BT -> WiFi via radio lock manager
-        match self
-            .radio
-            .transition_to_wifi(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
-        {
-            Ok(()) => {
-                info!("radio: BT -> WIFI transition complete");
+        if self.mode == OperatingMode::Bt {
+            // BT attack mode → RAGE: unload patchram, restart WiFi+AO
+            match self.radio.transition_bt_to_wifi(
+                &mut self.ao,
+                &mut self.wifi,
+                &mut self.patchram,
+            ) {
+                Ok(()) => {
+                    info!("radio: BT -> WIFI transition complete (via patchram unload)");
+                }
+                Err(e) => {
+                    log::error!("radio transition BT->WIFI failed: {e}");
+                    return;
+                }
             }
-            Err(e) => {
-                log::error!("radio transition to WIFI failed: {e}");
-                // Radio manager already rolled back to BT
-                return;
+        } else {
+            // SAFE mode → RAGE: standard BT -> WiFi transition
+            match self
+                .radio
+                .transition_to_wifi(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
+            {
+                Ok(()) => {
+                    info!("radio: BT -> WIFI transition complete");
+                }
+                Err(e) => {
+                    log::error!("radio transition to WIFI failed: {e}");
+                    // Radio manager already rolled back to BT
+                    return;
+                }
             }
         }
 
