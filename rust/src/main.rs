@@ -1476,6 +1476,8 @@ impl Daemon {
             "name": self.config.name,
             "wifi_channels": self.wifi.channel_config.channels,
             "wifi_dwell_ms": self.wifi.channel_config.dwell_ms,
+            "rage_enabled": s.rage_enabled,
+            "rage_level": s.rage_level,
             "lifetime_aps": self.lifetime_aps_base + self.ao.ap_count() as u64,
         });
         drop(s);
@@ -1615,6 +1617,34 @@ impl Daemon {
                 self.config.name = name.to_string();
                 let mut s = self.shared_state.lock().unwrap();
                 s.name = name.to_string();
+            }
+        }
+
+        // Apply RAGE slider state
+        if let Some(enabled) = state.get("rage_enabled").and_then(|v| v.as_bool()) {
+            let mut s = self.shared_state.lock().unwrap();
+            s.rage_enabled = enabled;
+            if enabled {
+                if let Some(level) = state.get("rage_level").and_then(|v| v.as_u64()) {
+                    let level = (level as u8).clamp(1, 7);
+                    s.rage_level = level;
+                    if let Some(p) = crate::rage::preset(level) {
+                        info!("state: restoring RAGE level {} ({})", p.level, p.name);
+                        drop(s);
+                        self.ao.set_rate(p.rate);
+                        self.wifi.channel_config.channels = p.channels.to_vec();
+                        self.wifi.channel_config.dwell_ms = p.dwell_ms;
+                        self.wifi.channel_config.current_index = 0;
+                        self.autohunt = false;
+                        self.ao.config.channels = p.channels.to_vec();
+                        self.ao.config.dwell = (p.dwell_ms / 1000).max(1) as u32;
+                        let mut s = self.shared_state.lock().unwrap();
+                        s.autohunt_enabled = false;
+                        s.wifi_channels = p.channels.to_vec();
+                        s.wifi_dwell_ms = p.dwell_ms;
+                        s.attack_rate = p.rate;
+                    }
+                }
             }
         }
 
