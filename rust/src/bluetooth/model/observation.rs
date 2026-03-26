@@ -1,13 +1,70 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BtTransport {
+    Ble,
+    Classic,
+    Dual,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BtCategory {
+    Phone,
+    Audio,
+    Computer,
+    IoT,
+    Peripheral,
+    Wearable,
+    Unknown,
+}
+
+impl BtCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BtCategory::Phone => "phone",
+            BtCategory::Audio => "audio",
+            BtCategory::Computer => "computer",
+            BtCategory::IoT => "iot",
+            BtCategory::Peripheral => "peripheral",
+            BtCategory::Wearable => "wearable",
+            BtCategory::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BtDeviceAttackState {
+    Untouched,
+    Targeted,
+    Attacking,
+    Captured,
+    Failed,
+}
+
+impl Default for BtDeviceAttackState {
+    fn default() -> Self {
+        BtDeviceAttackState::Untouched
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtDeviceObservation {
     pub id: String,
     pub address: String,
+    pub address_type: Option<String>,
+    pub transport: BtTransport,
     pub name: Option<String>,
     pub rssi: Option<i16>,
+    pub rssi_best: Option<i16>,
+    pub category: BtCategory,
+    pub services: Vec<String>,
+    pub manufacturer: Option<String>,
+    pub first_seen: DateTime<Utc>,
     pub ts: DateTime<Utc>,
+    pub seen_count: u32,
+    pub attack_state: BtDeviceAttackState,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1783,13 +1783,22 @@ impl Daemon {
                     bluetooth::model::observation::BtDeviceObservation {
                         id: device.mac.clone(),
                         address: device.mac.clone(),
+                        address_type: None,
+                        transport: bluetooth::model::observation::BtTransport::Unknown,
                         name: if device.name.is_empty() {
                             None
                         } else {
                             Some(device.name.clone())
                         },
                         rssi: None,
+                        rssi_best: None,
+                        category: bluetooth::model::observation::BtCategory::Unknown,
+                        services: Vec::new(),
+                        manufacturer: None,
+                        first_seen: chrono::Utc::now(),
                         ts: chrono::Utc::now(),
+                        seen_count: 1,
+                        attack_state: bluetooth::model::observation::BtDeviceAttackState::Untouched,
                     },
                 ),
             );
