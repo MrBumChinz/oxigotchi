@@ -87,6 +87,13 @@ pub struct DaemonState {
     pub wifi_dwell_ms: u64,
     pub autohunt_enabled: bool,
     pub skip_captured: bool,
+    pub min_rssi: i8,
+    pub ap_ttl_secs: u64,
+
+    // -- display settings --
+    pub display_invert: bool,
+    pub display_rotation: u16,
+    pub pending_display_reinit: bool,
 
     // -- bluetooth --
     pub bt_state: String,
@@ -104,6 +111,8 @@ pub struct DaemonState {
     pub gpu_mode: String,
     pub gpu_signal: String,
     pub gpu_submit_seen: bool,
+    pub gpu_snapshot_policy: String,
+    pub gpu_flush_threshold: u32,
 
     // -- ao --
     pub ao_state: String,
@@ -247,6 +256,11 @@ impl DaemonState {
             wifi_dwell_ms: 2000,
             autohunt_enabled: true,
             skip_captured: true,
+            min_rssi: -100,
+            ap_ttl_secs: 120,
+            display_invert: true,
+            display_rotation: 180,
+            pending_display_reinit: false,
             bt_state: "Off".into(),
             bt_connected: false,
             bt_device_name: String::new(),
@@ -260,6 +274,8 @@ impl DaemonState {
             gpu_mode: "Off".into(),
             gpu_signal: "None".into(),
             gpu_submit_seen: false,
+            gpu_snapshot_policy: "flush_immediate".into(),
+            gpu_flush_threshold: 1,
             ao_state: "STOPPED".into(),
             ao_pid: 0,
             ao_crash_count: 0,
@@ -388,6 +404,11 @@ struct WsSnapshot {
     plugins: Vec<PluginInfo>,
     // -- radio --
     radio: RadioResponse,
+    // -- settings --
+    display_invert: bool,
+    display_rotation: u16,
+    min_rssi: i8,
+    ap_ttl_secs: u64,
 }
 
 /// System info snapshot for WS (uses cached values, not live reads).
@@ -467,6 +488,8 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             mode: s.gpu_mode.clone(),
             signal: s.gpu_signal.clone(),
             submit_seen: s.gpu_submit_seen,
+            snapshot_policy: s.gpu_snapshot_policy.clone(),
+            flush_threshold: s.gpu_flush_threshold,
         },
         personality: PersonalityInfo {
             mood: s.mood,
@@ -528,6 +551,10 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             pid: s.radio_pid,
             owner: "daemon".into(),
         },
+        display_invert: s.display_invert,
+        display_rotation: s.display_rotation,
+        min_rssi: s.min_rssi,
+        ap_ttl_secs: s.ap_ttl_secs,
     }
 }
 
@@ -561,6 +588,10 @@ pub struct StatusResponse {
     pub face: String,
     pub status_message: String,
     pub mode: String,
+    pub display_invert: bool,
+    pub display_rotation: u16,
+    pub min_rssi: i8,
+    pub ap_ttl_secs: u64,
 }
 
 /// Attack stats returned by GET /api/attacks.
@@ -734,6 +765,8 @@ pub struct GpuInfo {
     pub mode: String,
     pub signal: String,
     pub submit_seen: bool,
+    pub snapshot_policy: String,
+    pub flush_threshold: u32,
 }
 
 /// Bluetooth visibility toggle request.
@@ -911,6 +944,10 @@ pub struct LogsResponse {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SettingsUpdate {
     pub name: Option<String>,
+    pub display_invert: Option<bool>,
+    pub display_rotation: Option<u16>,
+    pub min_rssi: Option<i8>,
+    pub ap_ttl_secs: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -974,6 +1011,10 @@ pub struct StatusParams<'a> {
     pub face: &'a str,
     pub status_message: &'a str,
     pub mode: &'a str,
+    pub display_invert: bool,
+    pub display_rotation: u16,
+    pub min_rssi: i8,
+    pub ap_ttl_secs: u64,
 }
 
 /// Build a [`StatusResponse`] from a [`StatusParams`] snapshot.
@@ -991,6 +1032,10 @@ pub fn build_status(p: &StatusParams<'_>) -> StatusResponse {
         face: p.face.to_string(),
         status_message: p.status_message.to_string(),
         mode: p.mode.to_string(),
+        display_invert: p.display_invert,
+        display_rotation: p.display_rotation,
+        min_rssi: p.min_rssi,
+        ap_ttl_secs: p.ap_ttl_secs,
     }
 }
 
@@ -1084,6 +1129,10 @@ async fn status_handler(State(state): State<SharedState>) -> Json<StatusResponse
         face: s.face.clone(),
         status_message: s.status_message.clone(),
         mode: s.mode.clone(),
+        display_invert: s.display_invert,
+        display_rotation: s.display_rotation,
+        min_rssi: s.min_rssi,
+        ap_ttl_secs: s.ap_ttl_secs,
     })
 }
 
@@ -1200,6 +1249,7 @@ async fn wifi_update_handler(
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
     if let Some(skip) = body.skip_captured {
+        s.skip_captured = skip; // optimistic: prevents toggle from jumping back on next refresh
         s.pending_skip_captured = Some(skip);
     }
     Json(ActionResponse {
@@ -1232,6 +1282,8 @@ async fn gpu_handler(State(state): State<SharedState>) -> Json<GpuInfo> {
         mode: s.gpu_mode.clone(),
         signal: s.gpu_signal.clone(),
         submit_seen: s.gpu_submit_seen,
+        snapshot_policy: s.gpu_snapshot_policy.clone(),
+        flush_threshold: s.gpu_flush_threshold,
     })
 }
 
@@ -1427,6 +1479,7 @@ async fn rate_handler(
 ) -> Json<ActionResponse> {
     let rate = body.rate.clamp(1, 3);
     let mut s = state.lock().unwrap();
+    s.attack_rate = rate; // optimistic: prevents rate buttons from jumping back on next refresh
     s.pending_rate_change = Some(rate);
     s.pending_rage_change = Some(None); // manual rate change breaks out of RAGE
     Json(ActionResponse {
@@ -1444,6 +1497,15 @@ async fn rage_handler(
     match body.level {
         Some(level) => {
             let clamped = level.clamp(1, 7);
+            // Optimistic: update all preset-controlled fields so UI reflects them instantly
+            s.rage_enabled = true;
+            s.rage_level = clamped;
+            if let Some(p) = crate::rage::preset(clamped) {
+                s.attack_rate = p.rate;
+                s.wifi_channels = p.channels.to_vec();
+                s.wifi_dwell_ms = p.dwell_ms;
+                s.autohunt_enabled = false;
+            }
             s.pending_rage_change = Some(Some(clamped));
             Json(ActionResponse {
                 ok: true,
@@ -1451,6 +1513,7 @@ async fn rage_handler(
             })
         }
         None => {
+            s.rage_enabled = false; // optimistic
             s.pending_rage_change = Some(None);
             Json(ActionResponse {
                 ok: true,
@@ -1519,6 +1582,11 @@ async fn whitelist_add_handler(
     Json(body): Json<WhitelistAdd>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    // Optimistic: add to list immediately so UI shows it without waiting for epoch
+    s.whitelist.push(WhitelistEntry {
+        value: body.value.clone(),
+        entry_type: body.entry_type.clone(),
+    });
     s.pending_whitelist_adds.push(body);
     Json(ActionResponse {
         ok: true,
@@ -1532,6 +1600,8 @@ async fn whitelist_remove_handler(
     Json(body): Json<WhitelistRemove>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    // Optimistic: remove from list immediately so UI reflects it without waiting for epoch
+    s.whitelist.retain(|e| e.value != body.value);
     s.pending_whitelist_removes.push(body.value);
     Json(ActionResponse {
         ok: true,
@@ -1545,6 +1615,11 @@ async fn channels_handler(
     Json(body): Json<ChannelConfig>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    // Update autohunt_enabled immediately so the UI doesn't jump back on next refresh.
+    // The daemon will still pick up the full config at the start of the next epoch.
+    if let Some(ah) = body.autohunt {
+        s.autohunt_enabled = ah;
+    }
     s.pending_channel_config = Some(body);
     s.pending_rage_change = Some(None); // manual channel change breaks out of RAGE
     Json(ActionResponse {
@@ -1596,6 +1671,7 @@ async fn wpasec_post_handler(
     Json(body): Json<WpaSecUpdate>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    s.wpasec_api_key = body.api_key.clone(); // optimistic: UI reads this via GET /api/wpasec
     s.pending_wpasec_key = Some(body.api_key);
     Json(ActionResponse {
         ok: true,
@@ -1630,6 +1706,9 @@ async fn discord_post_handler(
     Json(body): Json<DiscordConfig>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    // Optimistic: UI reads these via GET /api/discord
+    s.discord_webhook_url = body.webhook_url.clone();
+    s.discord_enabled = body.enabled;
     s.pending_discord_config = Some(body);
     Json(ActionResponse {
         ok: true,
@@ -1754,6 +1833,31 @@ async fn settings_handler(
     Json(body): Json<SettingsUpdate>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
+    // Optimistic: update all fields immediately so UI doesn't show stale values
+    if let Some(ref name) = body.name {
+        if !name.is_empty() {
+            s.name = name.clone();
+        }
+    }
+    if let Some(invert) = body.display_invert {
+        if invert != s.display_invert {
+            s.display_invert = invert;
+            s.pending_display_reinit = true;
+        }
+    }
+    if let Some(rotation) = body.display_rotation {
+        let r = if rotation == 180 { 180 } else { 0 };
+        if r != s.display_rotation {
+            s.display_rotation = r;
+            s.pending_display_reinit = true;
+        }
+    }
+    if let Some(rssi) = body.min_rssi {
+        s.min_rssi = rssi.clamp(-100, -30);
+    }
+    if let Some(ttl) = body.ap_ttl_secs {
+        s.ap_ttl_secs = ttl.clamp(30, 600);
+    }
     s.pending_settings = Some(body);
     Json(ActionResponse {
         ok: true,
@@ -2113,6 +2217,10 @@ mod tests {
             face: "(^_^)",
             status_message: "Having fun!",
             mode: "AO",
+            display_invert: true,
+            display_rotation: 180,
+            min_rssi: -100,
+            ap_ttl_secs: 120,
         });
         assert_eq!(status.name, "oxi");
         assert_eq!(status.epoch, 42);
@@ -2135,6 +2243,10 @@ mod tests {
             face: "(O_O)",
             status_message: "Booting",
             mode: "AO",
+            display_invert: true,
+            display_rotation: 180,
+            min_rssi: -100,
+            ap_ttl_secs: 120,
         });
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"name\":\"oxi\""));
@@ -2438,6 +2550,7 @@ mod tests {
             "missing battery card"
         );
         assert!(DASHBOARD_HTML.contains("card-bt"), "missing bluetooth card");
+        // GPU card removed — runtime telemetry moved to backend-only
         assert!(DASHBOARD_HTML.contains("card-wifi"), "missing wifi card");
         assert!(
             DASHBOARD_HTML.contains("card-attacks"),
@@ -2508,6 +2621,7 @@ mod tests {
             DASHBOARD_HTML.contains("/api/bluetooth"),
             "missing /api/bluetooth"
         );
+        // GPU API removed from dashboard — backend only
         assert!(DASHBOARD_HTML.contains("/api/wifi"), "missing /api/wifi");
         assert!(
             DASHBOARD_HTML.contains("/api/attacks"),
@@ -2710,6 +2824,25 @@ mod tests {
         assert!(resp.connected);
         assert_eq!(resp.device_name, "Pixel 7");
         assert_eq!(resp.ip, "10.0.0.2");
+    }
+
+    #[tokio::test]
+    async fn test_get_gpu_json() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.gpu_mode = "Observe".into();
+            s.gpu_signal = "RenderSetupActive".into();
+            s.gpu_submit_seen = true;
+        }
+        let (status, body) = get(&router, "/api/gpu").await;
+        assert_eq!(status, 200);
+        let resp: GpuInfo = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.mode, "Observe");
+        assert_eq!(resp.signal, "RenderSetupActive");
+        assert!(resp.submit_seen);
+        assert_eq!(resp.snapshot_policy, "flush_immediate");
+        assert_eq!(resp.flush_threshold, 1);
     }
 
     #[tokio::test]
@@ -3004,6 +3137,7 @@ mod tests {
             "/api/battery",
             "/api/wifi",
             "/api/bluetooth",
+            "/api/gpu",
             "/api/personality",
             "/api/system",
             "/api/attacks",
@@ -3179,5 +3313,539 @@ mod tests {
             Some(None),
             "channel change should break out of RAGE"
         );
+    }
+
+    // ---- Autohunt toggle tests ----
+
+    #[tokio::test]
+    async fn test_autohunt_toggle_on_queues_config() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"autohunt":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"ok\":true"));
+        let s = state.lock().unwrap();
+        let cfg = s.pending_channel_config.as_ref().expect("config should be queued");
+        assert_eq!(cfg.autohunt, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_toggle_off_queues_config_with_channels() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"channels":[1,6,11],"dwell_ms":2000,"autohunt":false}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        let cfg = s.pending_channel_config.as_ref().expect("config should be queued");
+        assert_eq!(cfg.autohunt, Some(false));
+        assert_eq!(cfg.channels, Some(vec![1, 6, 11]));
+        assert_eq!(cfg.dwell_ms, Some(2000));
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_toggle_on_breaks_rage() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.rage_enabled = true;
+            s.rage_level = 3;
+        }
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"autohunt":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(
+            s.pending_rage_change,
+            Some(None),
+            "autohunt toggle should break out of RAGE"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_only_no_channels_no_dwell() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"autohunt":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        let cfg = s.pending_channel_config.as_ref().unwrap();
+        assert_eq!(cfg.channels, None, "channels should be None when only toggling autohunt");
+        assert_eq!(cfg.dwell_ms, None, "dwell should be None when only toggling autohunt");
+        assert_eq!(cfg.autohunt, Some(true));
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_missing_defaults_to_none() {
+        let (router, state) = test_router();
+        // POST without autohunt field at all
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"channels":[6],"dwell_ms":1000}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        let cfg = s.pending_channel_config.as_ref().unwrap();
+        assert_eq!(cfg.autohunt, None, "missing autohunt field should deserialize as None");
+    }
+
+    #[tokio::test]
+    async fn test_empty_channels_with_autohunt_off() {
+        let (router, _state) = test_router();
+        // Autohunt off but empty channel list — should still 200 (daemon handles validation)
+        let (status, body) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"channels":[],"autohunt":false}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert!(body.contains("\"ok\":true"));
+    }
+
+    #[tokio::test]
+    async fn test_channels_invalid_json_returns_error() {
+        let (router, _state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"not_valid"#,
+        )
+        .await;
+        assert_ne!(status, 200, "malformed JSON should not return 200");
+    }
+
+    #[tokio::test]
+    async fn test_channels_empty_body_returns_error() {
+        let (router, _state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#""#,
+        )
+        .await;
+        assert_ne!(status, 200, "empty body should not return 200");
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_on_immediately_updates_shared_state() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.autohunt_enabled = false; // start with autohunt off
+        }
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"autohunt":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(
+            s.autohunt_enabled,
+            "autohunt_enabled should be updated immediately so UI doesn't jump back"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_autohunt_off_immediately_updates_shared_state() {
+        let (router, state) = test_router();
+        // autohunt_enabled defaults to true in test_state
+        let (status, _) = post_json(
+            &router,
+            "/api/channels",
+            r#"{"channels":[1,6,11],"autohunt":false}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(
+            !s.autohunt_enabled,
+            "autohunt_enabled should be updated immediately so UI doesn't jump back"
+        );
+    }
+
+    // ---- Optimistic state update tests for all toggles/sliders ----
+
+    #[tokio::test]
+    async fn test_skip_captured_toggle_immediately_updates_state() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.skip_captured = false;
+        }
+        let (status, _) = post_json(
+            &router,
+            "/api/wifi",
+            r#"{"skip_captured":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(s.skip_captured, "skip_captured should update immediately so toggle doesn't jump back");
+    }
+
+    #[tokio::test]
+    async fn test_rate_change_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(&router, "/api/rate", r#"{"rate":3}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.attack_rate, 3, "attack_rate should update immediately so rate buttons don't jump back");
+    }
+
+    #[tokio::test]
+    async fn test_rage_enable_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(&router, "/api/rage", r#"{"level":5}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(s.rage_enabled, "rage_enabled should update immediately so slider doesn't jump back");
+        assert_eq!(s.rage_level, 5, "rage_level should update immediately");
+    }
+
+    #[tokio::test]
+    async fn test_rage_disable_immediately_updates_state() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.rage_enabled = true;
+            s.rage_level = 5;
+        }
+        let (status, _) = post_json(&router, "/api/rage", r#"{"level":null}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(!s.rage_enabled, "rage_enabled should update immediately on disable");
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_add_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/whitelist/add",
+            r#"{"value":"AA:BB:CC:DD:EE:FF","entry_type":"MAC"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(
+            s.whitelist.iter().any(|e| e.value == "AA:BB:CC:DD:EE:FF"),
+            "whitelist should include new entry immediately so UI doesn't flash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_remove_immediately_updates_state() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.whitelist.push(WhitelistEntry {
+                value: "AA:BB:CC:DD:EE:FF".into(),
+                entry_type: "MAC".into(),
+            });
+        }
+        let (status, _) = post_json(
+            &router,
+            "/api/whitelist/remove",
+            r#"{"value":"AA:BB:CC:DD:EE:FF"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(
+            !s.whitelist.iter().any(|e| e.value == "AA:BB:CC:DD:EE:FF"),
+            "whitelist should remove entry immediately so UI doesn't flash"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wpasec_post_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/wpasec",
+            r#"{"api_key":"test_key_12345"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.wpasec_api_key, "test_key_12345", "wpasec key should update immediately");
+    }
+
+    #[tokio::test]
+    async fn test_discord_post_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/discord",
+            r#"{"webhook_url":"https://discord.com/api/webhooks/test","enabled":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.discord_webhook_url, "https://discord.com/api/webhooks/test");
+        assert!(s.discord_enabled, "discord_enabled should update immediately");
+    }
+
+    #[tokio::test]
+    async fn test_settings_name_immediately_updates_state() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"new-oxi"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.name, "new-oxi", "name should update immediately so UI doesn't show stale name");
+    }
+
+    #[tokio::test]
+    async fn test_rate_clamp_immediately_updates_state() {
+        let (router, state) = test_router();
+        // Rate 99 should be clamped to 3
+        let (status, _) = post_json(&router, "/api/rate", r#"{"rate":99}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.attack_rate, 3, "clamped rate should be reflected immediately");
+    }
+
+    #[tokio::test]
+    async fn test_rage_clamp_immediately_updates_state() {
+        let (router, state) = test_router();
+        // Level 99 should be clamped to 7
+        let (status, _) = post_json(&router, "/api/rage", r#"{"level":99}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.rage_level, 7, "clamped rage level should be reflected immediately");
+    }
+
+    #[tokio::test]
+    async fn test_rage_preset_immediately_updates_rate_channels_dwell() {
+        let (router, state) = test_router();
+        // Level 5 = RAGE: rate 2, dwell 1000ms, all 13 channels
+        let (status, _) = post_json(&router, "/api/rage", r#"{"level":5}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.attack_rate, 2, "rage preset should set rate immediately");
+        assert_eq!(s.wifi_dwell_ms, 1000, "rage preset should set dwell immediately");
+        assert_eq!(s.wifi_channels.len(), 13, "rage preset should set all 13 channels immediately");
+        assert!(!s.autohunt_enabled, "rage preset should disable autohunt immediately");
+    }
+
+    #[tokio::test]
+    async fn test_rage_level6_immediately_updates_rate_to_3() {
+        let (router, state) = test_router();
+        // Level 6 = FURY: rate 3
+        let (status, _) = post_json(&router, "/api/rage", r#"{"level":6}"#).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.attack_rate, 3, "FURY preset should set rate 3 immediately");
+        assert_eq!(s.wifi_dwell_ms, 1000);
+    }
+
+    // === Settings panel tests (display invert, rotation, min_rssi, ap_ttl) ===
+
+    #[tokio::test]
+    async fn test_settings_display_invert_optimistic_update() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","display_invert":false}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(!s.display_invert, "display_invert should update immediately");
+        assert!(s.pending_display_reinit, "reinit should be flagged");
+    }
+
+    #[tokio::test]
+    async fn test_settings_display_invert_no_reinit_when_same() {
+        let (router, state) = test_router();
+        // Default is true, sending true again should NOT flag reinit
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","display_invert":true}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(s.display_invert);
+        assert!(!s.pending_display_reinit, "reinit should NOT be flagged when value unchanged");
+    }
+
+    #[tokio::test]
+    async fn test_settings_display_rotation_optimistic_update() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","display_rotation":0}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.display_rotation, 0, "rotation should update immediately");
+        assert!(s.pending_display_reinit, "reinit should be flagged");
+    }
+
+    #[tokio::test]
+    async fn test_settings_display_rotation_clamps_to_valid() {
+        let (router, state) = test_router();
+        // Anything non-180 clamps to 0
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","display_rotation":90}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.display_rotation, 0, "rotation 90 should clamp to 0");
+    }
+
+    #[tokio::test]
+    async fn test_settings_min_rssi_optimistic_update() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","min_rssi":-50}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.min_rssi, -50, "min_rssi should update immediately");
+    }
+
+    #[tokio::test]
+    async fn test_settings_min_rssi_clamps_low() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","min_rssi":-120}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.min_rssi, -100, "min_rssi below -100 should clamp to -100");
+    }
+
+    #[tokio::test]
+    async fn test_settings_min_rssi_clamps_high() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","min_rssi":-10}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.min_rssi, -30, "min_rssi above -30 should clamp to -30");
+    }
+
+    #[tokio::test]
+    async fn test_settings_ap_ttl_optimistic_update() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","ap_ttl_secs":300}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.ap_ttl_secs, 300, "ap_ttl should update immediately");
+    }
+
+    #[tokio::test]
+    async fn test_settings_ap_ttl_clamps_low() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","ap_ttl_secs":5}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.ap_ttl_secs, 30, "ap_ttl below 30 should clamp to 30");
+    }
+
+    #[tokio::test]
+    async fn test_settings_ap_ttl_clamps_high() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","ap_ttl_secs":9999}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert_eq!(s.ap_ttl_secs, 600, "ap_ttl above 600 should clamp to 600");
+    }
+
+    #[tokio::test]
+    async fn test_settings_all_four_fields_at_once() {
+        let (router, state) = test_router();
+        let (status, _) = post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","display_invert":false,"display_rotation":0,"min_rssi":-60,"ap_ttl_secs":240}"#,
+        ).await;
+        assert_eq!(status, 200);
+        let s = state.lock().unwrap();
+        assert!(!s.display_invert);
+        assert_eq!(s.display_rotation, 0);
+        assert_eq!(s.min_rssi, -60);
+        assert_eq!(s.ap_ttl_secs, 240);
+        assert!(s.pending_display_reinit);
+    }
+
+    #[tokio::test]
+    async fn test_settings_partial_update_preserves_others() {
+        let (router, state) = test_router();
+        // First set min_rssi
+        post_json(&router, "/api/settings", r#"{"name":"oxi","min_rssi":-70}"#).await;
+        // Then set ap_ttl only — min_rssi should remain
+        post_json(&router, "/api/settings", r#"{"name":"oxi","ap_ttl_secs":200}"#).await;
+        let s = state.lock().unwrap();
+        assert_eq!(s.min_rssi, -70, "previous min_rssi should be preserved");
+        assert_eq!(s.ap_ttl_secs, 200);
+    }
+
+    #[tokio::test]
+    async fn test_status_includes_settings_fields() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.min_rssi = -55;
+            s.ap_ttl_secs = 180;
+            s.display_invert = false;
+            s.display_rotation = 0;
+        }
+        let (status, body) = get(&router, "/api/status").await;
+        assert_eq!(status, 200);
+        let resp: StatusResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.min_rssi, -55);
+        assert_eq!(resp.ap_ttl_secs, 180);
+        assert!(!resp.display_invert);
+        assert_eq!(resp.display_rotation, 0);
     }
 }

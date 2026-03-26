@@ -51,7 +51,14 @@ impl GpuRuntimeIngestor {
 
 fn resolve_summary_path(configured_source: &str) -> io::Result<Option<PathBuf>> {
     let source = if configured_source.trim().is_empty() {
-        std::env::var(DEFAULT_ENV_SOURCE).unwrap_or_default()
+        let env_source = std::env::var(DEFAULT_ENV_SOURCE).unwrap_or_default();
+        if env_source.trim().is_empty() {
+            discover_default_source()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default()
+        } else {
+            env_source
+        }
     } else {
         configured_source.to_string()
     };
@@ -70,6 +77,26 @@ fn resolve_summary_path(configured_source: &str) -> io::Result<Option<PathBuf>> 
     }
 
     Ok(None)
+}
+
+fn discover_default_source() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+
+    for base in cwd.ancestors() {
+        let direct = base.join("gpu_firmware_analysis").join("runtime_traces");
+        if direct.is_dir() {
+            return Some(direct);
+        }
+
+        if let Some(parent) = base.parent() {
+            let sibling = parent.join("gpu_firmware_analysis").join("runtime_traces");
+            if sibling.is_dir() {
+                return Some(sibling);
+            }
+        }
+    }
+
+    None
 }
 
 fn newest_summary_under_dir(root: &Path) -> io::Result<Option<PathBuf>> {
@@ -263,5 +290,24 @@ mod tests {
 
         let path = newest_summary_under_dir(dir.path()).unwrap().unwrap();
         assert_eq!(path, newer);
+    }
+
+    #[test]
+    fn discovers_runtime_traces_as_sibling_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        let rust_repo = workspace.join("oxigotchi").join("rust");
+        let runtime_traces = workspace
+            .join("gpu_firmware_analysis")
+            .join("runtime_traces");
+        fs::create_dir_all(&rust_repo).unwrap();
+        fs::create_dir_all(&runtime_traces).unwrap();
+
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&rust_repo).unwrap();
+        let discovered = discover_default_source();
+        std::env::set_current_dir(original).unwrap();
+
+        assert_eq!(discovered, Some(runtime_traces));
     }
 }

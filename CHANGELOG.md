@@ -6,6 +6,12 @@ The Rust rewrite has a name: **Rusty Oxigotchi** (codename: **Rusty**). This is 
 
 See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint plan and architecture. Initial scaffold lives in `rust/`.
 
+### Added
+- **RAGE Slider** — 7-level aggression preset system in the web dashboard. A single slider maps to stress-test-validated combinations of attack rate, dwell time, and channel config. Levels: Chill, Lurk, Prowl, Hunt, RAGE, FURY, YOLO. Each step changes exactly one variable from the previous level so users can isolate what causes instability in their environment. YOLO (level 7) is the only known crash combo — disclaimer shown. Individual controls still work; touching any one breaks out to Custom mode. Persisted in state.json, restored on boot.
+- **RAGE:N e-ink indicator** — bottom bar mode indicator now shows the active RAGE level (e.g., `RAGE:4`) when the slider is active, `RAGE` in Custom mode, `SAFE` in safe mode.
+- **`POST /api/rage` endpoint** — accepts `{"level": N}` to activate a preset or `{"level": null}` to deactivate. Existing rate/channel endpoints automatically break out of RAGE mode.
+- **`rage_level` in `GET /api/wifi`** — new field for multi-tab sync and rage slider state.
+
 ## [2.2.0] - 2026-03-21
 
 ### Added
@@ -27,7 +33,7 @@ See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint p
 - **BT-Tether errors (M3)**: Plugin disabled in config.toml. Standalone daemon replaces it.
 - **resize-rootfs failure (M2)**: Sentinel file prevents every-boot failure.
 - **Service file permissions (M8)**: All service files set to `chmod 644` in bake_v2.sh.
-- **AO default rate**: Set to 1 (rate 2 crashes BCM43436B0 in ~68 seconds under load).
+- **AO default rate**: Set to 1 (conservative default; all rates now stable with v6 firmware patch).
 - **Zombie process**: Fixed in pwnagotchi agent reap logic.
 - **rpi-usb-gadget-ics disabled**: Was causing NM-dispatcher spam in logs.
 - **Mode indicator position**: Fixed in PWN mode UI.
@@ -59,7 +65,7 @@ See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint p
 - **Bull faces in PWN mode boot**: splash service now checks for AO overlay before rendering bull face — PWN mode gets clean Korean faces from start
 - **[unknown] in PWND counter**: removed last-captured AP hostname from display in AO mode (AO indicator shows capture count instead)
 - **Misleading attack messages**: `associate()` and `deauth()` now early-return in AO mode — no more "Associating to AP_NAME" when AO handles attacks
-- **Rate 2 recommendation**: dashboard description fixed to warn that rate 1 is maximum safe for BCM43436B0 (rate 2 causes firmware crash at 0x204CA)
+- **Rate descriptions**: dashboard updated — rate 2 no longer marked as risky (v6 firmware patch resolved 0x204CA crash)
 - **Blind epoch hack**: `mon_max_blind_epochs` can stay at default 5 instead of 9999 — synthetic AP heartbeat keeps pwnagotchi alive in AO mode
 - **Agent.py idempotency**: patch script now checks for all sub-patches (`ao_active` + `AO handles attacks`) before skipping
 

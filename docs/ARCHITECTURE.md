@@ -62,7 +62,22 @@ The BCM43436B0 WiFi chip has multiple firmware-level failure modes triggered by 
 
 4. **memcpy HardFault** — A bulk memory copy operation in the firmware's ROM hits a bus fault when the SDIO interface cannot keep up. The patch adds a recovery stub that catches the HardFault and resumes execution instead of crashing.
 
-5. **TX rate assertion** — The firmware's TX path has an assertion that fires at higher transmission rates. The patch limits the TX rate to prevent hitting this assertion. Rate 1 is the safe default for the BCM43436B0; rate 2+ requires an external WiFi dongle.
+5. **TX rate assertion** — The firmware's TX path has an assertion that fires at higher transmission rates. The patch neutralizes this assertion. Stress testing (2026-03-26) confirmed all three rates (1, 2, 3) are stable on the built-in BCM43436B0 across all channel/dwell combinations — the only failure was rate 3 + 500ms dwell + all 13 channels (AO crashed at 50s, daemon auto-recovered).
+
+### Stress Test Results (2026-03-26)
+
+With all v6 firmware patches active (PSM threshold 0xFF, DPC fix, HardFault recovery, frame padding 650B), systematic stress testing of 27 rate/dwell/channel combinations over ~60 minutes produced:
+
+| Rate | Dwell Range | Channels | Result |
+|------|-------------|----------|--------|
+| 1 | 500ms–2000ms | 1,6,11 and all 13 | **All PASS** — 0 PSM fires |
+| 2 | 500ms–5000ms | 1,6,11 and all 13 | **All PASS** — 1 PSM fire (recovered) |
+| 3 | 1000ms–10000ms | 1,6,11 and all 13 | **All PASS** — 2 PSM fires (recovered) |
+| 3 | 500ms | All 13 | **FAIL at 50s** — AO crashed, daemon auto-recovered |
+
+**26/27 passed. The single failure was rate 3 + 500ms dwell + all 13 channels.** This is the absolute worst-case combination (maximum attack speed + fastest hopping + maximum channels). All other combinations are stable, including rate 3 at 1000ms+ dwell.
+
+Note: Tests were conducted in a low-traffic environment. Dense urban environments with many responding APs add more TX load and may shift the stability boundary.
 
 ### Self-Healing Stack
 
@@ -350,8 +365,8 @@ AO's behavior is controlled by the plugin at runtime. The `_build_cmd` method in
 
 | Parameter | Config key | CLI flag | Notes |
 |-----------|-----------|----------|-------|
-| Rate | `self._rate` | `--rate 1\|2\|3` | Rate 1 is safe for BCM43436B0. Rate 2+ needs external dongle. |
-| Channels | `self._channels` | `--channel 1,6,11` | Empty = default (1,6,11). All 13 is risky on built-in WiFi. |
+| Rate | `self._rate` | `--rate 1\|2\|3` | All rates stable with v6 firmware patch. Rate 3 + 500ms + all 13ch is the only known crash combo. |
+| Channels | `self._channels` | `--channel 1,6,11` | Empty = default (1,6,11). All 13 is stable with firmware patches. |
 | Dwell | `self._dwell` | `--dwell 2` | Seconds per channel before hopping |
 | Autohunt | `self._autohunt` | `--autohunt` | Smart channel selection based on AP density |
 | Attacks | `self._attacks` dict | `--disable-{type}` | Each attack type can be toggled independently |

@@ -213,6 +213,40 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="rage-level" id="rage-label">&mdash;</div>
 </div>
 <div class="rage-disclaimer" id="rage-yolo">&#9888; YOLO: Only combo that crashed in stress tests. AO may die &mdash; daemon auto-recovers.</div>
+
+<div style="margin-top:12px;padding-top:10px;border-top:1px solid #0f3460">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Attack Rate</div>
+<div class="sub">All rates stable with v6 firmware patch. Rate 3 + 500ms + all channels is the only crash combo.</div>
+<div class="rate-btns">
+<button class="rate-btn active" id="rate-1" onclick="setRate(1)">1<br><span style="font-size:10px;font-weight:normal;color:#888">Quiet</span></button>
+<button class="rate-btn" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span></button>
+<button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Aggressive</span></button>
+</div>
+</div>
+
+<div style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Channels</div>
+<input type="hidden" id="ch-list" value="1,6,11">
+<div id="ch-btns" style="display:flex;flex-wrap:wrap;gap:4px"></div>
+</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Dwell Time: <span id="ch-dwell-val">2000</span>ms</div>
+<input type="range" id="ch-dwell" class="ch-slider" min="500" max="10000" step="100" value="2000" oninput="document.getElementById('ch-dwell-val').textContent=this.value">
+</div>
+<div style="color:#27ae60;font-size:11px;padding:6px 8px;background:#1a472a33;border-radius:6px;margin-bottom:8px">All channel/dwell combos stable with v6 firmware patch. Only known crash: rate 3 + 500ms + all 13ch.</div>
+<button class="wl-btn wl-btn-add" onclick="applyChannels()">Apply custom mode</button>
+</div>
+
+<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div class="toggle-info"><div class="toggle-label">Autohunt</div><div class="toggle-desc">Let AO automatically pick channels to hunt on</div></div>
+<label class="switch"><input type="checkbox" id="autohunt-toggle" checked onchange="toggleAutohunt(this.checked)"><span class="slider"></span></label>
+</div>
+
+<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div class="toggle-info"><div class="toggle-label">Smart Skip</div><div class="toggle-desc">Skip APs that already have captured handshakes</div></div>
+<label class="switch"><input type="checkbox" id="skip-captured-toggle" checked onchange="toggleSkipCaptured(this.checked)"><span class="slider"></span></label>
+</div>
 </div>
 
 <!-- 8. Attack controls -->
@@ -242,40 +276,6 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="toggle-row">
 <div class="toggle-info"><div class="toggle-label">Rogue M2</div><div class="toggle-desc">Fake AP trick for handshakes</div></div>
 <label class="switch"><input type="checkbox" id="atk-rogue_m2" checked onchange="toggleAttack('rogue_m2',this.checked)"><span class="slider"></span></label>
-</div>
-
-<div style="margin-top:12px;padding-top:10px;border-top:1px solid #0f3460">
-<div style="font-size:12px;color:#888;margin-bottom:4px">Attack Rate</div>
-<div class="sub">All rates stable with v6 firmware patch. Rate 3 + 500ms + all channels is the only crash combo.</div>
-<div class="rate-btns">
-<button class="rate-btn active" id="rate-1" onclick="setRate(1)">1<br><span style="font-size:10px;font-weight:normal;color:#888">Quiet</span></button>
-<button class="rate-btn" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span></button>
-<button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Aggressive</span></button>
-</div>
-</div>
-
-<div style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
-<div style="margin-bottom:8px">
-<div style="font-size:12px;color:#888;margin-bottom:4px">Channels</div>
-<input type="hidden" id="ch-list" value="1,6,11">
-<div id="ch-btns" style="display:flex;flex-wrap:wrap;gap:4px"></div>
-</div>
-<div style="margin-bottom:8px">
-<div style="font-size:12px;color:#888;margin-bottom:4px">Dwell Time: <span id="ch-dwell-val">2000</span>ms</div>
-<input type="range" id="ch-dwell" class="ch-slider" min="500" max="10000" step="100" value="2000" oninput="document.getElementById('ch-dwell-val').textContent=this.value">
-</div>
-<div style="color:#27ae60;font-size:11px;padding:6px 8px;background:#1a472a33;border-radius:6px;margin-bottom:8px">All channel/dwell combos stable with v6 firmware patch. Only known crash: rate 3 + 500ms + all 13ch.</div>
-<button class="wl-btn wl-btn-add" onclick="applyChannels()">Apply</button>
-</div>
-
-<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
-<div class="toggle-info"><div class="toggle-label">Autohunt</div><div class="toggle-desc">Let AO automatically pick channels to hunt on</div></div>
-<label class="switch"><input type="checkbox" id="autohunt-toggle" checked onchange="toggleAutohunt(this.checked)"><span class="slider"></span></label>
-</div>
-
-<div class="toggle-row" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
-<div class="toggle-info"><div class="toggle-label">Smart Skip</div><div class="toggle-desc">Skip APs that already have captured handshakes</div></div>
-<label class="switch"><input type="checkbox" id="skip-captured-toggle" checked onchange="toggleSkipCaptured(this.checked)"><span class="slider"></span></label>
 </div>
 </div>
 
@@ -373,19 +373,6 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <button class="action-btn btn-restart" id="bt-scan-btn" onclick="btScan()">Scan for Devices</button>
 </div>
 <div id="bt-scan-results"></div>
-</div>
-</div>
-
-<!-- 14. GPU Runtime -->
-<div class="card" id="card-gpu">
-<div class="card-title">GPU Runtime</div>
-<div class="sub">Observed VC4/V3D runtime state from the latest ingested trace summary.</div>
-<div class="status-grid">
-<div class="label">Mode</div><div class="value" id="gpu-mode">-</div>
-<div class="label">Signal</div><div class="value" id="gpu-signal">-</div>
-<div class="label">Submit</div><div class="value" id="gpu-submit">-</div>
-<div class="label">Policy</div><div class="value" id="gpu-policy">-</div>
-<div class="label">Threshold</div><div class="value" id="gpu-threshold">-</div>
 </div>
 </div>
 
@@ -489,8 +476,35 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div style="font-size:12px;color:#888;margin-bottom:4px">Device Name</div>
 <div style="display:flex;gap:6px">
 <input type="text" id="setting-name" class="wl-input" placeholder="oxigotchi" style="flex:2">
-<button class="wl-btn wl-btn-add" onclick="saveSettings()">Save</button>
 </div>
+</div>
+
+<div style="font-size:13px;color:#00d4aa;font-weight:bold;margin:12px 0 6px">Display</div>
+<div class="toggle-row">
+<div class="toggle-info"><div class="toggle-label">Invert Display</div><div class="toggle-desc">White on black (recommended for e-ink)</div></div>
+<label class="switch"><input type="checkbox" id="setting-invert" checked><span class="slider"></span></label>
+</div>
+<div class="toggle-row">
+<div class="toggle-info"><div class="toggle-label">Rotation</div></div>
+<select id="setting-rotation" style="background:#1a1a2e;border:1px solid #0f3460;border-radius:6px;padding:6px 10px;color:#e0e0e0;font-family:inherit;font-size:13px">
+<option value="0">0&deg;</option><option value="180" selected>180&deg;</option>
+</select>
+</div>
+
+<div style="font-size:13px;color:#00d4aa;font-weight:bold;margin:12px 0 6px">WiFi Tuning</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Min RSSI: <span id="setting-rssi-val">-100</span> dBm</div>
+<input type="range" id="setting-rssi" class="ch-slider" min="-100" max="-30" step="1" value="-100" oninput="document.getElementById('setting-rssi-val').textContent=this.value">
+<div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>-100 (all)</span><span>-30 (strong only)</span></div>
+</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">AP TTL: <span id="setting-ttl-val">120</span>s</div>
+<input type="range" id="setting-ttl" class="ch-slider" min="30" max="600" step="10" value="120" oninput="document.getElementById('setting-ttl-val').textContent=this.value">
+<div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>30s (forget fast)</span><span>600s (remember long)</span></div>
+</div>
+
+<div style="margin-top:12px">
+<button class="wl-btn wl-btn-add" onclick="saveSettings()" style="width:100%">Save Settings</button>
 </div>
 </div>
 
@@ -538,6 +552,7 @@ function refreshStatus() {
         // Settings name field (only if not focused)
         var nameInput = document.getElementById('setting-name');
         if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
+        syncSettingsFromData(d);
     });
 }
 
@@ -575,21 +590,6 @@ function refreshBluetooth() {
     });
 }
 
-function refreshGpu() {
-    api('GET', '/api/gpu').then(function(d) {
-        if (!d) return;
-        document.getElementById('gpu-mode').textContent = d.mode || '-';
-        document.getElementById('gpu-signal').textContent = d.signal || '-';
-        document.getElementById('gpu-signal').style.color =
-            d.signal === 'GpuSubmissionObserved' ? '#00d4aa' :
-            (d.signal === 'RenderSetupActive' ? '#f0c040' :
-            (d.signal === 'DisplayInspectOnly' ? '#888' : '#e0e0e0'));
-        document.getElementById('gpu-submit').textContent = d.submit_seen ? 'Seen' : 'No';
-        document.getElementById('gpu-submit').style.color = d.submit_seen ? '#00d4aa' : '#888';
-        document.getElementById('gpu-policy').textContent = d.snapshot_policy || '-';
-        document.getElementById('gpu-threshold').textContent = d.flush_threshold != null ? d.flush_threshold : '-';
-    });
-}
 
 var _chConfigCooldown = 0;
 function refreshWifi() {
@@ -1007,6 +1007,15 @@ function toggleAttack(name, val) {
     });
 }
 var _rageNames = {1:'Chill',2:'Lurk',3:'Prowl',4:'Hunt',5:'RAGE',6:'FURY',7:'YOLO'};
+var _ragePresets = {
+    1:{rate:1,dwell:5000,ch:[1,6,11]},
+    2:{rate:1,dwell:2000,ch:[1,6,11]},
+    3:{rate:1,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
+    4:{rate:2,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
+    5:{rate:2,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
+    6:{rate:3,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
+    7:{rate:3,dwell:500,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]}
+};
 
 function updateRageLabel(level, enabled) {
     var label = document.getElementById('rage-label');
@@ -1022,6 +1031,19 @@ function updateRageLabel(level, enabled) {
         label.className = 'rage-level' + (level === 7 ? ' yolo' : '');
         desc.textContent = _rageNames[level] + ' preset active';
         yolo.style.display = level === 7 ? 'block' : 'none';
+        // Sync rate buttons, channels, and dwell to preset values instantly
+        var p = _ragePresets[level];
+        if (p) {
+            [1,2,3].forEach(function(n) {
+                document.getElementById('rate-'+n).classList.toggle('active', n === p.rate);
+            });
+            var ahToggle = document.getElementById('autohunt-toggle');
+            if (ahToggle) ahToggle.checked = false;
+            document.getElementById('ch-list').value = p.ch.join(',');
+            renderChannelButtons(p.ch);
+            var dwInput = document.getElementById('ch-dwell');
+            if (dwInput) { dwInput.value = p.dwell; document.getElementById('ch-dwell-val').textContent = p.dwell; }
+        }
     } else {
         toggle.checked = false;
         slider.disabled = true;
@@ -1185,7 +1207,12 @@ function updatePlugin(name, container) {
 function saveSettings() {
     var name = document.getElementById('setting-name').value.trim();
     if (!name) { toast('Enter a name'); return; }
-    api('POST', '/api/settings', {name: name}).then(function(r) {
+    var body = {name: name};
+    body.display_invert = document.getElementById('setting-invert').checked;
+    body.display_rotation = parseInt(document.getElementById('setting-rotation').value) || 0;
+    body.min_rssi = parseInt(document.getElementById('setting-rssi').value) || -100;
+    body.ap_ttl_secs = parseInt(document.getElementById('setting-ttl').value) || 120;
+    api('POST', '/api/settings', body).then(function(r) {
         if (r && r.ok) toast('Settings saved');
     });
 }
@@ -1206,6 +1233,27 @@ function updateStatusFromWs(d) {
     document.getElementById('mode-safe').classList.toggle('active', d.mode === 'SAFE' || d.mode === 'PWN');
     var nameInput = document.getElementById('setting-name');
     if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
+    // Settings controls only sync on initial page load (refreshStatus),
+    // not on WS updates — prevents dropdown/slider snapping back before Save.
+}
+
+function syncSettingsFromData(d) {
+    if (d.display_invert != null) {
+        var inv = document.getElementById('setting-invert');
+        if (inv && !inv.matches(':focus')) inv.checked = d.display_invert;
+    }
+    if (d.display_rotation != null) {
+        var rot = document.getElementById('setting-rotation');
+        if (rot && !rot.matches(':focus')) rot.value = String(d.display_rotation);
+    }
+    if (d.min_rssi != null) {
+        var rs = document.getElementById('setting-rssi');
+        if (rs && !rs.matches(':active')) { rs.value = d.min_rssi; document.getElementById('setting-rssi-val').textContent = d.min_rssi; }
+    }
+    if (d.ap_ttl_secs != null) {
+        var ttl = document.getElementById('setting-ttl');
+        if (ttl && !ttl.matches(':active')) { ttl.value = d.ap_ttl_secs; document.getElementById('setting-ttl-val').textContent = d.ap_ttl_secs; }
+    }
 }
 
 function updateBatteryFromWs(b) {
@@ -1234,19 +1282,6 @@ function updateBluetoothFromWs(d) {
     document.getElementById('bt-feature-mode').textContent = d.feature_mode || '-';
     document.getElementById('bt-nearby').textContent = d.nearby_devices != null ? d.nearby_devices : '-';
     document.getElementById('bt-contention').textContent = d.contention_score != null ? d.contention_score : '-';
-}
-
-function updateGpuFromWs(d) {
-    document.getElementById('gpu-mode').textContent = d.mode || '-';
-    document.getElementById('gpu-signal').textContent = d.signal || '-';
-    document.getElementById('gpu-signal').style.color =
-        d.signal === 'GpuSubmissionObserved' ? '#00d4aa' :
-        (d.signal === 'RenderSetupActive' ? '#f0c040' :
-        (d.signal === 'DisplayInspectOnly' ? '#888' : '#e0e0e0'));
-    document.getElementById('gpu-submit').textContent = d.submit_seen ? 'Seen' : 'No';
-    document.getElementById('gpu-submit').style.color = d.submit_seen ? '#00d4aa' : '#888';
-    document.getElementById('gpu-policy').textContent = d.snapshot_policy || '-';
-    document.getElementById('gpu-threshold').textContent = d.flush_threshold != null ? d.flush_threshold : '-';
 }
 
 function updateWifiFromWs(d) {
@@ -1420,7 +1455,6 @@ function updateAllCards(state) {
     if (state.epoch !== undefined) updateStatusFromWs(state);
     if (state.battery) updateBatteryFromWs(state.battery);
     if (state.bluetooth) updateBluetoothFromWs(state.bluetooth);
-    if (state.gpu) updateGpuFromWs(state.gpu);
     if (state.wifi) updateWifiFromWs(state.wifi);
     if (state.attacks) updateAttacksFromWs(state.attacks);
     if (state.captures) updateCapturesFromWs(state.captures);
@@ -1438,7 +1472,6 @@ function startPolling() {
     _pollTimers.push(setInterval(refreshStatus, 5000));
     _pollTimers.push(setInterval(refreshBattery, 15000));
     _pollTimers.push(setInterval(refreshBluetooth, 15000));
-    _pollTimers.push(setInterval(refreshGpu, 15000));
     _pollTimers.push(setInterval(refreshWifi, 5000));
     _pollTimers.push(setInterval(refreshAttacks, 10000));
     _pollTimers.push(setInterval(refreshCaptures, 30000));
@@ -1495,8 +1528,7 @@ renderChannelButtons([1, 6, 11]); // default until refreshWifi populates
 refreshStatus();
 setTimeout(refreshBattery, 500);
 setTimeout(refreshBluetooth, 1000);
-setTimeout(refreshGpu, 1500);
-setTimeout(refreshWifi, 2000);
+setTimeout(refreshWifi, 1500);
 setTimeout(refreshAttacks, 2500);
 setTimeout(refreshCaptures, 3000);
 setTimeout(refreshRecovery, 3500);

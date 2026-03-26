@@ -84,10 +84,10 @@ BOTTOM BAR:
 ```
 
 ```
-RUST (current — all indicators implemented):
+RUST (current — all indicators via Lua plugins):
 ┌──────────────────────────────────────────────────────────┐
-│ AO: 0/0 | 0m | CH:AH                  UP: 00:01:31      │  Y=0  top bar (Small 9pt)
-│ (0,0)                                  (178,0)           │
+│ AO: 0/0 | 0m | CH:6       APs:15       UP: 00:01:31     │  Y=0  top bar (Small 9pt)
+│ (0,0)                      (130,0)      (178,0)          │  ao_status truncated 18ch
 ├──────────────────────────────────────────────────────────┤  Y=14 line1
 │                     Bull status msg                      │  (125,20) Medium 10pt
 │  ┌────────────┐     word-wrapped                         │  word wrap at 20 chars
@@ -98,8 +98,8 @@ RUST (current — all indicators implemented):
 │                                                          │
 │  USB:10.0.0.2 :8080  (or BT:IP, rotates)                │  (0,95) Small 9pt
 ├──────────────────────────────────────────────────────────┤  Y=108 line2
-│ CRASH:0  WWW:C  BT:C  CHG=100%   APs:0           RAGE   │  Y=112 (Small 9pt)
-│ (0)      (48)   (86)  (118)      (178)            (222)  │  evenly spaced
+│ CRASH:0  WWW:C  BT:C  CHG=100%           RAGE:4         │  Y=112 (Small 9pt)
+│ (0)      (52)   (96)  (140)              (214)           │  evenly spaced
 └──────────────────────────────────────────────────────────┘
 
 BOOT SCREEN (shown for ~5s on startup):
@@ -121,23 +121,22 @@ BOOT SCREEN (shown for ~5s on startup):
 
 | # | Element | Position | Font | Content | Source |
 |---|---------|----------|------|---------|--------|
-| 1 | AO status | (0, 0) | Small 9pt | `"AO: N/N \| Nm \| CH:AH"` / `"AO: off"` / `"AO: ERR"` | main.rs:543 |
-| 2 | APs count | (178, 112) | Small 9pt | `"APs:N"` | main.rs:551 |
-| 3 | Uptime | (178, 0) | Small 9pt | `"UP: DD:HH:MM"` | main.rs:554 |
-| 4 | Line 1 | y=14 | — | full width divider | main.rs:557 |
-| 5 | Face | (0, 16) | — | 120x66 bull bitmap | main.rs:560, faces.rs |
-| 6 | Status | (125, 20) | Medium 10pt | bull message/joke, word-wrap 20c | main.rs:564 |
-| 7 | XP level | (125, 73) | Small 9pt | `"Lv N"` | main.rs:571 |
-| 8 | XP bar | (168, 74) | — | 80x7 pixel bar, outlined+filled | main.rs:573-596 |
-| 9 | Memtemp labels | (125, 85) | Small 9pt | `"mem  cpu freq temp"` | main.rs:604 |
-| 10 | Memtemp values | (125, 95) | Small 9pt | `"46%  13% 1.0G 55C"` | main.rs:618-625 |
-| 11 | IP display | (0, 95) | Small 9pt | `"USB:10.0.0.2 :8080"` or `"BT:IP"` | main.rs:628-631 |
-| 12 | Line 2 | y=108 | — | full width divider | main.rs:634 |
-| 13 | CRASH | (0, 112) | Small 9pt | `"CRASH:N"` | main.rs:637 |
-| 14 | WWW | (48, 112) | Small 9pt | `"WWW:C"` / `"WWW:-"` / `"WWW:."` | main.rs:638-641 |
-| 15 | BT | (86, 112) | Small 9pt | `"BT:C"` / `"BT:-"` / `"BT:P"` | main.rs:643 |
-| 16 | Battery | (118, 112) | Small 9pt | `"CHG=100%"` / `"BAT=75%"` | main.rs:645, pisugar |
-| 17 | Mode | (222, 112) | Small 9pt | `"RAGE"` / `"SAFE"` | main.rs:647 |
+| 1 | AO status | (0, 0) | Small 9pt | `"AO: N/N \| Nm \| CH:N"` / `"AO: off"` / `"AO: ERR"` (truncated 18ch) | ao_status.lua |
+| 2 | APs count | (130, 0) | Small 9pt | `"APs:N"` | aps.lua |
+| 3 | Uptime | (178, 0) | Small 9pt | `"UP: DD:HH:MM"` (label prefix) | uptime.lua |
+| 4 | Line 1 | y=14 | — | full width divider | main.rs |
+| 5 | Face | (0, 16) | — | 120x66 bull bitmap | main.rs, faces.rs |
+| 6 | Status | (125, 20) | Medium 10pt | bull message/joke, word-wrap 17c | status_msg.lua |
+| 7 | XP level | (125, 73) | Small 9pt | `"Lv N"` | main.rs |
+| 8 | XP bar | (168, 74) | — | 80x7 pixel bar, outlined+filled | main.rs |
+| 9 | Sys stats | (125, 85) | Small 9pt | mem/cpu/freq/temp labels + values | sys_stats.lua |
+| 10 | IP display | (0, 95) | Small 9pt | `"USB:10.0.0.2 :8080"` or `"BT:IP"` | ip_display.lua |
+| 11 | Line 2 | y=108 | — | full width divider | main.rs |
+| 12 | CRASH | (0, 112) | Small 9pt | `"CRASH:N"` | crash.lua |
+| 13 | WWW | (52, 112) | Small 9pt | `"WWW:C"` / `"WWW:-"` | www.lua |
+| 14 | BT | (96, 112) | Small 9pt | `"BT:C"` / `"BT:-"` / `"BT:TETH"` | bt_status.lua |
+| 15 | Battery | (140, 112) | Small 9pt | `"CHG=100%"` / `"BAT=75%"` | battery.lua |
+| 16 | Mode | (214, 112) | Small 9pt | `"RAGE:N"` / `"RAGE"` / `"SAFE"` | mode.lua |
 
 ### Boot Screen Layout
 

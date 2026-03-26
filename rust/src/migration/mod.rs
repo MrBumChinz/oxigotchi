@@ -323,12 +323,15 @@ pub fn extract_rusty_config(pwn: &PwnagotchiConfig) -> crate::config::Config {
                 enabled: pwn.ui.display.enabled,
                 display_type: pwn.ui.display.display_type.clone(),
                 rotation: pwn.ui.display.rotation,
+                invert: pwn.ui.invert,
             },
             font: crate::config::FontConfig {
                 name: pwn.ui.font.name.clone(),
             },
         },
         bluetooth: crate::config::BluetoothConfig::default(),
+        bt_feature: crate::bluetooth::model::config::BtFeatureConfig::default(),
+        gpu: crate::gpu::config::GpuFeatureConfig::default(),
         name: String::new(),
         whitelist: Vec::new(),
         display: crate::config::DisplayConfig::default(),
@@ -371,8 +374,7 @@ pub fn migrate_config(from: &Path, to: &Path) -> Result<crate::config::Config, S
             .map_err(|e| format!("Failed to create dir {}: {}", parent.display(), e))?;
     }
 
-    std::fs::write(to, &output)
-        .map_err(|e| format!("Failed to write {}: {}", to.display(), e))?;
+    std::fs::write(to, &output).map_err(|e| format!("Failed to write {}: {}", to.display(), e))?;
 
     Ok(cfg)
 }
@@ -468,20 +470,15 @@ pub fn import_captures_dedup(
             }
             total_found += 1;
 
-            let filename = path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .to_string();
+            let filename = path.file_name().unwrap().to_string_lossy().to_string();
 
             if seen_filenames.contains(&filename) {
                 continue; // dedup: already imported or exists at dest
             }
 
             let dest_file = dest.join(&filename);
-            std::fs::copy(&path, &dest_file).map_err(|e| {
-                format!("Failed to copy {}: {}", path.display(), e)
-            })?;
+            std::fs::copy(&path, &dest_file)
+                .map_err(|e| format!("Failed to copy {}: {}", path.display(), e))?;
             seen_filenames.insert(filename);
             imported += 1;
         }
@@ -508,9 +505,8 @@ pub fn import_captures(from: &Path, to: &Path) -> Result<usize, String> {
         if is_capture_file(&path) {
             let dest = to.join(path.file_name().unwrap());
             if !dest.exists() {
-                std::fs::copy(&path, &dest).map_err(|e| {
-                    format!("Failed to copy {}: {}", path.display(), e)
-                })?;
+                std::fs::copy(&path, &dest)
+                    .map_err(|e| format!("Failed to copy {}: {}", path.display(), e))?;
                 imported += 1;
             }
         }
@@ -580,12 +576,10 @@ impl Default for ServiceOptions {
 
 /// Generate a systemd service file for oxigotchi.
 pub fn generate_service_file(binary_path: &str) -> String {
-    generate_service(
-        &ServiceOptions {
-            binary_path: binary_path.into(),
-            ..Default::default()
-        },
-    )
+    generate_service(&ServiceOptions {
+        binary_path: binary_path.into(),
+        ..Default::default()
+    })
 }
 
 /// Generate a systemd service file with full options.
@@ -670,9 +664,7 @@ pub fn run_migration(legacy: &LegacyPaths, oxi: &OxiPaths) -> MigrationResult {
                 result.warnings.extend(validation.warnings);
                 if !validation.valid {
                     for err in &validation.errors {
-                        result
-                            .errors
-                            .push(format!("Config validation: {err}"));
+                        result.errors.push(format!("Config validation: {err}"));
                     }
                 }
             }
@@ -908,7 +900,11 @@ output_dir = "/home/pi/ao-captures/"
         cfg.ui.display.display_type = "future_display_9000".into();
         let v = validate_config(&cfg);
         assert!(v.valid); // warning, not error
-        assert!(v.warnings.iter().any(|w| w.contains("not a known display type")));
+        assert!(
+            v.warnings
+                .iter()
+                .any(|w| w.contains("not a known display type"))
+        );
     }
 
     // ── Test: Config validation — empty name warns ───────────────────────
@@ -967,8 +963,7 @@ output_dir = "/home/pi/ao-captures/"
         // Non-capture file (should be ignored)
         std::fs::write(dir_a.join("notes.txt"), "not a capture").unwrap();
 
-        let (found, imported) =
-            import_captures_dedup(&[dir_a, dir_b], &dest).unwrap();
+        let (found, imported) = import_captures_dedup(&[dir_a, dir_b], &dest).unwrap();
 
         assert_eq!(found, 3); // ap1 in dir_a, ap1 in dir_b, ap2 in dir_b
         assert_eq!(imported, 2); // ap1 (first seen from dir_a) + ap2
@@ -997,8 +992,7 @@ output_dir = "/home/pi/ao-captures/"
         // New file
         std::fs::write(src.join("new.pcapng"), "fresh").unwrap();
 
-        let (found, imported) =
-            import_captures_dedup(&[src], &dest).unwrap();
+        let (found, imported) = import_captures_dedup(&[src], &dest).unwrap();
 
         assert_eq!(found, 2); // existing + new
         assert_eq!(imported, 1); // only new (existing was deduped)
@@ -1015,7 +1009,10 @@ output_dir = "/home/pi/ao-captures/"
         let tmp = TempDir::new().unwrap();
         let dest = tmp.path().join("dest");
         let (found, imported) = import_captures_dedup(
-            &[PathBuf::from("/nonexistent/a"), PathBuf::from("/nonexistent/b")],
+            &[
+                PathBuf::from("/nonexistent/a"),
+                PathBuf::from("/nonexistent/b"),
+            ],
             &dest,
         )
         .unwrap();
@@ -1226,10 +1223,12 @@ output_dir = "/home/pi/ao-captures/"
         let result = run_migration(&legacy, &oxi);
         // Should succeed but with warnings about missing config
         assert!(!result.config_migrated);
-        assert!(result
-            .warnings
-            .iter()
-            .any(|w| w.contains("No pwnagotchi config found")));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("No pwnagotchi config found"))
+        );
     }
 
     // ── Test: count_captures ─────────────────────────────────────────────
@@ -1295,10 +1294,7 @@ output_dir = "/home/pi/ao-captures/"
         let op = OxiPaths::default();
         assert_eq!(op.config, PathBuf::from("/etc/oxigotchi/config.toml"));
         assert_eq!(op.captures, PathBuf::from("/home/pi/captures"));
-        assert_eq!(
-            op.sentinel,
-            PathBuf::from("/var/lib/.rusty-first-boot")
-        );
+        assert_eq!(op.sentinel, PathBuf::from("/var/lib/.rusty-first-boot"));
     }
 
     // ── Test: MigrationResult ────────────────────────────────────────────

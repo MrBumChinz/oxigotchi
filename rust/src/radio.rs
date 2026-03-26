@@ -245,12 +245,18 @@ impl RadioManager {
 
         // Step 3: Verify AO stopped
         if ao.state != ao::AoState::Stopped {
-            warn!("radio: AO state is {:?} after stop, expected Stopped", ao.state);
+            warn!(
+                "radio: AO state is {:?} after stop, expected Stopped",
+                ao.state
+            );
         }
         if ao.pid != 0 {
             // Check if process is actually dead
             if !verify_process_dead(ao.pid) {
-                error!("radio: AO PID {} still alive after stop, rolling back to WIFI", ao.pid);
+                error!(
+                    "radio: AO PID {} still alive after stop, rolling back to WIFI",
+                    ao.pid
+                );
                 self.rollback_to_wifi(ao, wifi);
                 return Err(format!("AO PID {} still alive after stop", ao.pid));
             }
@@ -402,10 +408,7 @@ fn verify_process_dead(_pid: u32) -> bool {
 /// Check if the BT adapter is powered on via hciconfig.
 #[cfg(unix)]
 fn verify_bt_powered() -> bool {
-    match std::process::Command::new("hciconfig")
-        .arg("hci0")
-        .output()
-    {
+    match std::process::Command::new("hciconfig").arg("hci0").output() {
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout);
             stdout.contains("UP") && stdout.contains("RUNNING")
@@ -456,7 +459,10 @@ mod tests {
         assert_eq!(RadioMode::from_str("WIFI"), Some(RadioMode::Wifi));
         assert_eq!(RadioMode::from_str("BT"), Some(RadioMode::Bt));
         assert_eq!(RadioMode::from_str("FREE"), Some(RadioMode::Free));
-        assert_eq!(RadioMode::from_str("TRANSITIONING"), Some(RadioMode::Transitioning));
+        assert_eq!(
+            RadioMode::from_str("TRANSITIONING"),
+            Some(RadioMode::Transitioning)
+        );
         assert_eq!(RadioMode::from_str("wifi"), Some(RadioMode::Wifi));
         assert_eq!(RadioMode::from_str("bt"), Some(RadioMode::Bt));
         assert_eq!(RadioMode::from_str("INVALID"), None);

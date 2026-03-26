@@ -6,11 +6,7 @@ pub mod fonts;
 use crate::config::DisplayConfig;
 use crate::personality::Face;
 use buffer::FrameBuffer;
-use embedded_graphics::{
-    pixelcolor::BinaryColor,
-    prelude::*,
-    text::Text,
-};
+use embedded_graphics::{pixelcolor::BinaryColor, prelude::*, text::Text};
 
 /// Width of the Waveshare 2.13" V4 display in pixels.
 pub const DISPLAY_WIDTH: u32 = 250;
@@ -99,9 +95,7 @@ impl Screen {
                 break;
             }
             // Find last space within max_chars
-            let break_at = remaining[..max_chars]
-                .rfind(' ')
-                .unwrap_or(max_chars);
+            let break_at = remaining[..max_chars].rfind(' ').unwrap_or(max_chars);
             let (line, rest) = remaining.split_at(break_at);
             let _ = Text::new(line, Point::new(x, y), style).draw(&mut self.fb);
             remaining = rest.trim_start();
@@ -197,9 +191,7 @@ impl Screen {
                     let _ = Text::new(remaining, Point::new(ind.x, y), style).draw(&mut self.fb);
                     break;
                 }
-                let break_at = remaining[..max_chars]
-                    .rfind(' ')
-                    .unwrap_or(max_chars);
+                let break_at = remaining[..max_chars].rfind(' ').unwrap_or(max_chars);
                 let (line, rest) = remaining.split_at(break_at);
                 let _ = Text::new(line, Point::new(ind.x, y), style).draw(&mut self.fb);
                 remaining = rest.trim_start();
@@ -211,7 +203,8 @@ impl Screen {
                 crate::lua::IndicatorFont::Medium => fonts::medium(),
                 crate::lua::IndicatorFont::Small => fonts::small(),
             };
-            let _ = Text::new(&text, Point::new(ind.x, ind.y + baseline_offset), style).draw(&mut self.fb);
+            let _ = Text::new(&text, Point::new(ind.x, ind.y + baseline_offset), style)
+                .draw(&mut self.fb);
         }
     }
 }
@@ -226,6 +219,7 @@ mod tests {
             enabled: true,
             display_type: "waveshare_4".into(),
             rotation: 0,
+            invert: true,
         }
     }
 
@@ -262,7 +256,10 @@ mod tests {
         // Name at (5, 30 baseline) — pixels in y range ~21..31
         let has_pixels = (0..DISPLAY_WIDTH)
             .any(|x| (20..35).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
-        assert!(has_pixels, "draw_name should set pixels in the name zone (y 20-35)");
+        assert!(
+            has_pixels,
+            "draw_name should set pixels in the name zone (y 20-35)"
+        );
     }
 
     #[test]
@@ -270,18 +267,20 @@ mod tests {
         let mut screen = Screen::new(test_config());
         screen.draw_status("testing");
         // Status at (125, 30 baseline) — pixels in y range ~21..31
-        let has_pixels = (125..DISPLAY_WIDTH).any(|x| {
-            (20..35).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On)
-        });
-        assert!(has_pixels, "draw_status should set pixels in the status zone (y 20-35)");
+        let has_pixels = (125..DISPLAY_WIDTH)
+            .any(|x| (20..35).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        assert!(
+            has_pixels,
+            "draw_status should set pixels in the status zone (y 20-35)"
+        );
     }
 
     #[test]
     fn test_draw_labeled_value() {
         let mut screen = Screen::new(test_config());
         screen.draw_labeled_value("CH", "6", 0, 30);
-        let has_pixels = (0..60)
-            .any(|x| (20..40).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        let has_pixels =
+            (0..60).any(|x| (20..40).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
         assert!(has_pixels, "draw_labeled_value should set pixels");
     }
 
@@ -348,7 +347,8 @@ mod tests {
             wrap_width: 0,
         };
         screen.draw_indicator(&ind);
-        let has_pixels = (10..60).any(|x| (50..60).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        let has_pixels =
+            (10..60).any(|x| (50..60).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
         assert!(has_pixels, "draw_indicator should set pixels");
     }
 
@@ -366,7 +366,8 @@ mod tests {
             wrap_width: 0,
         };
         screen.draw_indicator(&ind);
-        let has_pixels = (185..240).any(|x| (0..10).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
+        let has_pixels =
+            (185..240).any(|x| (0..10).any(|y| screen.fb.get_pixel(x, y) == BinaryColor::On));
         assert!(has_pixels, "draw_indicator with label should set pixels");
     }
 }

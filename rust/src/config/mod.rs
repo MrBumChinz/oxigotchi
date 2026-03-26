@@ -18,6 +18,12 @@ pub struct Config {
     /// Bluetooth tethering section.
     #[serde(default)]
     pub bluetooth: BluetoothConfig,
+    /// Higher-level BT feature subsystem config.
+    #[serde(default)]
+    pub bt_feature: crate::bluetooth::model::config::BtFeatureConfig,
+    /// GPU/runtime observation and optimization config.
+    #[serde(default)]
+    pub gpu: crate::gpu::config::GpuFeatureConfig,
 
     // Convenience accessors populated after deserialization
     /// Shortcut for `main.name`.
@@ -71,9 +77,12 @@ pub struct DisplayConfig {
     /// Display driver type (e.g. "waveshare_4", "inky").
     #[serde(rename = "type", default = "default_display_type")]
     pub display_type: String,
-    /// Screen rotation in degrees (0, 90, 180, 270).
+    /// Screen rotation in degrees (0, 180).
     #[serde(default)]
     pub rotation: u16,
+    /// Whether to invert display colors (white-on-black).
+    #[serde(default = "default_true")]
+    pub invert: bool,
 }
 
 impl Default for DisplayConfig {
@@ -82,6 +91,7 @@ impl Default for DisplayConfig {
             enabled: true,
             display_type: "waveshare_4".into(),
             rotation: 180,
+            invert: true,
         }
     }
 }
@@ -241,6 +251,8 @@ impl Config {
             main: default_main(),
             ui: UiConfig::default(),
             bluetooth: BluetoothConfig::default(),
+            bt_feature: crate::bluetooth::model::config::BtFeatureConfig::default(),
+            gpu: crate::gpu::config::GpuFeatureConfig::default(),
             name: String::new(),
             whitelist: Vec::new(),
             display: DisplayConfig::default(),
@@ -455,6 +467,47 @@ name = "test"
     }
 
     #[test]
+    fn test_bt_feature_and_gpu_defaults() {
+        let cfg = Config::defaults();
+        assert!(cfg.bt_feature.enabled);
+        assert!(matches!(
+            cfg.bt_feature.mode,
+            crate::bluetooth::model::config::BtMode::Passive
+        ));
+        assert!(cfg.gpu.enabled);
+        assert!(matches!(
+            cfg.gpu.mode,
+            crate::gpu::state::gpu_state::GpuMode::Observe
+        ));
+    }
+
+    #[test]
+    fn test_bt_feature_and_gpu_from_toml() {
+        let toml = r#"
+[bt_feature]
+enabled = true
+mode = "Telemetry"
+
+[gpu]
+enabled = true
+mode = "Lab"
+
+[gpu.runtime]
+summary_source = "/tmp/gpu-runtime"
+"#;
+        let cfg = Config::from_toml(toml).unwrap();
+        assert!(matches!(
+            cfg.bt_feature.mode,
+            crate::bluetooth::model::config::BtMode::Telemetry
+        ));
+        assert!(matches!(
+            cfg.gpu.mode,
+            crate::gpu::state::gpu_state::GpuMode::Lab
+        ));
+        assert_eq!(cfg.gpu.runtime.summary_source, "/tmp/gpu-runtime");
+    }
+
+    #[test]
     fn test_parse_real_pi_config() {
         // The real Pi config has many unknown sections ([main.plugins.*], [fs.*], etc.)
         // The parser must skip them gracefully and still read [bluetooth].
@@ -462,7 +515,10 @@ name = "test"
         match Config::from_toml(toml) {
             Ok(cfg) => {
                 println!("Parse OK! bluetooth.enabled = {}", cfg.bluetooth.enabled);
-                assert!(cfg.bluetooth.enabled, "bluetooth should be enabled in Pi config");
+                assert!(
+                    cfg.bluetooth.enabled,
+                    "bluetooth should be enabled in Pi config"
+                );
             }
             Err(e) => {
                 panic!("Pi config parse failed: {e}");

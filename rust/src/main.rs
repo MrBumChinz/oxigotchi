@@ -295,7 +295,7 @@ impl Daemon {
         // Load Lua plugins — read persisted positions from plugins.toml, fall back to defaults
         let plugin_defaults = vec![
             lua::PluginConfig::default_for("ao_status", 0, 0),
-            lua::PluginConfig::default_for("aps", 112, 0),
+            lua::PluginConfig::default_for("aps", 130, 0),
             lua::PluginConfig::default_for("uptime", 178, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
             lua::PluginConfig::default_for("sys_stats", 125, 85),
@@ -489,6 +489,10 @@ impl Daemon {
             }
         }
 
+        // ---- Prune stale APs ----
+        let ap_ttl = self.shared_state.lock().unwrap().ap_ttl_secs;
+        self.wifi.tracker.prune(ap_ttl);
+
         // ---- Attack + Capture phases ----
         self.run_attack_phase(&mut result);
         self.run_capture_phase(&mut result);
@@ -513,6 +517,9 @@ impl Daemon {
                 }
             }
         }
+
+        // Check for display settings changes before rendering
+        self.apply_pending_display_settings();
 
         self.update_display();
 
@@ -557,6 +564,31 @@ impl Daemon {
         for _ in 0..ticks {
             std::thread::sleep(Duration::from_secs(IP_ROTATE_SECS));
 
+            // Break out of sleep early if a mode switch is pending
+            // so the next epoch processes it immediately.
+            {
+                let s = self.shared_state.lock().unwrap();
+                if s.pending_mode_switch.is_some() {
+                    break;
+                }
+            }
+
+            // Process BT visibility toggle immediately (don't wait for epoch)
+            {
+                let bt_toggle = {
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.pending_bt_toggle.take()
+                };
+                if let Some(visible) = bt_toggle {
+                    info!("web: BT visibility set to {visible} (mid-epoch)");
+                    if visible {
+                        self.bluetooth.show();
+                    } else {
+                        self.bluetooth.hide();
+                    }
+                }
+            }
+
             // Update channel indicator every tick (AO hops every ~5s)
             let ch = self.ao.channel();
             if ch > 0 {
@@ -594,6 +626,8 @@ impl Daemon {
                 self.lua.update_indicator_value("ip_display", &ip_str);
             }
 
+            // Check for display settings changes (invert/rotation) every tick
+            self.apply_pending_display_settings();
             self.update_display();
         }
         if remainder > 0 {
@@ -647,7 +681,8 @@ impl Daemon {
     /// Attack phase: schedule attacks against tracked APs.
     fn run_attack_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.next_phase(); // -> Attack
-        let attackable = self.wifi.tracker.attackable();
+        let min_rssi = self.shared_state.lock().unwrap().min_rssi;
+        let attackable = self.wifi.tracker.attackable(min_rssi);
         // Read attack toggles from web state (all 6 types)
         let enabled_types = {
             let s = self.shared_state.lock().unwrap();
@@ -1305,7 +1340,7 @@ impl Daemon {
             any_command = true;
         }
 
-        // Process pending settings update
+        // Process pending settings update (display reinit handled by apply_pending_display_settings)
         let settings = {
             let mut s = self.shared_state.lock().unwrap();
             s.pending_settings.take()
@@ -1319,6 +1354,20 @@ impl Daemon {
                     info!("web: device name changed to {name}");
                     any_command = true;
                 }
+            }
+            if let Some(rssi) = update.min_rssi {
+                let clamped = rssi.clamp(-100, -30);
+                let mut s = self.shared_state.lock().unwrap();
+                s.min_rssi = clamped;
+                info!("web: min RSSI set to {clamped} dBm");
+                any_command = true;
+            }
+            if let Some(ttl) = update.ap_ttl_secs {
+                let clamped = ttl.clamp(30, 600);
+                let mut s = self.shared_state.lock().unwrap();
+                s.ap_ttl_secs = clamped;
+                info!("web: AP TTL set to {clamped}s");
+                any_command = true;
             }
         }
 
@@ -1485,6 +1534,10 @@ impl Daemon {
             "rage_enabled": s.rage_enabled,
             "rage_level": s.rage_level,
             "lifetime_aps": self.lifetime_aps_base + self.ao.ap_count() as u64,
+            "display_invert": self.screen.config.invert,
+            "display_rotation": self.screen.config.rotation,
+            "min_rssi": s.min_rssi,
+            "ap_ttl_secs": s.ap_ttl_secs,
         });
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
@@ -1652,6 +1705,28 @@ impl Daemon {
                     }
                 }
             }
+        }
+
+        // Apply display settings
+        if let Some(invert) = state.get("display_invert").and_then(|v| v.as_bool()) {
+            self.screen.config.invert = invert;
+            let mut s = self.shared_state.lock().unwrap();
+            s.display_invert = invert;
+        }
+        if let Some(rotation) = state.get("display_rotation").and_then(|v| v.as_u64()) {
+            let r = if rotation == 180 { 180 } else { 0 };
+            self.screen.config.rotation = r;
+            let mut s = self.shared_state.lock().unwrap();
+            s.display_rotation = r;
+        }
+        // Apply wifi tuning settings
+        if let Some(rssi) = state.get("min_rssi").and_then(|v| v.as_i64()) {
+            let mut s = self.shared_state.lock().unwrap();
+            s.min_rssi = (rssi as i8).clamp(-100, -30);
+        }
+        if let Some(ttl) = state.get("ap_ttl_secs").and_then(|v| v.as_u64()) {
+            let mut s = self.shared_state.lock().unwrap();
+            s.ap_ttl_secs = ttl.clamp(30, 600);
         }
 
         info!("loaded runtime state from {path}");
@@ -2009,6 +2084,29 @@ impl Daemon {
         s.discord_enabled = self.discord_enabled;
     }
 
+    /// Check for pending display settings changes and apply immediately.
+    /// Called before each display render so invert/rotation take effect
+    /// within the current epoch rather than waiting for the next one.
+    fn apply_pending_display_settings(&mut self) {
+        let needs_reinit = {
+            let mut s = self.shared_state.lock().unwrap();
+            let reinit = s.pending_display_reinit;
+            if reinit {
+                s.pending_display_reinit = false;
+                // Sync display config from shared state
+                self.screen.config.invert = s.display_invert;
+                self.screen.config.rotation = s.display_rotation;
+            }
+            reinit
+        };
+        if needs_reinit {
+            display::driver::request_reinit();
+            self.screen.force_flush();
+            info!("display: applying invert/rotation change immediately");
+            self.save_runtime_state();
+        }
+    }
+
     /// Update the e-ink display with current state.
     /// Layout matches Python angryoxide.py AO mode — see docs/DISPLAY_SPEC.md.
     fn update_display(&mut self) {
@@ -2175,6 +2273,8 @@ impl Daemon {
 
         self.mode = OperatingMode::Safe;
         self.epoch_loop.personality.set_override(face);
+        // Radio transition disrupts SPI bus — force display reinit so next flush doesn't BUSY-timeout
+        display::driver::request_reinit();
     }
 
     /// Transition from SAFE to RAGE mode via radio lock manager.
@@ -2201,6 +2301,8 @@ impl Daemon {
         self.mode = OperatingMode::Rage;
         self.network.display_slot = network::DisplaySlot::UsbIp;
         self.epoch_loop.personality.clear_override();
+        // Radio transition disrupts SPI bus — force display reinit so next flush doesn't BUSY-timeout
+        display::driver::request_reinit();
     }
 
     /// Handle recovery actions from the health checker.
@@ -2316,6 +2418,7 @@ impl Daemon {
     /// Build a web status snapshot.
     fn build_web_status(&self) -> web::StatusResponse {
         let m = &self.epoch_loop.metrics;
+        let s = self.shared_state.lock().unwrap();
         web::build_status(&web::StatusParams {
             name: &self.config.name,
             uptime: &self.epoch_loop.uptime_str(),
@@ -2328,6 +2431,10 @@ impl Daemon {
             face: self.epoch_loop.current_face().as_str(),
             status_message: &self.epoch_loop.personality.status_msg(),
             mode: "AO",
+            display_invert: s.display_invert,
+            display_rotation: s.display_rotation,
+            min_rssi: s.min_rssi,
+            ap_ttl_secs: s.ap_ttl_secs,
         })
     }
 
@@ -2896,5 +3003,141 @@ mod tests {
             !s.rage_enabled,
             "manual rate change should break out of RAGE"
         );
+    }
+
+    // ---- Autohunt toggle daemon tests ----
+
+    #[test]
+    fn test_process_web_commands_autohunt_on_clears_ao_channels() {
+        let mut daemon = make_daemon();
+        // Set some channels first
+        daemon.wifi.channel_config.channels = vec![1, 6, 11];
+        daemon.ao.config.channels = vec![1, 6, 11];
+        daemon.autohunt = false;
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: None,
+                dwell_ms: None,
+                autohunt: Some(true),
+            });
+        }
+        daemon.process_web_commands();
+        assert!(daemon.autohunt, "autohunt should be enabled");
+        assert!(
+            daemon.ao.config.channels.is_empty(),
+            "AO channels should be cleared when autohunt is ON"
+        );
+    }
+
+    #[test]
+    fn test_process_web_commands_autohunt_off_restores_channels() {
+        let mut daemon = make_daemon();
+        daemon.wifi.channel_config.channels = vec![1, 6, 11];
+        daemon.autohunt = true;
+        daemon.ao.config.channels = vec![]; // was autohunting
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: Some(vec![1, 6, 11]),
+                dwell_ms: Some(2000),
+                autohunt: Some(false),
+            });
+        }
+        daemon.process_web_commands();
+        assert!(!daemon.autohunt, "autohunt should be disabled");
+        assert_eq!(
+            daemon.ao.config.channels,
+            vec![1, 6, 11],
+            "AO channels should be restored from wifi channel config"
+        );
+    }
+
+    #[test]
+    fn test_process_web_commands_autohunt_on_breaks_rage() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.rage_enabled = true;
+            s.rage_level = 5;
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: None,
+                dwell_ms: None,
+                autohunt: Some(true),
+            });
+        }
+        daemon.process_web_commands();
+        let s = daemon.shared_state.lock().unwrap();
+        assert!(
+            !s.rage_enabled,
+            "autohunt toggle should break out of RAGE"
+        );
+    }
+
+    #[test]
+    fn test_process_web_commands_autohunt_preserves_dwell() {
+        let mut daemon = make_daemon();
+        daemon.wifi.channel_config.dwell_ms = 3000;
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: None,
+                dwell_ms: None, // not changing dwell
+                autohunt: Some(true),
+            });
+        }
+        daemon.process_web_commands();
+        assert_eq!(
+            daemon.wifi.channel_config.dwell_ms, 3000,
+            "dwell should be unchanged when only toggling autohunt"
+        );
+        assert_eq!(
+            daemon.ao.config.dwell, 3,
+            "AO dwell (seconds) should reflect existing dwell_ms"
+        );
+    }
+
+    #[test]
+    fn test_process_web_commands_channel_config_updates_dwell() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: Some(vec![1, 6]),
+                dwell_ms: Some(5000),
+                autohunt: Some(false),
+            });
+        }
+        daemon.process_web_commands();
+        assert_eq!(daemon.wifi.channel_config.dwell_ms, 5000);
+        assert_eq!(daemon.wifi.channel_config.channels, vec![1, 6]);
+        assert_eq!(daemon.ao.config.dwell, 5);
+        assert_eq!(daemon.ao.config.channels, vec![1, 6]);
+    }
+
+    #[test]
+    fn test_process_web_commands_empty_channels_not_applied() {
+        let mut daemon = make_daemon();
+        daemon.wifi.channel_config.channels = vec![1, 6, 11];
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_channel_config = Some(web::ChannelConfig {
+                channels: Some(vec![]), // empty
+                dwell_ms: None,
+                autohunt: Some(false),
+            });
+        }
+        daemon.process_web_commands();
+        assert_eq!(
+            daemon.wifi.channel_config.channels,
+            vec![1, 6, 11],
+            "empty channel list should not overwrite existing channels"
+        );
+    }
+
+    #[test]
+    fn test_daemon_default_autohunt_is_on() {
+        let daemon = make_daemon();
+        assert!(daemon.autohunt, "daemon should start with autohunt enabled");
     }
 }

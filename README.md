@@ -75,7 +75,7 @@ For the full technical deep dive, see **[docs/RUSTY_V3.md](docs/RUSTY_V3.md)** a
 | **Boot time** | 2-3 min (parses full log) | <5 sec (no Python, no venv) |
 | **Channel strategy** | Fixed hop | Smart autohunt with dwell, live channel on display |
 | **Language** | Python + Go | 100% Rust |
-| **Web dashboard** | Basic status page | 22 live cards, full control panel (axum) |
+| **Web dashboard** | Basic status page | 23 live cards, full control panel (axum) |
 | **Faces** | Korean text emoticons | 26 bull face PNGs (SPI direct to e-ink) |
 | **SD card lifespan** | ~1-2 years | 10+ years (tmpfs capture pipeline, near-zero writes) |
 | **Binary size** | 150MB+ (Python venv + Go) | ~5 MB static binary |
@@ -102,12 +102,13 @@ The pwnagotchi is a pet. The Oxigotchi is a workbull.
 - **6 attack types** — Deauth, PMKID, CSA, disassociation, anonymous reassociation, and rogue M2. Captures handshakes that bettercap simply cannot get.
 - **Stable firmware** — 8-layer patch (v7), built on a 6,965-function reverse engineering effort. DWT hardware watchpoint intercepts ALL crash paths including ROM. RSSI use-after-free fix enables rate-2 operation. Stress-tested with 27,982 injected frames and zero crashes. The most complete BCM43436B0 firmware patch ever created.
 - **Validated captures** — AO validates every capture before saving. No junk pcaps. Every `.pcapng` has a matching `.22000` hashcat-ready file. No need for cleanup tools like `hashie-clean` or `pcap-convert-to-hashcat`.
-- **Web dashboard** — Full control from your phone. 22 live cards: attack toggles, nearby networks, per-file capture downloads, cracked passwords, system health, BT visibility control, channel config with autohunt, whitelist management, WPA-SEC upload, Discord notifications, plugin manager, mode switch, system controls, log viewer.
+- **Web dashboard** — Full control from your phone. 23 live cards: attack toggles, nearby networks, per-file capture downloads, cracked passwords, system health, BT visibility control, channel config with autohunt, whitelist management, WPA-SEC upload, Discord notifications, plugin manager, mode switch, system controls, log viewer.
 - **26 bull faces** — Custom 1-bit e-ink art for every mood and system state. Each face is a diagnostic indicator, not decoration.
 - **Auto-crack integration** — Captures automatically upload to WPA-SEC for cloud cracking. Cracked passwords appear in the dashboard.
 - **Discord notifications** — Optional webhook integration sends a Discord message every time a handshake is captured. Disabled by default.
 - **XP & leveling** — The bull earns XP passively (+1 per epoch just for scanning, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). An exponential curve (`level^1.3 * 5`) makes early levels fast and high levels a serious grind — max level **999** takes about **1 year** of daily use. XP persists across reboots.
 - **Live channel display** — The current AO channel updates on the e-ink screen every 5 seconds, parsed from AO's stdout.
+- **RAGE Slider** — 7-level aggression preset in the dashboard. One slider controls rate, dwell time, and channels simultaneously — from Chill (rate 1, 5s dwell, 3 channels) to YOLO (rate 3, 500ms, all 13). Each level is stress-test-validated. Touch any individual control to break out to Custom mode. Persists across reboots.
 - **Channel hopping** — Default channels are 1, 6, 11 (non-overlapping 2.4GHz). Configurable from the dashboard with 13 toggleable channel buttons and a dwell time slider. Autohunt mode lets AO choose channels intelligently.
 - **Smart Skip** — Toggle in the dashboard (below attack rates) that skips APs you already have handshakes for. ON by default. Focuses AO on new targets instead of re-capturing from the same APs. Persists across reboots.
 - **Fast boot** — Under 5 seconds from power-on to scanning. No Python, no venv, no log parsing.
@@ -264,7 +265,7 @@ SD card: /home/pi/captures/
 - WPA-SEC auto-upload (if configured) queues validated captures for cloud cracking.
 - The dashboard's "Captures" card shows file count, handshake count, pending uploads, and total size. Individual files can be downloaded from the dashboard.
 
-**If `/tmp` fills up**, AO crashes because it can't write. The daemon detects this and restarts AO, but the real fix is to ensure `/tmp` doesn't fill. The 150MB default handles typical sessions (several hours). For marathon sessions (12+ hours), the `.kismet` file may grow large — the buffer-cleaner timer runs every 5 minutes and helps, but extremely long sessions at rate 2+ in dense environments may need monitoring.
+**If `/tmp` fills up**, AO crashes because it can't write. The daemon detects this and restarts AO, but the real fix is to ensure `/tmp` doesn't fill. The 150MB default handles typical sessions (several hours). For marathon sessions (12+ hours), the `.kismet` file may grow large — the buffer-cleaner timer runs every 5 minutes and helps, but extremely long sessions in dense environments may need monitoring.
 
 ## Bluetooth Tethering
 
@@ -315,10 +316,10 @@ Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use differe
 Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
 
 **Can I change the attack rate?**
-The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive). **Rate 1 is the default and recommended.** Rate 2 works well at home or in low-density areas, but in busy environments (walking through a city, near many APs) the heavy TX load can overwhelm the BCM43436B0 firmware — WiFi freezes and needs a reboot. This isn't a hard hardware limit — it's a firmware timing issue under high AP density + rapid channel hopping + movement. Rate 1 still uses all 6 attack types, just sends fewer frames per second. Rate 3 is experimental and will likely crash in most environments. If you plug in an external WiFi dongle (Alfa, RT5370, etc.) and configure AO to use it instead of the built-in chip, rate 2 and 3 work perfectly — the limitation is specific to the BCM43436B0.
+The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive) individually, or use the **RAGE Slider** — a 7-level preset that controls rate, dwell time, and channels with one knob. Levels range from Chill (rate 1, 5s dwell, 3 channels) to YOLO (rate 3, 500ms, all 13 channels). All presets except YOLO (level 7) are stress-test-validated stable. YOLO is the only known crash combo — AO died at 50 seconds in testing, but the daemon auto-recovered. Touching any individual control breaks out of the slider to Custom mode.
 
 **Does scanning more channels help?**
-Not on the built-in WiFi. The BCM43436B0 firmware is more likely to crash when hopping across many channels — scanning all 13 with a short dwell time stresses the TX path and triggers the same firmware trap (EPC 0x204CA) as high rates. **Stick to channels 1, 6, 11** (the non-overlapping 2.4 GHz channels where 95% of APs live). You won't miss much, and your WiFi won't die mid-walk. If you use an external dongle (Alfa, etc.), scan all channels freely — external chips don't have this limitation.
+Yes. With the v6 firmware patches, scanning all 13 channels is fully stable — even at rate 2 with 500ms dwell time. The old advice to "stick to 1, 6, 11" was based on pre-patch firmware behavior. Channels 1, 6, and 11 are still where 95% of 2.4 GHz APs live, so they remain the best default for efficiency, but scanning all 13 no longer risks a crash. Autohunt mode (which scans all channels then locks onto active ones) is now the recommended approach.
 
 **How long does the battery last?**
 With PiSugar 3 (1200mAh): 3-4 hours active. The bull face warns at 20% and 15%.

@@ -77,12 +77,7 @@ pub enum DisplaySlot {
 
 /// Build `ip addr show usb0` args.
 pub fn build_ip_addr_show_args() -> Vec<String> {
-    vec![
-        "-4".into(),
-        "addr".into(),
-        "show".into(),
-        "usb0".into(),
-    ]
+    vec!["-4".into(), "addr".into(), "show".into(), "usb0".into()]
 }
 
 /// Build `ip addr add <cidr> dev usb0` args.
@@ -98,12 +93,7 @@ pub fn build_ip_add_args(cidr: &str) -> Vec<String> {
 
 /// Build `ip link set usb0 up` args.
 pub fn build_link_up_args() -> Vec<String> {
-    vec![
-        "link".into(),
-        "set".into(),
-        "usb0".into(),
-        "up".into(),
-    ]
+    vec!["link".into(), "set".into(), "usb0".into(), "up".into()]
 }
 
 /// Build `ip route add default via <gw> dev usb0` args.
@@ -145,10 +135,7 @@ pub fn build_ping_args(target: &str, timeout_secs: u32) -> Vec<String> {
 
 /// Build DNS resolution test args: `getent hosts <hostname>`.
 pub fn build_dns_test_args(hostname: &str) -> Vec<String> {
-    vec![
-        "hosts".into(),
-        hostname.into(),
-    ]
+    vec!["hosts".into(), hostname.into()]
 }
 
 /// Build the resolv.conf content with a nameserver entry.
@@ -182,7 +169,8 @@ pub fn has_ip(ips: &[String], target: &str) -> bool {
 /// Detect if ICS changed our IP (we got a 192.168.137.x address from DHCP
 /// instead of our static config).
 pub fn detect_ics_dhcp(ips: &[String]) -> bool {
-    ips.iter().any(|ip| ip.starts_with(ICS_SUBNET_PREFIX) && ip != USB_IP_ICS)
+    ips.iter()
+        .any(|ip| ip.starts_with(ICS_SUBNET_PREFIX) && ip != USB_IP_ICS)
 }
 
 /// Parse usb0 link operstate from sysfs content.
@@ -452,7 +440,11 @@ impl NetworkManager {
         self.refresh_ips();
 
         if need_primary || need_ics {
-            info!("IP config applied: primary={}, ics={}", !need_primary || true, !need_ics || true);
+            info!(
+                "IP config applied: primary={}, ics={}",
+                !need_primary || true,
+                !need_ics || true
+            );
         }
 
         Ok(())
@@ -742,10 +734,7 @@ mod tests {
     #[test]
     fn test_build_ip_add_args_ics() {
         let args = build_ip_add_args("192.168.137.2/24");
-        assert_eq!(
-            args,
-            vec!["addr", "add", "192.168.137.2/24", "dev", "usb0"]
-        );
+        assert_eq!(args, vec!["addr", "add", "192.168.137.2/24", "dev", "usb0"]);
     }
 
     #[test]
@@ -912,7 +901,8 @@ mod tests {
         // Both are valid — check_internet pings regardless of usb0 state.
         assert!(
             status == InternetStatus::Offline || status == InternetStatus::Online,
-            "expected Offline or Online, got {:?}", status
+            "expected Offline or Online, got {:?}",
+            status
         );
     }
 
@@ -1055,13 +1045,24 @@ mod tests {
         assert_eq!(link_up, vec!["link", "set", "usb0", "up"]);
 
         let add_primary = build_ip_add_args(USB_CIDR_PRIMARY);
-        assert_eq!(add_primary, vec!["addr", "add", "10.0.0.2/24", "dev", "usb0"]);
+        assert_eq!(
+            add_primary,
+            vec!["addr", "add", "10.0.0.2/24", "dev", "usb0"]
+        );
 
         let add_ics = build_ip_add_args(USB_CIDR_ICS);
-        assert_eq!(add_ics, vec!["addr", "add", "192.168.137.2/24", "dev", "usb0"]);
+        assert_eq!(
+            add_ics,
+            vec!["addr", "add", "192.168.137.2/24", "dev", "usb0"]
+        );
 
         let route = build_default_route_replace_args(USB_GATEWAY);
-        assert_eq!(route, vec!["route", "replace", "default", "via", "10.0.0.1", "dev", "usb0"]);
+        assert_eq!(
+            route,
+            vec![
+                "route", "replace", "default", "via", "10.0.0.1", "dev", "usb0"
+            ]
+        );
 
         let resolv = build_resolv_conf(DNS_SERVER);
         assert!(resolv.contains("nameserver 8.8.8.8"));
@@ -1104,7 +1105,8 @@ mod tests {
         nm.check_internet();
         assert!(
             nm.internet == InternetStatus::Offline || nm.internet == InternetStatus::Online,
-            "expected Offline or Online after check, got {:?}", nm.internet
+            "expected Offline or Online after check, got {:?}",
+            nm.internet
         );
 
         // Simulate coming back online manually

@@ -1,7 +1,7 @@
 //! Lua plugin runtime: plugin loading, indicator registry, epoch ticking.
 
-pub mod state;
 pub mod config;
+pub mod state;
 
 use mlua::prelude::*;
 use std::collections::HashMap;
@@ -101,7 +101,9 @@ impl PluginRuntime {
         config: &PluginConfig,
     ) -> Result<(), String> {
         // Build sandboxed _ENV table with safe stdlib subset + our API functions
-        let env = self.build_env(name).map_err(|e| format!("env build: {e}"))?;
+        let env = self
+            .build_env(name)
+            .map_err(|e| format!("env build: {e}"))?;
 
         // Load and execute chunk with sandboxed environment
         self.lua
@@ -115,7 +117,8 @@ impl PluginRuntime {
         let meta = Self::read_meta(&env).map_err(|e| format!("meta {name}: {e}"))?;
 
         // Build config table for on_load
-        let config_table = self.build_config_table(config)
+        let config_table = self
+            .build_config_table(config)
             .map_err(|e| format!("config {name}: {e}"))?;
 
         // Call on_load(config) if it exists
@@ -126,7 +129,9 @@ impl PluginRuntime {
         }
 
         // Store environment in registry for later tick_epoch calls
-        let env_key = self.lua.create_registry_value(env)
+        let env_key = self
+            .lua
+            .create_registry_value(env)
             .map_err(|e| format!("registry {name}: {e}"))?;
 
         self.plugins.push(LoadedPlugin {
@@ -144,7 +149,9 @@ impl PluginRuntime {
     /// Call on_epoch(state) on every loaded plugin. Errors are caught and logged.
     pub fn tick_epoch(&self, epoch_state: &state::EpochState) {
         for plugin in &self.plugins {
-            if !plugin.enabled { continue; }
+            if !plugin.enabled {
+                continue;
+            }
             if let Err(e) = self.tick_one(plugin, epoch_state) {
                 log::warn!("plugin {} on_epoch error: {}", plugin.name, e);
             }
@@ -169,9 +176,10 @@ impl PluginRuntime {
     /// Get plugin info for the web dashboard (name, version, author, tag, x, y).
     /// Returns the base config position (what on_load receives), not derived indicator positions.
     pub fn get_web_plugin_list(&self) -> Vec<(PluginMeta, bool, i32, i32)> {
-        self.plugins.iter().map(|p| {
-            (p.meta.clone(), p.enabled, p.config_x, p.config_y)
-        }).collect()
+        self.plugins
+            .iter()
+            .map(|p| (p.meta.clone(), p.enabled, p.config_x, p.config_y))
+            .collect()
     }
 
     /// Update an indicator's position (for web dashboard changes).
@@ -210,9 +218,10 @@ impl PluginRuntime {
     /// This is important for multi-indicator plugins like sys_stats where
     /// indicators have offsets from the base (e.g., values at config.y + 10).
     pub fn get_plugin_configs(&self) -> Vec<(String, bool, i32, i32)> {
-        self.plugins.iter().map(|p| {
-            (p.name.clone(), p.enabled, p.config_x, p.config_y)
-        }).collect()
+        self.plugins
+            .iter()
+            .map(|p| (p.name.clone(), p.enabled, p.config_x, p.config_y))
+            .collect()
     }
 
     /// Enable or disable a plugin by name.
@@ -225,7 +234,11 @@ impl PluginRuntime {
 
     /// Check if a plugin is enabled.
     pub fn is_plugin_enabled(&self, plugin_name: &str) -> bool {
-        self.plugins.iter().find(|p| p.name == plugin_name).map(|p| p.enabled).unwrap_or(false)
+        self.plugins
+            .iter()
+            .find(|p| p.name == plugin_name)
+            .map(|p| p.enabled)
+            .unwrap_or(false)
     }
 
     /// Unload a plugin: remove its indicators and drop it from the plugin list.
@@ -243,11 +256,12 @@ impl PluginRuntime {
     /// Preserves the plugin's current config (position, enabled state).
     pub fn reload_plugin(&mut self, name: &str, plugin_dir: &str) -> Result<(), String> {
         let path = format!("{}/{}.lua", plugin_dir, name);
-        let source = std::fs::read_to_string(&path)
-            .map_err(|e| format!("read {path}: {e}"))?;
+        let source = std::fs::read_to_string(&path).map_err(|e| format!("read {path}: {e}"))?;
 
         // Preserve existing config for this plugin (position, enabled state)
-        let config = self.plugins.iter()
+        let config = self
+            .plugins
+            .iter()
             .find(|p| p.name == name)
             .map(|p| PluginConfig {
                 name: p.name.clone(),
@@ -291,9 +305,8 @@ impl PluginRuntime {
         // Copy safe globals from the real global table
         let globals = self.lua.globals();
         let safe_keys = [
-            "assert", "error", "ipairs", "next", "pairs", "pcall",
-            "print", "select", "tonumber", "tostring", "type", "unpack",
-            "xpcall", "rawequal", "rawget", "rawlen", "rawset",
+            "assert", "error", "ipairs", "next", "pairs", "pcall", "print", "select", "tonumber",
+            "tostring", "type", "unpack", "xpcall", "rawequal", "rawget", "rawlen", "rawset",
             "string", "table", "math",
         ];
         for key in &safe_keys {
@@ -304,42 +317,46 @@ impl PluginRuntime {
 
         // register_indicator(name, opts)
         let indicators = Arc::clone(&self.indicators);
-        let register_fn = self.lua.create_function(move |_lua, (ind_name, opts): (String, LuaTable)| {
-            let x: i32 = opts.get("x").unwrap_or(0);
-            let y: i32 = opts.get("y").unwrap_or(0);
-            let font_str: String = opts.get("font").unwrap_or_else(|_| "small".to_string());
-            let label: Option<String> = opts.get("label").ok();
-            let wrap_width: u32 = opts.get("wrap_width").unwrap_or(0);
+        let register_fn =
+            self.lua
+                .create_function(move |_lua, (ind_name, opts): (String, LuaTable)| {
+                    let x: i32 = opts.get("x").unwrap_or(0);
+                    let y: i32 = opts.get("y").unwrap_or(0);
+                    let font_str: String = opts.get("font").unwrap_or_else(|_| "small".to_string());
+                    let label: Option<String> = opts.get("label").ok();
+                    let wrap_width: u32 = opts.get("wrap_width").unwrap_or(0);
 
-            let font = match font_str.as_str() {
-                "medium" => IndicatorFont::Medium,
-                _ => IndicatorFont::Small,
-            };
+                    let font = match font_str.as_str() {
+                        "medium" => IndicatorFont::Medium,
+                        _ => IndicatorFont::Small,
+                    };
 
-            let indicator = Indicator {
-                name: ind_name.clone(),
-                value: String::new(),
-                x,
-                y,
-                label,
-                font,
-                wrap_width,
-            };
+                    let indicator = Indicator {
+                        name: ind_name.clone(),
+                        value: String::new(),
+                        x,
+                        y,
+                        label,
+                        font,
+                        wrap_width,
+                    };
 
-            indicators.lock().unwrap().insert(ind_name, indicator);
-            Ok(())
-        })?;
+                    indicators.lock().unwrap().insert(ind_name, indicator);
+                    Ok(())
+                })?;
         env.set("register_indicator", register_fn)?;
 
         // set_indicator(name, value)
         let indicators = Arc::clone(&self.indicators);
-        let set_fn = self.lua.create_function(move |_lua, (ind_name, value): (String, String)| {
-            let mut map = indicators.lock().unwrap();
-            if let Some(ind) = map.get_mut(&ind_name) {
-                ind.value = value;
-            }
-            Ok(())
-        })?;
+        let set_fn =
+            self.lua
+                .create_function(move |_lua, (ind_name, value): (String, String)| {
+                    let mut map = indicators.lock().unwrap();
+                    if let Some(ind) = map.get_mut(&ind_name) {
+                        ind.value = value;
+                    }
+                    Ok(())
+                })?;
         env.set("set_indicator", set_fn)?;
 
         // format_duration(secs) -> "HH:MM:SS"
@@ -368,7 +385,9 @@ impl PluginRuntime {
             name: plugin_table.get::<String>("name")?,
             version: plugin_table.get::<String>("version")?,
             author: plugin_table.get::<String>("author")?,
-            tag: plugin_table.get("tag").unwrap_or_else(|_| "default".to_string()),
+            tag: plugin_table
+                .get("tag")
+                .unwrap_or_else(|_| "default".to_string()),
         })
     }
 
@@ -409,7 +428,8 @@ impl PluginRuntime {
                 continue;
             }
 
-            let stem = file_path.file_stem()
+            let stem = file_path
+                .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
 
@@ -436,7 +456,13 @@ impl PluginRuntime {
 
             match self.load_plugin_from_str(&stem, &source, config) {
                 Ok(()) => {
-                    log::info!("plugin {stem}: loaded v{}", self.plugins.last().map(|p| p.meta.version.as_str()).unwrap_or("?"));
+                    log::info!(
+                        "plugin {stem}: loaded v{}",
+                        self.plugins
+                            .last()
+                            .map(|p| p.meta.version.as_str())
+                            .unwrap_or("?")
+                    );
                     count += 1;
                 }
                 Err(e) => {
@@ -449,8 +475,14 @@ impl PluginRuntime {
     }
 
     /// Call on_epoch for a single plugin. Returns error if the call fails.
-    fn tick_one(&self, plugin: &LoadedPlugin, epoch_state: &state::EpochState) -> Result<(), String> {
-        let env: LuaTable = self.lua.registry_value(&plugin.env_key)
+    fn tick_one(
+        &self,
+        plugin: &LoadedPlugin,
+        epoch_state: &state::EpochState,
+    ) -> Result<(), String> {
+        let env: LuaTable = self
+            .lua
+            .registry_value(&plugin.env_key)
             .map_err(|e| format!("registry: {e}"))?;
 
         let on_epoch: LuaFunction = match env.get("on_epoch") {
@@ -458,10 +490,12 @@ impl PluginRuntime {
             Err(_) => return Ok(()), // no on_epoch defined, skip
         };
 
-        let state_table = epoch_state.to_lua_table(&self.lua)
+        let state_table = epoch_state
+            .to_lua_table(&self.lua)
             .map_err(|e| format!("state table: {e}"))?;
 
-        on_epoch.call::<()>(state_table)
+        on_epoch
+            .call::<()>(state_table)
             .map_err(|e| format!("{e}"))?;
 
         Ok(())
@@ -486,7 +520,10 @@ impl PluginWatcher {
         unsafe {
             let fd = libc::inotify_init1(libc::IN_NONBLOCK);
             if fd < 0 {
-                return Err(format!("inotify_init1 failed: {}", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "inotify_init1 failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
             let c_dir = std::ffi::CString::new(dir).map_err(|e| e.to_string())?;
             let wd = libc::inotify_add_watch(
@@ -496,10 +533,17 @@ impl PluginWatcher {
             );
             if wd < 0 {
                 libc::close(fd);
-                return Err(format!("inotify_add_watch failed: {}", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "inotify_add_watch failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
             log::info!("plugin watcher: watching {dir} (fd={fd}, wd={wd})");
-            Ok(Self { fd, wd, dir: dir.to_string() })
+            Ok(Self {
+                fd,
+                wd,
+                dir: dir.to_string(),
+            })
         }
     }
 
@@ -516,7 +560,9 @@ impl PluginWatcher {
             while offset < n as usize {
                 let event = &*(buf.as_ptr().add(offset) as *const libc::inotify_event);
                 if event.len > 0 {
-                    let name_ptr = buf.as_ptr().add(offset + std::mem::size_of::<libc::inotify_event>());
+                    let name_ptr = buf
+                        .as_ptr()
+                        .add(offset + std::mem::size_of::<libc::inotify_event>());
                     let name = std::ffi::CStr::from_ptr(name_ptr as *const _)
                         .to_string_lossy()
                         .to_string();
@@ -558,7 +604,9 @@ pub struct PluginWatcher {
 #[cfg(not(target_os = "linux"))]
 impl PluginWatcher {
     pub fn new(dir: &str) -> Result<Self, String> {
-        Ok(Self { dir: dir.to_string() })
+        Ok(Self {
+            dir: dir.to_string(),
+        })
     }
     pub fn check(&self) -> Vec<String> {
         Vec::new()
@@ -665,7 +713,8 @@ mod tests {
             end
         "#;
         let config = PluginConfig::default_for("test_plugin", 10, 20);
-        rt.load_plugin_from_str("test_plugin", lua_code, &config).unwrap();
+        rt.load_plugin_from_str("test_plugin", lua_code, &config)
+            .unwrap();
         assert_eq!(rt.plugin_count(), 1);
 
         let indicators = rt.get_indicators();
@@ -694,9 +743,13 @@ mod tests {
             end
         "#;
         let config = PluginConfig::default_for("ticker", 0, 0);
-        rt.load_plugin_from_str("ticker", lua_code, &config).unwrap();
+        rt.load_plugin_from_str("ticker", lua_code, &config)
+            .unwrap();
 
-        let state = state::EpochState { epoch: 42, ..Default::default() };
+        let state = state::EpochState {
+            epoch: 42,
+            ..Default::default()
+        };
         rt.tick_epoch(&state);
 
         let indicators = rt.get_indicators();
@@ -748,7 +801,10 @@ mod tests {
         let config = PluginConfig::default_for("fmt", 0, 0);
         rt.load_plugin_from_str("fmt", lua_code, &config).unwrap();
 
-        let state = state::EpochState { uptime_secs: 3661, ..Default::default() };
+        let state = state::EpochState {
+            uptime_secs: 3661,
+            ..Default::default()
+        };
         rt.tick_epoch(&state);
 
         let indicators = rt.get_indicators();
@@ -787,7 +843,8 @@ mod tests {
     fn test_multiple_plugins() {
         let mut rt = PluginRuntime::new();
         for i in 0..3 {
-            let code = format!(r#"
+            let code = format!(
+                r#"
                 plugin = {{}}
                 plugin.name = "p{i}"
                 plugin.version = "1.0.0"
@@ -799,9 +856,13 @@ mod tests {
                 function on_epoch(state)
                     set_indicator("ind{i}", "v{i}")
                 end
-            "#, i = i, x = i * 50);
+            "#,
+                i = i,
+                x = i * 50
+            );
             let config = PluginConfig::default_for(&format!("p{i}"), (i * 50) as i32, 0);
-            rt.load_plugin_from_str(&format!("p{i}"), &code, &config).unwrap();
+            rt.load_plugin_from_str(&format!("p{i}"), &code, &config)
+                .unwrap();
         }
 
         assert_eq!(rt.plugin_count(), 3);
@@ -817,7 +878,9 @@ mod tests {
     fn test_load_plugins_from_dir() {
         let dir = tempfile::tempdir().unwrap();
         let plugin_path = dir.path().join("hello.lua");
-        std::fs::write(&plugin_path, r#"
+        std::fs::write(
+            &plugin_path,
+            r#"
             plugin = {}
             plugin.name = "hello"
             plugin.version = "1.0.0"
@@ -829,7 +892,9 @@ mod tests {
             function on_epoch(state)
                 set_indicator("hi", "world")
             end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let mut rt = PluginRuntime::new();
         let configs = vec![PluginConfig::default_for("hello", 0, 0)];
@@ -842,7 +907,9 @@ mod tests {
     fn test_load_plugins_skips_bad_files() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("bad.lua"), "this is not valid lua {{{{").unwrap();
-        std::fs::write(dir.path().join("good.lua"), r#"
+        std::fs::write(
+            dir.path().join("good.lua"),
+            r#"
             plugin = {}
             plugin.name = "good"
             plugin.version = "1.0.0"
@@ -850,7 +917,9 @@ mod tests {
             plugin.tag = "default"
             function on_load(config) end
             function on_epoch(state) end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let mut rt = PluginRuntime::new();
         let configs = vec![
@@ -864,7 +933,9 @@ mod tests {
     #[test]
     fn test_load_plugins_disabled_skipped() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("skip.lua"), r#"
+        std::fs::write(
+            dir.path().join("skip.lua"),
+            r#"
             plugin = {}
             plugin.name = "skip"
             plugin.version = "1.0.0"
@@ -874,7 +945,9 @@ mod tests {
                 register_indicator("s", { x = 0, y = 0, font = "small" })
             end
             function on_epoch(state) end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let mut rt = PluginRuntime::new();
         let mut cfg = PluginConfig::default_for("skip", 0, 0);
@@ -910,7 +983,8 @@ mod tests {
             function on_epoch(state) end
         "#;
         let config = PluginConfig::default_for("removeme", 0, 0);
-        rt.load_plugin_from_str("removeme", lua_code, &config).unwrap();
+        rt.load_plugin_from_str("removeme", lua_code, &config)
+            .unwrap();
         assert_eq!(rt.plugin_count(), 1);
         assert_eq!(rt.get_indicators().len(), 2);
 
@@ -923,7 +997,8 @@ mod tests {
     fn test_unload_does_not_affect_other_plugins() {
         let mut rt = PluginRuntime::new();
         for (name, ind_name) in &[("keep", "keep_ind"), ("drop", "drop_ind")] {
-            let code = format!(r#"
+            let code = format!(
+                r#"
                 plugin = {{}}
                 plugin.name = "{name}"
                 plugin.version = "1.0.0"
@@ -933,7 +1008,8 @@ mod tests {
                     register_indicator("{ind_name}", {{ x = 0, y = 0, font = "small" }})
                 end
                 function on_epoch(state) end
-            "#);
+            "#
+            );
             let config = PluginConfig::default_for(name, 0, 0);
             rt.load_plugin_from_str(name, &code, &config).unwrap();
         }
@@ -950,7 +1026,9 @@ mod tests {
     fn test_reload_plugin_from_dir() {
         let dir = tempfile::tempdir().unwrap();
         // Write v1
-        std::fs::write(dir.path().join("hot.lua"), r#"
+        std::fs::write(
+            dir.path().join("hot.lua"),
+            r#"
             plugin = {}
             plugin.name = "hot"
             plugin.version = "1.0.0"
@@ -962,7 +1040,9 @@ mod tests {
             function on_epoch(state)
                 set_indicator("hot", "v1")
             end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let mut rt = PluginRuntime::new();
         let config = PluginConfig::default_for("hot", 10, 20);
@@ -974,7 +1054,9 @@ mod tests {
         assert_eq!(rt.get_indicators()[0].value, "v1");
 
         // Write v2 with different epoch output
-        std::fs::write(dir.path().join("hot.lua"), r#"
+        std::fs::write(
+            dir.path().join("hot.lua"),
+            r#"
             plugin = {}
             plugin.name = "hot"
             plugin.version = "2.0.0"
@@ -986,10 +1068,13 @@ mod tests {
             function on_epoch(state)
                 set_indicator("hot", "v2")
             end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         // Reload
-        rt.reload_plugin("hot", dir.path().to_str().unwrap()).unwrap();
+        rt.reload_plugin("hot", dir.path().to_str().unwrap())
+            .unwrap();
         assert_eq!(rt.plugin_count(), 1);
 
         rt.tick_epoch(&state);

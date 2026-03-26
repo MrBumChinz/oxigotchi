@@ -6,6 +6,15 @@
 //! Uses `nmcli` and `bluetoothctl` CLI tools (no D-Bus crate needed).
 //! All Command calls are `#[cfg(unix)]` gated.
 
+pub mod adapter;
+pub mod coex;
+pub mod controller;
+pub mod discovery;
+pub mod model;
+pub mod persistence;
+pub mod supervisor;
+pub mod ui;
+
 use log::info;
 use std::time::Instant;
 
@@ -217,8 +226,8 @@ pub fn parse_scan_for_device(output: &str, name: &str, mac: &str) -> Option<Stri
                 }
                 // Track first device with a real name (not just a MAC echo)
                 // for auto-detect mode (both name and mac filters empty)
-                if first_named.is_none() && !found_name.is_empty()
-                    && !found_name.contains('-') // skip "AA-BB-CC-DD-EE-FF" style names
+                if first_named.is_none() && !found_name.is_empty() && !found_name.contains('-')
+                // skip "AA-BB-CC-DD-EE-FF" style names
                 {
                     first_named = Some(found_mac.to_string());
                 }
@@ -242,7 +251,11 @@ pub fn parse_scan_all_devices(output: &str) -> Vec<(String, String)> {
             let parts: Vec<&str> = rest.splitn(2, ' ').collect();
             if !parts.is_empty() {
                 let mac = parts[0].to_string();
-                let name = if parts.len() >= 2 { parts[1].to_string() } else { String::new() };
+                let name = if parts.len() >= 2 {
+                    parts[1].to_string()
+                } else {
+                    String::new()
+                };
                 // Skip entries with no name or where name looks like a MAC address
                 if !name.is_empty() && name != mac && !is_mac_like(&name) {
                     devices.push((mac, name));
@@ -256,9 +269,13 @@ pub fn parse_scan_all_devices(output: &str) -> Vec<(String, String)> {
 /// Check if a string looks like a MAC address (e.g., "AA-BB-CC-DD-EE-FF" or "AA:BB:CC:DD:EE:FF").
 fn is_mac_like(s: &str) -> bool {
     // MAC addresses are 17 chars: XX:XX:XX:XX:XX:XX or XX-XX-XX-XX-XX-XX
-    if s.len() != 17 { return false; }
+    if s.len() != 17 {
+        return false;
+    }
     let sep = if s.contains(':') { ':' } else { '-' };
-    s.split(sep).count() == 6 && s.split(sep).all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+    s.split(sep).count() == 6
+        && s.split(sep)
+            .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 /// Parse an IPv4 address from `ip -4 addr show bnep0` output.
@@ -327,12 +344,13 @@ fn run_bluetoothctl(args: &[String]) -> Result<String, String> {
 pub fn reset_hci_uart() {
     use log::{info, warn};
     info!("BT: reloading hci_uart to reset shared UART");
-    let rmmod = std::process::Command::new("rmmod")
-        .arg("hci_uart")
-        .output();
+    let rmmod = std::process::Command::new("rmmod").arg("hci_uart").output();
     match rmmod {
         Ok(o) if o.status.success() => {}
-        Ok(o) => warn!("rmmod hci_uart: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Ok(o) => warn!(
+            "rmmod hci_uart: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
         Err(e) => warn!("rmmod hci_uart failed: {e}"),
     }
     std::thread::sleep(std::time::Duration::from_secs(1));
@@ -341,7 +359,10 @@ pub fn reset_hci_uart() {
         .output();
     match modprobe {
         Ok(o) if o.status.success() => info!("BT: hci_uart reloaded"),
-        Ok(o) => warn!("modprobe hci_uart: {}", String::from_utf8_lossy(&o.stderr).trim()),
+        Ok(o) => warn!(
+            "modprobe hci_uart: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
         Err(e) => warn!("modprobe hci_uart failed: {e}"),
     }
     // Wait for hci0 to re-register with the kernel
@@ -562,9 +583,13 @@ impl BtTether {
     pub fn show(&mut self) {
         #[cfg(unix)]
         {
+            // Disable discoverable timeout so it stays visible until explicitly hidden
+            let _ = run_bluetoothctl(&["discoverable-timeout".into(), "0".into()]);
             let _ = run_bluetoothctl(&build_discoverable_on_args());
+            // Also enable pairable so phones can initiate connections
+            let _ = run_bluetoothctl(&["pairable".into(), "on".into()]);
         }
-        info!("BT discoverable ON");
+        info!("BT discoverable + pairable ON");
     }
 
     /// Hide BT adapter (turn off discoverability).
@@ -824,8 +849,7 @@ mod tests {
 
     #[test]
     fn test_parse_ip_multiple_interfaces() {
-        let output =
-            "    inet 10.0.0.1/8 brd 10.255.255.255 scope global\n    inet 192.168.1.100/24 scope global\n";
+        let output = "    inet 10.0.0.1/8 brd 10.255.255.255 scope global\n    inet 192.168.1.100/24 scope global\n";
         assert_eq!(parse_ip_from_output(output), Some("10.0.0.1".to_string()));
     }
 
@@ -855,12 +879,13 @@ mod tests {
     #[test]
     fn test_connect_success_non_unix() {
         // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix) && std::process::Command::new("nmcli")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_err()
+        if cfg!(unix)
+            && std::process::Command::new("nmcli")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
         {
             return;
         }
@@ -1063,12 +1088,13 @@ mod tests {
     #[test]
     fn test_toggle_connect_disconnect() {
         // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix) && std::process::Command::new("nmcli")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_err()
+        if cfg!(unix)
+            && std::process::Command::new("nmcli")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
         {
             return;
         }
@@ -1087,12 +1113,13 @@ mod tests {
     #[test]
     fn test_toggle_from_off() {
         // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix) && std::process::Command::new("nmcli")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_err()
+        if cfg!(unix)
+            && std::process::Command::new("nmcli")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
         {
             return;
         }
@@ -1109,12 +1136,13 @@ mod tests {
     #[test]
     fn test_toggle_from_error() {
         // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix) && std::process::Command::new("nmcli")
-            .arg("--version")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_err()
+        if cfg!(unix)
+            && std::process::Command::new("nmcli")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_err()
         {
             return;
         }
@@ -1242,11 +1270,15 @@ mod tests {
 
     #[test]
     fn test_parse_scan_all_devices_basic() {
-        let output = "[NEW] Device AA:BB:CC:DD:EE:FF My Phone\n[NEW] Device 11:22:33:44:55:66 Galaxy S24";
+        let output =
+            "[NEW] Device AA:BB:CC:DD:EE:FF My Phone\n[NEW] Device 11:22:33:44:55:66 Galaxy S24";
         let devices = parse_scan_all_devices(output);
         assert_eq!(devices.len(), 2);
         assert_eq!(devices[0], ("AA:BB:CC:DD:EE:FF".into(), "My Phone".into()));
-        assert_eq!(devices[1], ("11:22:33:44:55:66".into(), "Galaxy S24".into()));
+        assert_eq!(
+            devices[1],
+            ("11:22:33:44:55:66".into(), "Galaxy S24".into())
+        );
     }
 
     #[test]
@@ -1292,10 +1324,7 @@ mod tests {
 
     #[test]
     fn test_build_scan_on_args() {
-        assert_eq!(
-            build_scan_on_args(),
-            vec!["--timeout", "10", "scan", "on"]
-        );
+        assert_eq!(build_scan_on_args(), vec!["--timeout", "10", "scan", "on"]);
     }
 
     // ===== New nmcli builder tests =====

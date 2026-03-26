@@ -267,8 +267,7 @@ impl std::fmt::Display for I2cError {
 /// Read a single register from the PiSugar over I2C.
 #[cfg(target_arch = "aarch64")]
 fn i2c_read_register(bus: u8, addr: u16, register: u8) -> Result<u8, I2cError> {
-    let mut i2c =
-        rppal::i2c::I2c::with_bus(bus).map_err(|e| I2cError::BusOpen(e.to_string()))?;
+    let mut i2c = rppal::i2c::I2c::with_bus(bus).map_err(|e| I2cError::BusOpen(e.to_string()))?;
     i2c.set_slave_address(addr)
         .map_err(|e| I2cError::IoError(e.to_string()))?;
     let mut buf = [0u8; 1];
@@ -285,8 +284,7 @@ fn i2c_read_register(_bus: u8, _addr: u16, _register: u8) -> Result<u8, I2cError
 /// Write a single register to the PiSugar over I2C.
 #[cfg(target_arch = "aarch64")]
 fn i2c_write_register(bus: u8, addr: u16, register: u8, value: u8) -> Result<(), I2cError> {
-    let mut i2c =
-        rppal::i2c::I2c::with_bus(bus).map_err(|e| I2cError::BusOpen(e.to_string()))?;
+    let mut i2c = rppal::i2c::I2c::with_bus(bus).map_err(|e| I2cError::BusOpen(e.to_string()))?;
     i2c.set_slave_address(addr)
         .map_err(|e| I2cError::IoError(e.to_string()))?;
     i2c.write(&[register, value])
@@ -355,35 +353,27 @@ impl PiSugar {
     pub fn read_status(&mut self) -> &BatteryStatus {
         if self.available {
             // Read battery level (register 0x2A)
-            if let Ok(raw_level) = i2c_read_register(
-                self.config.i2c_bus,
-                self.config.i2c_addr,
-                REG_BATTERY_LEVEL,
-            ) {
+            if let Ok(raw_level) =
+                i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_BATTERY_LEVEL)
+            {
                 self.status.level = parse_battery_level(raw_level);
             }
 
             // Read voltage (registers 0x22-0x23, big-endian mV)
-            if let Ok(v_high) = i2c_read_register(
-                self.config.i2c_bus,
-                self.config.i2c_addr,
-                REG_VOLTAGE_HIGH,
-            ) {
-                if let Ok(v_low) = i2c_read_register(
-                    self.config.i2c_bus,
-                    self.config.i2c_addr,
-                    REG_VOLTAGE_LOW,
-                ) {
+            if let Ok(v_high) =
+                i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_VOLTAGE_HIGH)
+            {
+                if let Ok(v_low) =
+                    i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_VOLTAGE_LOW)
+                {
                     self.status.voltage_mv = parse_voltage_mv(v_high, v_low);
                 }
             }
 
             // Read charging status (register 0x02)
-            if let Ok(flags) = i2c_read_register(
-                self.config.i2c_bus,
-                self.config.i2c_addr,
-                REG_CHARGE_STATUS,
-            ) {
+            if let Ok(flags) =
+                i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_CHARGE_STATUS)
+            {
                 self.status.charge_state = parse_charge_state(flags);
             }
         }
@@ -399,12 +389,8 @@ impl PiSugar {
         if !self.available {
             return None;
         }
-        let flags = i2c_read_register(
-            self.config.i2c_bus,
-            self.config.i2c_addr,
-            REG_BUTTON_EVENT,
-        )
-        .ok()?;
+        let flags =
+            i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_BUTTON_EVENT).ok()?;
         parse_button_event(flags)
     }
 
@@ -831,17 +817,26 @@ mod tests {
 
     #[test]
     fn test_button_single_tap_maps_to_bluetooth() {
-        assert_eq!(map_button_action(ButtonAction::SingleTap), MappedAction::Bluetooth);
+        assert_eq!(
+            map_button_action(ButtonAction::SingleTap),
+            MappedAction::Bluetooth
+        );
     }
 
     #[test]
     fn test_button_double_tap_maps_to_auto_manual() {
-        assert_eq!(map_button_action(ButtonAction::DoubleTap), MappedAction::AutoManual);
+        assert_eq!(
+            map_button_action(ButtonAction::DoubleTap),
+            MappedAction::AutoManual
+        );
     }
 
     #[test]
     fn test_button_long_press_maps_to_ao_pwn() {
-        assert_eq!(map_button_action(ButtonAction::LongPress), MappedAction::AoPwn);
+        assert_eq!(
+            map_button_action(ButtonAction::LongPress),
+            MappedAction::AoPwn
+        );
     }
 
     // ===== Config defaults test =====

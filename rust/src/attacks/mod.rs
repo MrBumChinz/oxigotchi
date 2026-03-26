@@ -33,7 +33,7 @@ pub struct AttackResult {
     pub timestamp: Instant,
 }
 
-/// Rate limiter to prevent firmware crashes (BCM43436B0 crashes at rate 2+).
+/// Rate limiter for attack frame injection. All rates (1-3) stable with v6 firmware patch.
 #[derive(Debug)]
 pub struct RateLimiter {
     /// Maximum attacks per second.
@@ -131,7 +131,11 @@ impl AttackScheduler {
     /// Schedule the next attack, cycling through enabled types.
     /// `enabled` maps to [deauth, pmkid, csa, disassoc].
     /// Returns None if rate-limited or all types disabled.
-    pub fn next_attack(&mut self, _target_bssid: &[u8; 6], enabled: &[bool; 6]) -> Option<AttackType> {
+    pub fn next_attack(
+        &mut self,
+        _target_bssid: &[u8; 6],
+        enabled: &[bool; 6],
+    ) -> Option<AttackType> {
         if !enabled.iter().any(|&e| e) {
             return None; // all disabled, don't consume rate token
         }
@@ -288,7 +292,13 @@ mod tests {
         let enabled = [false, false, true, false, false, false]; // only CSA
         let mut scheduler = AttackScheduler::new(10);
         let bssid = [0; 6];
-        assert_eq!(scheduler.next_attack(&bssid, &enabled), Some(AttackType::Csa));
-        assert_eq!(scheduler.next_attack(&bssid, &enabled), Some(AttackType::Csa));
+        assert_eq!(
+            scheduler.next_attack(&bssid, &enabled),
+            Some(AttackType::Csa)
+        );
+        assert_eq!(
+            scheduler.next_attack(&bssid, &enabled),
+            Some(AttackType::Csa)
+        );
     }
 }

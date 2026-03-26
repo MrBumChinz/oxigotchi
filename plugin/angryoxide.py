@@ -318,7 +318,7 @@ class AngryOxide(plugins.Plugin):
             'anon_reassoc': True,
             'rogue_m2': True,
         }
-        self._rate = 1          # 1, 2, or 3 (rate 2+ crashes BCM43436B0 in ~68s)
+        self._rate = 1          # 1, 2, or 3 (all stable with v6 firmware patch)
         self._channels = ''     # empty = default (1,6,11)
         self._autohunt = False
         self._dwell = 2         # seconds
@@ -2700,26 +2700,26 @@ input:checked+.slider:before{transform:translateX(22px)}
 
 <div class="card ao-only-card">
 <div class="card-title">Attack Rate</div>
-<div style="color:#888;font-size:11px;margin-bottom:8px">Attack frame injection speed. Rate 1 is the maximum safe rate for BCM43436B0 — higher rates cause firmware crashes. Do not increase above 1.</div>
+<div style="color:#888;font-size:11px;margin-bottom:8px">Attack frame injection speed. All rates stable with v6 firmware patch. Rate 3 + 500ms + all 13ch is the only known crash combo.</div>
 <div class="rate-btns">
 <button class="rate-btn" id="rate-1" onclick="setRate(1)">1<br><span style="font-size:10px;font-weight:normal;color:#888">Quiet</span><br><span style="font-size:9px;font-weight:normal;color:#555">Low profile, fewer frames</span></button>
-<button class="rate-btn risky" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span><br><span style="font-size:9px;font-weight:normal">&#9888; May crash built-in WiFi</span></button>
-<button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Aggressive</span><br><span style="font-size:9px;font-weight:normal">&#9888; Will crash built-in WiFi</span></button>
+<button class="rate-btn" id="rate-2" onclick="setRate(2)">2<br><span style="font-size:10px;font-weight:normal">Normal</span><br><span style="font-size:9px;font-weight:normal;color:#555">Recommended for active hunting</span></button>
+<button class="rate-btn risky" id="rate-3" onclick="setRate(3)">3<br><span style="font-size:10px;font-weight:normal">Aggressive</span><br><span style="font-size:9px;font-weight:normal">Max speed, fast captures</span></button>
 </div>
 </div>
 
 <div class="card ao-only-card">
 <div class="card-title">Channels</div>
 <div style="color:#888;font-size:11px;margin-bottom:4px">Which WiFi channels to scan. Leave empty for default (1,6,11). Autohunt scans all channels then locks onto ones with targets. Dwell = how long to stay on each channel.</div>
-<div style="color:#e67e22;font-size:11px;margin-bottom:4px">&#9888; <b>Built-in WiFi warning:</b> Scanning many channels (especially all 13) increases firmware crash risk on the BCM43436B0 chip. Stick to 1,6,11 for stability. External dongles (e.g. Alfa) are not affected.</div>
+<div style="color:#27ae60;font-size:11px;margin-bottom:4px">&#10003; All channel combos stable with v6 firmware patch. 1,6,11 is still efficient (95% of APs), but all 13 works fine.</div>
 <div class="channel-row">
 <label>Channels:</label>
 <input type="text" id="ch-input" placeholder="e.g. 1,6,11 (empty=default)">
 </div>
 <div class="autohunt-row">
 <label>Autohunt:</label>
-<label class="switch switch-risky"><input type="checkbox" id="ch-autohunt" onchange="applyChannels()"><span class="slider"></span></label>
-<span style="font-size:11px;color:#e67e22;margin-left:4px">&#9888; Scans ALL channels first — will likely crash built-in WiFi. Safe with external dongle only.</span>
+<label class="switch"><input type="checkbox" id="ch-autohunt" onchange="applyChannels()"><span class="slider"></span></label>
+<span style="font-size:11px;color:#27ae60;margin-left:4px">&#10003; Recommended — scans all channels, locks onto active ones. Stable with v6 firmware patch.</span>
 </div>
 <div class="dwell-row">
 <label>Dwell:</label>

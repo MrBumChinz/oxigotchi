@@ -468,7 +468,7 @@ impl Personality {
         let penalty = match self.blind_epochs {
             1..=3 => mood_deltas::BLIND_EPOCH,
             4..=10 => mood_deltas::BLIND_EPOCH * 2.5, // -0.05
-            _ => mood_deltas::BLIND_EPOCH * 4.0,       // -0.08
+            _ => mood_deltas::BLIND_EPOCH * 4.0,      // -0.08
         };
         self.mood.adjust(penalty);
     }
@@ -532,7 +532,11 @@ impl Personality {
             if let Some(idx) = self.joke_index {
                 let joke_list = jokes::jokes_for_face(&self.joke_face);
                 if idx < joke_list.len() {
-                    let part = if self.joke_phase == 0 { joke_list[idx].0 } else { joke_list[idx].1 };
+                    let part = if self.joke_phase == 0 {
+                        joke_list[idx].0
+                    } else {
+                        joke_list[idx].1
+                    };
                     self.current_status = part.to_string();
                     return;
                 }
@@ -741,8 +745,7 @@ impl XpTracker {
             bar_width
         };
         let empty = bar_width - filled;
-        let bar: String = "\u{2588}".repeat(filled as usize)
-            + &"\u{2591}".repeat(empty as usize);
+        let bar: String = "\u{2588}".repeat(filled as usize) + &"\u{2591}".repeat(empty as usize);
         format!("Lv {}  Exp|{}", self.level, bar)
     }
 
@@ -784,8 +787,8 @@ impl XpTracker {
             mood: mood_value,
         };
 
-        let json = serde_json::to_string_pretty(&data)
-            .map_err(|e| format!("serialize failed: {e}"))?;
+        let json =
+            serde_json::to_string_pretty(&data).map_err(|e| format!("serialize failed: {e}"))?;
 
         let tmp_path = path.with_extension("json.tmp");
 
@@ -871,7 +874,8 @@ impl CpuSample {
                         .collect();
                     if fields.len() >= 8 {
                         // user(0) nice(1) system(2) idle(3) iowait(4) irq(5) softirq(6) steal(7)
-                        let busy = fields[0] + fields[1] + fields[2] + fields[5] + fields[6] + fields[7];
+                        let busy =
+                            fields[0] + fields[1] + fields[2] + fields[5] + fields[6] + fields[7];
                         let total = busy + fields[3] + fields[4];
                         return Some(Self { busy, total });
                     }
@@ -922,24 +926,32 @@ impl SystemInfo {
                 0.0
             };
 
-            let (mem_used_mb, mem_total_mb) = if let Ok(content) =
-                std::fs::read_to_string("/proc/meminfo")
-            {
-                let mut total_kb: u64 = 0;
-                let mut available_kb: u64 = 0;
-                for line in content.lines() {
-                    if line.starts_with("MemTotal:") {
-                        total_kb = line.split_whitespace().nth(1)
-                            .and_then(|s| s.parse().ok()).unwrap_or(0);
-                    } else if line.starts_with("MemAvailable:") {
-                        available_kb = line.split_whitespace().nth(1)
-                            .and_then(|s| s.parse().ok()).unwrap_or(0);
+            let (mem_used_mb, mem_total_mb) =
+                if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+                    let mut total_kb: u64 = 0;
+                    let mut available_kb: u64 = 0;
+                    for line in content.lines() {
+                        if line.starts_with("MemTotal:") {
+                            total_kb = line
+                                .split_whitespace()
+                                .nth(1)
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                        } else if line.starts_with("MemAvailable:") {
+                            available_kb = line
+                                .split_whitespace()
+                                .nth(1)
+                                .and_then(|s| s.parse().ok())
+                                .unwrap_or(0);
+                        }
                     }
-                }
-                ((total_kb.saturating_sub(available_kb) / 1024) as u32, (total_kb / 1024) as u32)
-            } else {
-                (0, 0)
-            };
+                    (
+                        (total_kb.saturating_sub(available_kb) / 1024) as u32,
+                        (total_kb / 1024) as u32,
+                    )
+                } else {
+                    (0, 0)
+                };
 
             let sample = CpuSample::read();
             let cpu_percent = match (&sample, prev_cpu) {
@@ -947,12 +959,15 @@ impl SystemInfo {
                 _ => 0.0,
             };
 
-            return (Self {
-                cpu_temp_c,
-                mem_used_mb,
-                mem_total_mb,
-                cpu_percent,
-            }, sample);
+            return (
+                Self {
+                    cpu_temp_c,
+                    mem_used_mb,
+                    mem_total_mb,
+                    cpu_percent,
+                },
+                sample,
+            );
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -985,7 +1000,8 @@ mod tests {
             for (j, b) in faces.iter().enumerate() {
                 if i != j {
                     assert_ne!(
-                        a, b,
+                        a,
+                        b,
                         "Faces {:?} and {:?} share text",
                         Face::all()[i],
                         Face::all()[j]
@@ -1398,7 +1414,11 @@ mod tests {
         xp.award(50);
         let s = xp.display_str();
         assert!(s.starts_with("Lv 4  Exp|"), "got: {s}");
-        assert_eq!(s.matches('\u{2588}').count(), 4, "should have 4 filled blocks: {s}");
+        assert_eq!(
+            s.matches('\u{2588}').count(),
+            4,
+            "should have 4 filled blocks: {s}"
+        );
     }
 
     #[test]
@@ -1722,7 +1742,10 @@ mod tests {
             ..Default::default()
         };
         let msg = status_message(&ctx, &Mood::new(0.5));
-        assert!(msg.contains("Battery"), "battery should take priority, got: {msg}");
+        assert!(
+            msg.contains("Battery"),
+            "battery should take priority, got: {msg}"
+        );
     }
 
     #[test]
@@ -1855,7 +1878,7 @@ mod tests {
 
         // Simulate some activity
         p.on_handshake(); // 100 XP → level 2
-        p.on_deauth();    // 10 XP
+        p.on_deauth(); // 10 XP
         p.on_association(); // 15 XP
         p.on_aps_seen(3); // 15 XP
 
@@ -1954,16 +1977,28 @@ mod tests {
 
     #[test]
     fn test_cpu_sample_percent() {
-        let prev = CpuSample { busy: 100, total: 200 };
-        let curr = CpuSample { busy: 150, total: 300 };
+        let prev = CpuSample {
+            busy: 100,
+            total: 200,
+        };
+        let curr = CpuSample {
+            busy: 150,
+            total: 300,
+        };
         let pct = curr.cpu_percent(&prev);
         assert!((pct - 50.0).abs() < 0.01); // 50/100 = 50%
     }
 
     #[test]
     fn test_cpu_sample_percent_zero_delta() {
-        let prev = CpuSample { busy: 100, total: 200 };
-        let curr = CpuSample { busy: 100, total: 200 };
+        let prev = CpuSample {
+            busy: 100,
+            total: 200,
+        };
+        let curr = CpuSample {
+            busy: 100,
+            total: 200,
+        };
         assert_eq!(curr.cpu_percent(&prev), 0.0);
     }
 

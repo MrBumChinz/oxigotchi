@@ -149,7 +149,10 @@ impl AoManager {
 
     /// Get a snapshot of all APs seen by AO.
     pub fn ap_snapshot(&self) -> Vec<AoApInfo> {
-        self.ao_ap_list.lock().map(|m| m.values().cloned().collect()).unwrap_or_default()
+        self.ao_ap_list
+            .lock()
+            .map(|m| m.values().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// Get the current channel parsed from AO stdout.
@@ -199,7 +202,10 @@ impl AoManager {
         }
         if !self.config.channels.is_empty() {
             args.push("--channel".into());
-            let ch_str = self.config.channels.iter()
+            let ch_str = self
+                .config
+                .channels
+                .iter()
                 .map(|c| c.to_string())
                 .collect::<Vec<_>>()
                 .join(",");
@@ -254,11 +260,7 @@ impl AoManager {
             // think it's writing to a terminal (line-buffered) instead of
             // a pipe (full-buffered). stdbuf -oL doesn't work reliably
             // with Rust binaries that use BufWriter internally.
-            let script_cmd = format!(
-                "{} {}",
-                &self.config.binary,
-                args.join(" ")
-            );
+            let script_cmd = format!("{} {}", &self.config.binary, args.join(" "));
             match std::process::Command::new("script")
                 .args(["-qc", &script_cmd, "/dev/null"])
                 .stdout(std::process::Stdio::piped())
@@ -281,7 +283,14 @@ impl AoManager {
                             .name("ao-stdout-reader".into())
                             .spawn(move || {
                                 info!("AO stdout reader thread started");
-                                ao_stdout_reader(stdout, ap_count, channel, shutdown, ap_list, sess_captures);
+                                ao_stdout_reader(
+                                    stdout,
+                                    ap_count,
+                                    channel,
+                                    shutdown,
+                                    ap_list,
+                                    sess_captures,
+                                );
                             })
                         {
                             error!("failed to spawn AO stderr reader: {e}");
@@ -404,8 +413,8 @@ impl AoManager {
 
     /// Calculate exponential backoff: min(base * 2^(crashes-1), 300).
     fn backoff_seconds(&self) -> u64 {
-        let exp = self.config.base_backoff_secs
-            * 2u64.saturating_pow(self.crash_count.saturating_sub(1));
+        let exp =
+            self.config.base_backoff_secs * 2u64.saturating_pow(self.crash_count.saturating_sub(1));
         exp.min(300)
     }
 
@@ -506,11 +515,7 @@ impl Default for AoManager {
 #[cfg(unix)]
 pub fn gpsd_available() -> bool {
     use std::net::TcpStream;
-    TcpStream::connect_timeout(
-        &"127.0.0.1:2947".parse().unwrap(),
-        Duration::from_secs(1),
-    )
-    .is_ok()
+    TcpStream::connect_timeout(&"127.0.0.1:2947".parse().unwrap(), Duration::from_secs(1)).is_ok()
 }
 
 /// gpsd is not available on non-unix platforms.
@@ -571,7 +576,8 @@ pub fn parse_ao_line(line: &str) -> Option<u32> {
 
     // Skip separator characters (whitespace, :, -, =)
     let rest = &line[keyword_end..];
-    let rest = rest.trim_start_matches(|c: char| c == ':' || c == '-' || c == '=' || c.is_whitespace());
+    let rest =
+        rest.trim_start_matches(|c: char| c == ':' || c == '-' || c == '=' || c.is_whitespace());
 
     // Extract digits
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -621,7 +627,9 @@ fn ao_stdout_reader(
         let mut in_escape = false;
         for c in s.chars() {
             if in_escape {
-                if c.is_ascii_alphabetic() { in_escape = false; }
+                if c.is_ascii_alphabetic() {
+                    in_escape = false;
+                }
             } else if c == '\x1b' {
                 in_escape = true;
             } else {
@@ -650,7 +658,9 @@ fn ao_stdout_reader(
                     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
                     if let Ok(ch) = digits.parse::<u32>() {
                         ao_channel.store(ch, Ordering::Relaxed);
-                        if ch <= 255 { current_channel = ch as u8; }
+                        if ch <= 255 {
+                            current_channel = ch as u8;
+                        }
                     }
                 }
 
@@ -911,7 +921,10 @@ mod tests {
 
     #[test]
     fn test_parse_ao_line_embedded_in_status() {
-        assert_eq!(parse_ao_line("2026-03-22 14:00:00 UTC | [Status] | Targets: 9"), Some(9));
+        assert_eq!(
+            parse_ao_line("2026-03-22 14:00:00 UTC | [Status] | Targets: 9"),
+            Some(9)
+        );
         assert_eq!(parse_ao_line("[INFO] APs: 20"), Some(20));
     }
 
@@ -924,7 +937,8 @@ mod tests {
     #[test]
     fn test_ap_count_read_write() {
         let ao = AoManager::default();
-        ao.ao_ap_count.store(42, std::sync::atomic::Ordering::Relaxed);
+        ao.ao_ap_count
+            .store(42, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(ao.ap_count(), 42);
     }
 
@@ -938,7 +952,8 @@ mod tests {
     fn test_stop_sets_shutdown_and_resets_count() {
         let mut ao = AoManager::default();
         ao.state = AoState::Running;
-        ao.ao_ap_count.store(15, std::sync::atomic::Ordering::Relaxed);
+        ao.ao_ap_count
+            .store(15, std::sync::atomic::Ordering::Relaxed);
         ao.stop();
         assert!(ao.shutdown_flag.load(std::sync::atomic::Ordering::Relaxed));
         assert_eq!(ao.ao_ap_count.load(std::sync::atomic::Ordering::Relaxed), 0);

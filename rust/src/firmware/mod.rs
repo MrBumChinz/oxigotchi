@@ -14,18 +14,18 @@ fn build_netlink_frame(cmd: u32, set: bool, payload: &[u8]) -> Vec<u8> {
 
     // nlmsghdr (16 bytes, all little-endian)
     frame.extend_from_slice(&total_len.to_le_bytes()); // nlmsg_len
-    frame.extend_from_slice(&0u16.to_le_bytes());      // nlmsg_type
-    frame.extend_from_slice(&0u16.to_le_bytes());      // nlmsg_flags
-    frame.extend_from_slice(&0u32.to_le_bytes());      // nlmsg_seq
-    frame.extend_from_slice(&0u32.to_le_bytes());      // nlmsg_pid
+    frame.extend_from_slice(&0u16.to_le_bytes()); // nlmsg_type
+    frame.extend_from_slice(&0u16.to_le_bytes()); // nlmsg_flags
+    frame.extend_from_slice(&0u32.to_le_bytes()); // nlmsg_seq
+    frame.extend_from_slice(&0u32.to_le_bytes()); // nlmsg_pid
 
     // nexudp_header (8 bytes)
-    frame.extend_from_slice(b"NEX");                    // magic
-    frame.push(0);                                       // type = NEXUDP_IOCTL
-    frame.extend_from_slice(&0u32.to_le_bytes());       // security cookie
+    frame.extend_from_slice(b"NEX"); // magic
+    frame.push(0); // type = NEXUDP_IOCTL
+    frame.extend_from_slice(&0u32.to_le_bytes()); // security cookie
 
     // ioctl_header (8 bytes)
-    frame.extend_from_slice(&cmd.to_le_bytes());        // cmd
+    frame.extend_from_slice(&cmd.to_le_bytes()); // cmd
     frame.extend_from_slice(&(set as u32).to_le_bytes()); // set flag
 
     // payload
@@ -59,29 +59,49 @@ pub fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>, String> {
     unsafe {
         let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NEXMON);
         if fd < 0 {
-            return Err(format!("netlink socket failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink socket failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         // Bind
         let mut sa: libc::sockaddr_nl = std::mem::zeroed();
         sa.nl_family = libc::AF_NETLINK as u16;
-        if libc::bind(fd, &sa as *const _ as *const libc::sockaddr,
-                      std::mem::size_of::<libc::sockaddr_nl>() as u32) < 0 {
+        if libc::bind(
+            fd,
+            &sa as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
+        ) < 0
+        {
             libc::close(fd);
-            return Err(format!("netlink bind failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink bind failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         // Set 3s timeout
-        let tv = libc::timeval { tv_sec: 3, tv_usec: 0 };
-        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO,
-                         &tv as *const _ as *const libc::c_void,
-                         std::mem::size_of::<libc::timeval>() as u32);
+        let tv = libc::timeval {
+            tv_sec: 3,
+            tv_usec: 0,
+        };
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as u32,
+        );
 
         // Send
         let sent = libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0);
         if sent < 0 {
             libc::close(fd);
-            return Err(format!("netlink send failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink send failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         // Receive
@@ -90,12 +110,18 @@ pub fn sdio_read(addr: u32, length: u32) -> Result<Vec<u8>, String> {
         libc::close(fd);
 
         if n < 0 {
-            return Err(format!("netlink recv failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink recv failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let n = n as usize;
         if n < 16 + length as usize {
-            return Err(format!("short response: got {n} bytes, need {}", 16 + length));
+            return Err(format!(
+                "short response: got {n} bytes, need {}",
+                16 + length
+            ));
         }
 
         Ok(resp[16..16 + length as usize].to_vec())
@@ -116,27 +142,47 @@ pub fn sdio_write(addr: u32, data: &[u8]) -> Result<(), String> {
     unsafe {
         let fd = libc::socket(libc::AF_NETLINK, libc::SOCK_RAW, NETLINK_NEXMON);
         if fd < 0 {
-            return Err(format!("netlink socket failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink socket failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         let mut sa: libc::sockaddr_nl = std::mem::zeroed();
         sa.nl_family = libc::AF_NETLINK as u16;
-        if libc::bind(fd, &sa as *const _ as *const libc::sockaddr,
-                      std::mem::size_of::<libc::sockaddr_nl>() as u32) < 0 {
+        if libc::bind(
+            fd,
+            &sa as *const _ as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_nl>() as u32,
+        ) < 0
+        {
             libc::close(fd);
-            return Err(format!("netlink bind failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink bind failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
-        let tv = libc::timeval { tv_sec: 3, tv_usec: 0 };
-        libc::setsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVTIMEO,
-                         &tv as *const _ as *const libc::c_void,
-                         std::mem::size_of::<libc::timeval>() as u32);
+        let tv = libc::timeval {
+            tv_sec: 3,
+            tv_usec: 0,
+        };
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &tv as *const _ as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as u32,
+        );
 
         let sent = libc::send(fd, frame.as_ptr() as *const libc::c_void, frame.len(), 0);
         libc::close(fd);
 
         if sent < 0 {
-            return Err(format!("netlink send failed: {}", std::io::Error::last_os_error()));
+            return Err(format!(
+                "netlink send failed: {}",
+                std::io::Error::last_os_error()
+            ));
         }
 
         Ok(()) // SET operations: timeout on recv is normal (= success)
@@ -219,11 +265,17 @@ impl FirmwareMonitor {
     pub fn poll(&mut self) -> FirmwareHealth {
         let crash = match sdio_read(ADDR_CRASH_SUPPRESS, 4) {
             Ok(data) if data.len() == 4 => u32::from_le_bytes(data[..4].try_into().unwrap()),
-            _ => { self.health = FirmwareHealth::Unknown; return self.health; }
+            _ => {
+                self.health = FirmwareHealth::Unknown;
+                return self.health;
+            }
         };
         let fault = match sdio_read(ADDR_HARDFAULT, 4) {
             Ok(data) if data.len() == 4 => u32::from_le_bytes(data[..4].try_into().unwrap()),
-            _ => { self.health = FirmwareHealth::Unknown; return self.health; }
+            _ => {
+                self.health = FirmwareHealth::Unknown;
+                return self.health;
+            }
         };
         self.update_counters(crash, fault);
         self.health
@@ -264,7 +316,10 @@ mod tests {
         // set = 0 (GET)
         assert_eq!(u32::from_le_bytes(frame[28..32].try_into().unwrap()), 0);
         // addr = 0x3C094
-        assert_eq!(u32::from_le_bytes(frame[32..36].try_into().unwrap()), 0x3C094);
+        assert_eq!(
+            u32::from_le_bytes(frame[32..36].try_into().unwrap()),
+            0x3C094
+        );
         // length = 4
         assert_eq!(u32::from_le_bytes(frame[36..40].try_into().unwrap()), 4);
     }

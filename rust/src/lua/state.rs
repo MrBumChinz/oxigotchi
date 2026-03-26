@@ -9,7 +9,7 @@ pub struct EpochState {
     pub uptime_secs: u64,
     pub epoch: u64,
     pub mode: String,
-    pub rage_level: u8,  // 0 = Custom/off, 1-7 = active RAGE level
+    pub rage_level: u8, // 0 = Custom/off, 1-7 = active RAGE level
 
     // wifi / AO
     pub channel: u8,

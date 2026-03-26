@@ -101,13 +101,19 @@ mod tests {
     fn test_awake_face_has_pixels() {
         let data = bitmap_for_face(&Face::Awake);
         let black_pixels: u32 = data.iter().map(|b| b.count_ones()).sum();
-        assert!(black_pixels > 100, "awake face should have significant black pixels");
+        assert!(
+            black_pixels > 100,
+            "awake face should have significant black pixels"
+        );
     }
 
     #[test]
     fn test_faces_are_different() {
         let awake = bitmap_for_face(&Face::Awake);
         let sleep = bitmap_for_face(&Face::Sleep);
-        assert_ne!(awake, sleep, "different faces should have different bitmaps");
+        assert_ne!(
+            awake, sleep,
+            "different faces should have different bitmaps"
+        );
     }
 }

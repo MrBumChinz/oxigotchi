@@ -7,10 +7,10 @@
 //!
 //! All Command calls are #[cfg(unix)] gated. On Windows, stubs are used.
 
-#[cfg(unix)]
-use log::{info, warn};
 #[cfg(not(unix))]
 use log::info;
+#[cfg(unix)]
+use log::{info, warn};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -155,7 +155,11 @@ impl ApTracker {
         let is_new = !self.aps.contains_key(&ap.bssid);
         // Mark whitelisted if SSID matches
         let mut ap = ap;
-        if self.ssid_whitelist.iter().any(|s| s.eq_ignore_ascii_case(&ap.ssid)) {
+        if self
+            .ssid_whitelist
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(&ap.ssid))
+        {
             ap.whitelisted = true;
         }
         self.aps.insert(ap.bssid, ap);
@@ -203,9 +207,12 @@ impl ApTracker {
         self.aps.retain(|_, ap| ap.last_seen >= cutoff);
     }
 
-    /// Filter out whitelisted APs, returning only attackable ones.
-    pub fn attackable(&self) -> Vec<&AccessPoint> {
-        self.aps.values().filter(|ap| !ap.whitelisted).collect()
+    /// Filter out whitelisted APs and those below min RSSI, returning only attackable ones.
+    pub fn attackable(&self, min_rssi: i8) -> Vec<&AccessPoint> {
+        self.aps
+            .values()
+            .filter(|ap| !ap.whitelisted && ap.rssi >= min_rssi)
+            .collect()
     }
 
     /// Clear all tracked APs.
@@ -254,69 +261,106 @@ impl IwCommandBuilder {
 
     /// `ip link set wlan0 up`
     pub fn managed_up(&self) -> (&str, Vec<String>) {
-        ("ip", vec![
-            "link".into(), "set".into(),
-            self.managed_iface.clone(), "up".into(),
-        ])
+        (
+            "ip",
+            vec![
+                "link".into(),
+                "set".into(),
+                self.managed_iface.clone(),
+                "up".into(),
+            ],
+        )
     }
 
     /// `iw phy <phy> interface add wlan0mon type monitor`
     pub fn add_monitor(&self) -> (&str, Vec<String>) {
-        ("iw", vec![
-            "phy".into(), self.phy_name.clone(),
-            "interface".into(), "add".into(),
-            self.monitor_iface.clone(),
-            "type".into(), "monitor".into(),
-        ])
+        (
+            "iw",
+            vec![
+                "phy".into(),
+                self.phy_name.clone(),
+                "interface".into(),
+                "add".into(),
+                self.monitor_iface.clone(),
+                "type".into(),
+                "monitor".into(),
+            ],
+        )
     }
 
     /// `ip link set wlan0mon up`
     pub fn monitor_up(&self) -> (&str, Vec<String>) {
-        ("ip", vec![
-            "link".into(), "set".into(),
-            self.monitor_iface.clone(), "up".into(),
-        ])
+        (
+            "ip",
+            vec![
+                "link".into(),
+                "set".into(),
+                self.monitor_iface.clone(),
+                "up".into(),
+            ],
+        )
     }
 
     /// `iw dev wlan0mon set power_save off`
     pub fn power_save_off(&self) -> (&str, Vec<String>) {
-        ("iw", vec![
-            "dev".into(), self.monitor_iface.clone(),
-            "set".into(), "power_save".into(), "off".into(),
-        ])
+        (
+            "iw",
+            vec![
+                "dev".into(),
+                self.monitor_iface.clone(),
+                "set".into(),
+                "power_save".into(),
+                "off".into(),
+            ],
+        )
     }
 
     /// `ip link set wlan0 down`
     pub fn managed_down(&self) -> (&str, Vec<String>) {
-        ("ip", vec![
-            "link".into(), "set".into(),
-            self.managed_iface.clone(), "down".into(),
-        ])
+        (
+            "ip",
+            vec![
+                "link".into(),
+                "set".into(),
+                self.managed_iface.clone(),
+                "down".into(),
+            ],
+        )
     }
 
     /// `iw dev wlan0mon set channel <N>`
     pub fn set_channel(&self, channel: u8) -> (&str, Vec<String>) {
-        ("iw", vec![
-            "dev".into(), self.monitor_iface.clone(),
-            "set".into(), "channel".into(),
-            channel.to_string(),
-        ])
+        (
+            "iw",
+            vec![
+                "dev".into(),
+                self.monitor_iface.clone(),
+                "set".into(),
+                "channel".into(),
+                channel.to_string(),
+            ],
+        )
     }
 
     /// `ip link set wlan0mon down`
     pub fn monitor_down(&self) -> (&str, Vec<String>) {
-        ("ip", vec![
-            "link".into(), "set".into(),
-            self.monitor_iface.clone(), "down".into(),
-        ])
+        (
+            "ip",
+            vec![
+                "link".into(),
+                "set".into(),
+                self.monitor_iface.clone(),
+                "down".into(),
+            ],
+        )
     }
 
     /// `iw dev wlan0mon del`
     pub fn del_monitor(&self) -> (&str, Vec<String>) {
-        ("iw", vec![
-            "dev".into(), self.monitor_iface.clone(),
-            "del".into(),
-        ])
+        (
+            "iw",
+            vec!["dev".into(), self.monitor_iface.clone(), "del".into()],
+        )
     }
 }
 
@@ -407,9 +451,7 @@ pub fn parse_beacon_frame(raw: &[u8], rssi_override: Option<i8>) -> Option<Parse
     // The radiotap "present" bitmask is at bytes 4-7.
     // Bit 5 = dBm Antenna Signal. We do a simplified extraction:
     // walk the present flags and if bit 5 is set, find the offset.
-    let rssi = rssi_override.unwrap_or_else(|| {
-        extract_radiotap_rssi(raw, rt_len).unwrap_or(-128)
-    });
+    let rssi = rssi_override.unwrap_or_else(|| extract_radiotap_rssi(raw, rt_len).unwrap_or(-128));
 
     let dot11 = &raw[rt_len..];
 
@@ -419,7 +461,7 @@ pub fn parse_beacon_frame(raw: &[u8], rssi_override: Option<i8>) -> Option<Parse
     }
 
     let frame_control = dot11[0];
-    let frame_type = frame_control & 0x0C;   // bits 3:2
+    let frame_type = frame_control & 0x0C; // bits 3:2
     let frame_subtype = frame_control & 0xF0; // bits 7:4
 
     // Check for management frame type
@@ -511,7 +553,10 @@ fn extract_radiotap_rssi(raw: &[u8], rt_len: usize) -> Option<i8> {
             return None;
         }
         extra_present = u32::from_le_bytes([
-            raw[offset], raw[offset + 1], raw[offset + 2], raw[offset + 3],
+            raw[offset],
+            raw[offset + 1],
+            raw[offset + 2],
+            raw[offset + 3],
         ]);
         offset += 4;
     }
@@ -569,20 +614,18 @@ fn extract_radiotap_rssi(raw: &[u8], rt_len: usize) -> Option<i8> {
 pub fn build_probe_request() -> Vec<u8> {
     vec![
         // Radiotap header (8 bytes)
-        0x00, 0x00,             // version, pad
-        0x08, 0x00,             // length = 8
+        0x00, 0x00, // version, pad
+        0x08, 0x00, // length = 8
         0x00, 0x00, 0x00, 0x00, // present flags: none
-
         // 802.11 header: probe request (24 bytes)
-        0x40, 0x00,             // frame control: probe request (type=0, subtype=4)
-        0x00, 0x00,             // duration
+        0x40, 0x00, // frame control: probe request (type=0, subtype=4)
+        0x00, 0x00, // duration
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // DA: broadcast
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // SA: zero (anonymous)
         0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, // BSSID: broadcast
-        0x00, 0x00,             // seq/frag
-
+        0x00, 0x00, // seq/frag
         // Tagged parameters
-        0x00, 0x00,             // tag: SSID, length: 0 (wildcard)
+        0x00, 0x00, // tag: SSID, length: 0 (wildcard)
         // Supported rates: 1, 2, 5.5, 11 Mbps
         0x01, 0x04, 0x02, 0x04, 0x0B, 0x16,
     ]
@@ -1015,8 +1058,11 @@ impl ChannelStats {
         let capture_score = (self.captures as f64).min(5.0) / 5.0;
         let curiosity = (self.epochs_since_visit as f64).min(30.0) / 30.0;
 
-        ap_score * 0.35 + rssi_score * 0.2 + client_score * 0.2
-            + capture_score * 0.15 + curiosity * 0.1
+        ap_score * 0.35
+            + rssi_score * 0.2
+            + client_score * 0.2
+            + capture_score * 0.15
+            + curiosity * 0.1
     }
 }
 
@@ -1155,10 +1201,10 @@ mod tests {
         // Verify the exact sequence of channels when hopping through 1,6,11
         let mut cc = ChannelConfig::non_overlapping();
         assert_eq!(cc.current_channel(), 1); // starts at 1
-        assert_eq!(cc.next_channel(), 6);    // hop 1 -> 6
-        assert_eq!(cc.next_channel(), 11);   // hop 2 -> 11
-        assert_eq!(cc.next_channel(), 1);    // hop 3 -> wraps to 1
-        assert_eq!(cc.next_channel(), 6);    // hop 4 -> 6
+        assert_eq!(cc.next_channel(), 6); // hop 1 -> 6
+        assert_eq!(cc.next_channel(), 11); // hop 2 -> 11
+        assert_eq!(cc.next_channel(), 1); // hop 3 -> wraps to 1
+        assert_eq!(cc.next_channel(), 6); // hop 4 -> 6
     }
 
     #[test]
@@ -1217,7 +1263,7 @@ mod tests {
         wl_ap.whitelisted = true;
         tracker.update(wl_ap);
 
-        let attackable = tracker.attackable();
+        let attackable = tracker.attackable(-100);
         assert_eq!(attackable.len(), 1);
         assert_eq!(attackable[0].ssid, "MyHome");
     }
@@ -1266,7 +1312,7 @@ mod tests {
             tracker.update(make_ap(i, &format!("Net{i}"), -(50 + i as i8)));
         }
         assert_eq!(tracker.count(), 20);
-        assert_eq!(tracker.attackable().len(), 20);
+        assert_eq!(tracker.attackable(-100).len(), 20);
     }
 
     #[test]
@@ -1353,9 +1399,18 @@ mod tests {
         let cmd = IwCommandBuilder::new("wlan0", "wlan0mon", "phy0");
         let (prog, args) = cmd.add_monitor();
         assert_eq!(prog, "iw");
-        assert_eq!(args, vec![
-            "phy", "phy0", "interface", "add", "wlan0mon", "type", "monitor"
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                "phy",
+                "phy0",
+                "interface",
+                "add",
+                "wlan0mon",
+                "type",
+                "monitor"
+            ]
+        );
     }
 
     #[test]
@@ -1419,9 +1474,18 @@ mod tests {
         let cmd = IwCommandBuilder::new("wlan1", "wlan1mon", "phy1");
         let (prog, args) = cmd.add_monitor();
         assert_eq!(prog, "iw");
-        assert_eq!(args, vec![
-            "phy", "phy1", "interface", "add", "wlan1mon", "type", "monitor"
-        ]);
+        assert_eq!(
+            args,
+            vec![
+                "phy",
+                "phy1",
+                "interface",
+                "add",
+                "wlan1mon",
+                "type",
+                "monitor"
+            ]
+        );
 
         let (prog, args) = cmd.set_channel(1);
         assert_eq!(prog, "iw");
@@ -1441,33 +1505,24 @@ mod tests {
             cmd.managed_down(),
         ];
 
-        assert_eq!(start_cmds[0].0, "ip");   // ip link set wlan0 up
-        assert_eq!(start_cmds[1].0, "iw");   // iw phy ... add monitor
-        assert_eq!(start_cmds[2].0, "ip");   // ip link set wlan0mon up
-        assert_eq!(start_cmds[3].0, "iw");   // iw dev ... set power_save off
-        assert_eq!(start_cmds[4].0, "ip");   // ip link set wlan0 down
+        assert_eq!(start_cmds[0].0, "ip"); // ip link set wlan0 up
+        assert_eq!(start_cmds[1].0, "iw"); // iw phy ... add monitor
+        assert_eq!(start_cmds[2].0, "ip"); // ip link set wlan0mon up
+        assert_eq!(start_cmds[3].0, "iw"); // iw dev ... set power_save off
+        assert_eq!(start_cmds[4].0, "ip"); // ip link set wlan0 down
 
         // Stop sequence
-        let stop_cmds = vec![
-            cmd.monitor_down(),
-            cmd.del_monitor(),
-            cmd.managed_up(),
-        ];
+        let stop_cmds = vec![cmd.monitor_down(), cmd.del_monitor(), cmd.managed_up()];
 
-        assert_eq!(stop_cmds[0].0, "ip");   // ip link set wlan0mon down
-        assert_eq!(stop_cmds[1].0, "iw");   // iw dev wlan0mon del
-        assert_eq!(stop_cmds[2].0, "ip");   // ip link set wlan0 up
+        assert_eq!(stop_cmds[0].0, "ip"); // ip link set wlan0mon down
+        assert_eq!(stop_cmds[1].0, "iw"); // iw dev wlan0mon del
+        assert_eq!(stop_cmds[2].0, "ip"); // ip link set wlan0 up
     }
 
     // ---- Beacon/probe response parsing tests ----
 
     /// Build a synthetic beacon frame with radiotap header for testing.
-    fn build_test_beacon(
-        bssid: [u8; 6],
-        ssid: &str,
-        channel: u8,
-        rssi: i8,
-    ) -> Vec<u8> {
+    fn build_test_beacon(bssid: [u8; 6], ssid: &str, channel: u8, rssi: i8) -> Vec<u8> {
         let mut frame = Vec::new();
 
         // Radiotap header (16 bytes):
@@ -1760,7 +1815,10 @@ mod tests {
     #[test]
     fn test_parse_whitelist_bssid() {
         let entry = parse_whitelist_entry("AA:BB:CC:DD:EE:FF");
-        assert!(matches!(entry, WhitelistEntry::Bssid([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])));
+        assert!(matches!(
+            entry,
+            WhitelistEntry::Bssid([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF])
+        ));
     }
 
     #[test]
@@ -1811,7 +1869,7 @@ mod tests {
         ap3.whitelisted = is_whitelisted(&ap3, &whitelist);
         tracker.update(ap3);
 
-        let attackable = tracker.attackable();
+        let attackable = tracker.attackable(-100);
         // ap1 whitelisted by SSID, ap2 whitelisted by BSSID, ap3 not whitelisted
         assert_eq!(attackable.len(), 1);
         assert_eq!(attackable[0].ssid, "AlsoTarget");
@@ -1863,8 +1921,8 @@ mod tests {
     fn test_extract_radiotap_rssi_no_signal_bit() {
         // Radiotap with present=0 (no fields)
         let frame = vec![
-            0x00, 0x00, 0x08, 0x00,  // version, pad, length=8
-            0x00, 0x00, 0x00, 0x00,  // present = 0 (no fields)
+            0x00, 0x00, 0x08, 0x00, // version, pad, length=8
+            0x00, 0x00, 0x00, 0x00, // present = 0 (no fields)
         ];
         assert_eq!(extract_radiotap_rssi(&frame, 8), None);
     }
@@ -1897,11 +1955,11 @@ mod tests {
     #[test]
     fn test_channel_scorer_selects_best_channels() {
         let mut scorer = ChannelScorer::new(3);
-        scorer.record_ap(1, -40, 5);   // ch1: strong AP, 5 clients
-        scorer.record_ap(6, -70, 1);   // ch6: weak AP, 1 client
-        scorer.record_ap(11, -50, 3);  // ch11: medium AP, 3 clients
-        scorer.record_ap(1, -45, 2);   // ch1: another AP
-        scorer.record_capture(1);       // ch1: got a handshake
+        scorer.record_ap(1, -40, 5); // ch1: strong AP, 5 clients
+        scorer.record_ap(6, -70, 1); // ch6: weak AP, 1 client
+        scorer.record_ap(11, -50, 3); // ch11: medium AP, 3 clients
+        scorer.record_ap(1, -45, 2); // ch1: another AP
+        scorer.record_capture(1); // ch1: got a handshake
 
         let best = scorer.top_channels();
         assert_eq!(best[0], 1); // ch1 should be #1 (most APs, capture bonus)
@@ -1924,8 +1982,11 @@ mod tests {
         }
         let best = scorer.top_channels();
         // ch11 should appear due to curiosity (30 epochs unvisited = max curiosity)
-        assert!(best.contains(&11),
-            "ch11 should be in top 3 due to curiosity bonus, got {:?}", best);
+        assert!(
+            best.contains(&11),
+            "ch11 should be in top 3 due to curiosity bonus, got {:?}",
+            best
+        );
     }
 
     #[test]
@@ -1956,8 +2017,8 @@ mod tests {
     #[test]
     fn test_channel_scorer_out_of_range_ignored() {
         let mut scorer = ChannelScorer::new(3);
-        scorer.record_ap(0, -40, 5);   // out of range
-        scorer.record_ap(14, -40, 5);  // out of range
+        scorer.record_ap(0, -40, 5); // out of range
+        scorer.record_ap(14, -40, 5); // out of range
         scorer.record_ap(255, -40, 5); // out of range
         scorer.record_capture(0);
         scorer.record_capture(14);

@@ -19,13 +19,55 @@ const SAFE_3: &[u8] = &[1, 6, 11];
 /// Stress-test-validated presets (2026-03-26).
 /// Each step changes exactly one variable from the previous level.
 pub const PRESETS: [RagePreset; 7] = [
-    RagePreset { level: 1, name: "Chill", rate: 1, dwell_ms: 5000, channels: SAFE_3 },
-    RagePreset { level: 2, name: "Lurk",  rate: 1, dwell_ms: 2000, channels: SAFE_3 },
-    RagePreset { level: 3, name: "Prowl", rate: 1, dwell_ms: 2000, channels: ALL_13 },
-    RagePreset { level: 4, name: "Hunt",  rate: 2, dwell_ms: 2000, channels: ALL_13 },
-    RagePreset { level: 5, name: "RAGE",  rate: 2, dwell_ms: 1000, channels: ALL_13 },
-    RagePreset { level: 6, name: "FURY",  rate: 3, dwell_ms: 1000, channels: ALL_13 },
-    RagePreset { level: 7, name: "YOLO",  rate: 3, dwell_ms: 500,  channels: ALL_13 },
+    RagePreset {
+        level: 1,
+        name: "Chill",
+        rate: 1,
+        dwell_ms: 5000,
+        channels: SAFE_3,
+    },
+    RagePreset {
+        level: 2,
+        name: "Lurk",
+        rate: 1,
+        dwell_ms: 2000,
+        channels: SAFE_3,
+    },
+    RagePreset {
+        level: 3,
+        name: "Prowl",
+        rate: 1,
+        dwell_ms: 2000,
+        channels: ALL_13,
+    },
+    RagePreset {
+        level: 4,
+        name: "Hunt",
+        rate: 2,
+        dwell_ms: 2000,
+        channels: ALL_13,
+    },
+    RagePreset {
+        level: 5,
+        name: "RAGE",
+        rate: 2,
+        dwell_ms: 1000,
+        channels: ALL_13,
+    },
+    RagePreset {
+        level: 6,
+        name: "FURY",
+        rate: 3,
+        dwell_ms: 1000,
+        channels: ALL_13,
+    },
+    RagePreset {
+        level: 7,
+        name: "YOLO",
+        rate: 3,
+        dwell_ms: 500,
+        channels: ALL_13,
+    },
 ];
 
 /// Look up a preset by level (1-7). Returns `None` for out-of-range.
@@ -76,7 +118,13 @@ mod tests {
                 prev.channels != curr.channels,
             ];
             let diff_count: usize = diffs.iter().filter(|&&d| d).count();
-            assert_eq!(diff_count, 1, "level {i} changes {} variables from level {} (expected 1)", diff_count, i - 1);
+            assert_eq!(
+                diff_count,
+                1,
+                "level {i} changes {} variables from level {} (expected 1)",
+                diff_count,
+                i - 1
+            );
         }
     }
 }

@@ -22,7 +22,9 @@ pub struct PluginEntry {
     pub y: i32,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 const PLUGINS_TOML_PATH: &str = "/etc/oxigotchi/plugins.toml";
 
@@ -53,14 +55,17 @@ pub fn merge_with_defaults(
     defaults: Vec<super::PluginConfig>,
     toml: &PluginsToml,
 ) -> Vec<super::PluginConfig> {
-    defaults.into_iter().map(|mut cfg| {
-        if let Some(entry) = toml.plugins.get(&cfg.name) {
-            cfg.enabled = entry.enabled;
-            cfg.x = entry.x;
-            cfg.y = entry.y;
-        }
-        cfg
-    }).collect()
+    defaults
+        .into_iter()
+        .map(|mut cfg| {
+            if let Some(entry) = toml.plugins.get(&cfg.name) {
+                cfg.enabled = entry.enabled;
+                cfg.x = entry.x;
+                cfg.y = entry.y;
+            }
+            cfg
+        })
+        .collect()
 }
 
 /// Write current plugin state to plugins.toml.
@@ -71,11 +76,14 @@ pub fn write_plugins_toml(configs: &[(String, bool, i32, i32)]) {
 
     // Update/add entries for loaded plugins
     for (name, enabled, x, y) in configs {
-        pt.plugins.insert(name.clone(), PluginEntry {
-            enabled: *enabled,
-            x: *x,
-            y: *y,
-        });
+        pt.plugins.insert(
+            name.clone(),
+            PluginEntry {
+                enabled: *enabled,
+                x: *x,
+                y: *y,
+            },
+        );
     }
     match toml::to_string_pretty(&pt) {
         Ok(s) => {
@@ -99,9 +107,14 @@ mod tests {
         ];
         let mut pt = PluginsToml::default();
         for (name, enabled, x, y) in &configs {
-            pt.plugins.insert(name.clone(), PluginEntry {
-                enabled: *enabled, x: *x, y: *y,
-            });
+            pt.plugins.insert(
+                name.clone(),
+                PluginEntry {
+                    enabled: *enabled,
+                    x: *x,
+                    y: *y,
+                },
+            );
         }
         let s = toml::to_string_pretty(&pt).unwrap();
         let parsed: PluginsToml = toml::from_str(&s).unwrap();
@@ -116,7 +129,14 @@ mod tests {
             super::super::PluginConfig::default_for("uptime", 185, 0),
         ];
         let mut pt = PluginsToml::default();
-        pt.plugins.insert("battery".into(), PluginEntry { enabled: true, x: 150, y: 112 });
+        pt.plugins.insert(
+            "battery".into(),
+            PluginEntry {
+                enabled: true,
+                x: 150,
+                y: 112,
+            },
+        );
         // uptime not in TOML — should keep default
 
         let merged = merge_with_defaults(defaults, &pt);

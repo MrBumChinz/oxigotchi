@@ -412,13 +412,13 @@ mod tests {
 
     #[test]
     fn test_time_of_day() {
-        assert_eq!(time_of_day_face(3), Some("sleep"));    // 3am
+        assert_eq!(time_of_day_face(3), Some("sleep")); // 3am
         assert_eq!(time_of_day_face(7), Some("motivated")); // 7am morning
-        assert_eq!(time_of_day_face(14), None);              // midday
-        assert_eq!(time_of_day_face(22), Some("cool"));      // 10pm
-        assert_eq!(time_of_day_face(0), Some("cool"));       // midnight
-        assert_eq!(time_of_day_face(5), Some("sleep"));      // 5am
-        assert_eq!(time_of_day_face(9), None);               // 9am (past morning)
+        assert_eq!(time_of_day_face(14), None); // midday
+        assert_eq!(time_of_day_face(22), Some("cool")); // 10pm
+        assert_eq!(time_of_day_face(0), Some("cool")); // midnight
+        assert_eq!(time_of_day_face(5), Some("sleep")); // 5am
+        assert_eq!(time_of_day_face(9), None); // 9am (past morning)
     }
 
     #[test]

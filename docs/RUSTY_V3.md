@@ -48,7 +48,7 @@ Everything auto-refreshes — you never need to hit reload.
 
 ### Dashboard Cards
 
-The dashboard has 22 live cards:
+The dashboard has 23 live cards:
 
 | # | Card | What it shows | Refresh |
 |---|------|--------------|---------|
@@ -58,28 +58,45 @@ The dashboard has 22 live cards:
 | 4 | **Battery** | Level, charging state, voltage, progress bar | 15s |
 | 5 | **Bluetooth** | Connection status, device name, IP address | 15s |
 | 6 | **WiFi** | Monitor mode state, current channel, tracked APs, channel list, dwell time | 5s |
-| 7 | **Attack Types** | 6 toggle switches (deauth, PMKID, CSA, disassociation, anon reassoc, rogue M2) plus attack rate selector (1-3) | 10s |
-| 8 | **Recent Captures** | Capture file count, handshake count, pending uploads, total size | 30s |
-| 9 | **Recovery Status** | WiFi/AO/Recovery/GPS health dots, crash count, AO PID and uptime | 15s |
-| 10 | **Personality** | Mood percentage, current face, XP, level, blind epochs | 10s |
-| 11 | **System Info** | CPU temp, CPU usage, memory, disk, system uptime, GPS status | 15s |
-| 12 | **Cracked Passwords** | Passwords cracked from captured handshakes (SSID, BSSID, password) | 60s |
-| 13 | **Download Captures** | "Download All (ZIP)" button plus individual file download links | 30s |
-| 14 | **Mode Switch** | RAGE / SAFE toggle buttons | via status |
-| 15 | **Actions** | Restart AO, Shutdown Pi, Restart Pwnagotchi, Restart Pi, Restart SSH | on-demand |
-| 16 | **Plugins** | Toggle plugins on/off, edit x/y positions, shows version/author/tag | 15s |
-| 17 | **Nearby Networks** | AP list sorted by signal strength — SSID, BSSID, RSSI, channel, client count, handshake status | 10s |
-| 18 | **Whitelist** | View/add/remove MAC addresses and SSIDs excluded from attacks | 30s |
-| 19 | **Channel Config** | Set scan channels (comma-separated) and dwell time slider (500-10000ms) | via WiFi |
-| 20 | **WPA-SEC Upload** | Enter API key, view upload status | 30s |
-| 21 | **Discord Notifications** | Enable/disable toggle, webhook URL input | 30s |
-| 22 | **Logs** | Collapsible live log viewer (daemon journal output) | 10s |
+| 7 | **RAGE Slider** | 7-level aggression preset (Chill→YOLO), toggle on/off, YOLO disclaimer | instant |
+| 8 | **Attack Types** | 6 toggle switches (deauth, PMKID, CSA, disassociation, anon reassoc, rogue M2) plus attack rate selector (1-3) | 10s |
+| 9 | **Recent Captures** | Capture file count, handshake count, pending uploads, total size | 30s |
+| 10 | **Recovery Status** | WiFi/AO/Recovery/GPS health dots, crash count, AO PID and uptime | 15s |
+| 11 | **Personality** | Mood percentage, current face, XP, level, blind epochs | 10s |
+| 12 | **System Info** | CPU temp, CPU usage, memory, disk, system uptime, GPS status | 15s |
+| 13 | **Cracked Passwords** | Passwords cracked from captured handshakes (SSID, BSSID, password) | 60s |
+| 14 | **Download Captures** | "Download All (ZIP)" button plus individual file download links | 30s |
+| 15 | **Mode Switch** | RAGE / SAFE toggle buttons | via status |
+| 16 | **Actions** | Restart AO, Shutdown Pi, Restart Pwnagotchi, Restart Pi, Restart SSH | on-demand |
+| 17 | **Plugins** | Toggle plugins on/off, edit x/y positions, shows version/author/tag | 15s |
+| 18 | **Nearby Networks** | AP list sorted by signal strength — SSID, BSSID, RSSI, channel, client count, handshake status | 10s |
+| 19 | **Whitelist** | View/add/remove MAC addresses and SSIDs excluded from attacks | 30s |
+| 20 | **Channel Config** | Set scan channels (comma-separated) and dwell time slider (500-10000ms) | via WiFi |
+| 21 | **WPA-SEC Upload** | Enter API key, view upload status | 30s |
+| 22 | **Discord Notifications** | Enable/disable toggle, webhook URL input | 30s |
+| 23 | **Logs** | Collapsible live log viewer (daemon journal output) | 10s |
 
 ### Using the Dashboard
 
+**RAGE Slider:** The fastest way to tune aggression. Flip the toggle ON and slide between 7 presets — each level changes exactly one variable from the previous, so you can isolate what works in your environment:
+
+| Level | Name | Rate | Dwell | Channels | Notes |
+|-------|------|------|-------|----------|-------|
+| 1 | Chill | 1 | 5000ms | 1,6,11 | Battery saver |
+| 2 | Lurk | 1 | 2000ms | 1,6,11 | Faster hopping |
+| 3 | Prowl | 1 | 2000ms | All 13 | Full channel coverage |
+| 4 | Hunt | 2 | 2000ms | All 13 | Double attack rate |
+| 5 | RAGE | 2 | 1000ms | All 13 | Faster hopping at rate 2 |
+| 6 | FURY | 3 | 1000ms | All 13 | Max attack rate |
+| 7 | YOLO | 3 | 500ms | All 13 | Only known crash combo |
+
+All levels except YOLO are stress-test-validated stable (BCM43436B0, v6 firmware, 2 min each). YOLO crashed AO at 50 seconds — the daemon auto-recovered. An orange disclaimer appears at level 7.
+
+Touching any individual control (rate buttons, channel toggles, dwell slider, autohunt) breaks out to Custom mode — the RAGE toggle flips off and those controls take over. Flip RAGE back on anytime to snap to the slider's current level. The active level persists across reboots.
+
 **Attack types:** All 6 attack types are on by default. They complement each other — leaving them all enabled gives the best capture rate. You can toggle individual types off if you want to reduce your footprint.
 
-**Attack rate:** Rate 1 is the safe default for the BCM43436B0 WiFi chip. Rates 2 and 3 are marked "Risky" and "Danger" because they increase the chance of firmware crashes. Stick with 1 unless you know what you are doing.
+**Attack rate:** Rate 1 is the safe default. Rates 2 and 3 are stable with the v6 firmware patch. Use the RAGE Slider for validated rate/dwell/channel combos, or set rates manually.
 
 **Mode switch:** Tap RAGE or SAFE. The switch happens at the next epoch boundary (up to ~30 seconds). The face and indicators will update when the switch completes.
 
@@ -161,7 +178,7 @@ The e-ink display is a 250x122 pixel Waveshare 2.13" V4 (1-bit monochrome, black
 - **XP bar** — level and experience progress
 - **System stats** — memory, CPU, frequency, temperature
 - **IP address** — your USB tether IP. In SAFE mode, rotates between USB and BT IPs every 5 seconds
-- **Bottom bar** — crash count, internet indicator, BT status, battery level, AP count, current mode
+- **Bottom bar** — crash count, internet indicator, BT status, battery level, current mode (shows `RAGE:N` when slider active, `RAGE` in custom, `SAFE` in safe mode)
 
 ### Mood Faces
 
@@ -194,7 +211,7 @@ Oxigotchi has 26 unique bull face expressions. The current face depends on mood 
 |                    |  mem  cpu freq temp                 |  y=85 SYS
 | USB:192.168.137.2  |  42%  12% 1.0G 45C                 |  y=95 SYS VALUES
 |---------------------------------------------------------|  y=108 HLINE
-| CRASH:0  WWW  BT:C  BAT:85%    APs:15            RAGE  |  y=112 BOTTOM BAR
+| CRASH:0  WWW  BT:C  BAT:85%    APs:15          RAGE:4  |  y=112 BOTTOM BAR
 +---------------------------------------------------------+
 ```
 
@@ -438,7 +455,7 @@ Changes take effect at the next epoch.
 
 Dwell time is how long AngryOxide stays on each channel before hopping. AngryOxide's autohunt mode (`CH:AH` on the display) automatically dwells longer on channels with active networks.
 
-**Warning:** Keep dwell time at 5000ms or higher if you are scanning many channels. Short dwell times with rapid channel hopping can trigger BCM43436B0 firmware crashes. The dashboard shows a warning about this.
+With the v6 firmware patch, all dwell/channel combinations are stable. The only known crash is rate 3 + 500ms dwell + all 13 channels simultaneously. Lower dwell times mean faster channel hopping and quicker AP discovery, but less time to capture traffic on each channel.
 
 ### 5GHz Channels
 

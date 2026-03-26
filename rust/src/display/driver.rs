@@ -2,7 +2,6 @@
 ///
 /// On `aarch64` (Raspberry Pi), uses real rppal SPI/GPIO.
 /// On other platforms, uses a mock backend for testing.
-
 use std::cell::{Cell, RefCell};
 
 use super::buffer::FrameBuffer;
@@ -324,6 +323,8 @@ pub struct Ssd1680Driver<H: Ssd1680Hal> {
     /// Rotation in degrees (0, 180). Only 0 and 180 are supported for
     /// the 2.13" V4 since the SSD1680 scanline direction is fixed.
     pub rotation: u16,
+    /// Whether to invert the display colors (0x80 = inverted source output).
+    pub invert: bool,
     /// Counter for partial refreshes since last full refresh.
     pub partial_count: u32,
 }
@@ -332,15 +333,17 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
     /// Create a new driver wrapping the given HAL.
     /// `rotation` must be 0 or 180; other values default to 0.
     pub fn new(hal: H, rotation: u16) -> Self {
-        // The display is physically 122 x 250. In our logical space
-        // (matching pwnagotchi conventions), we expose it as 250 x 122
-        // (landscape). Rotation=180 flips the image but keeps the same
-        // logical dimensions.
+        Self::with_invert(hal, rotation, true)
+    }
+
+    /// Create a new driver with explicit invert setting.
+    pub fn with_invert(hal: H, rotation: u16, invert: bool) -> Self {
         Self {
             hal,
-            width: EPD_HEIGHT,  // 250 (landscape)
-            height: EPD_WIDTH,  // 122 (landscape)
+            width: EPD_HEIGHT, // 250 (landscape)
+            height: EPD_WIDTH, // 122 (landscape)
             rotation: if rotation == 180 { 180 } else { 0 },
+            invert,
             partial_count: 0,
         }
     }
@@ -366,8 +369,7 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
 
         // Set RAM window
         self.hal.send_command(CMD_SET_RAM_X_RANGE)?;
-        self.hal
-            .send_data(&[0x00, (EPD_WIDTH_BYTES - 1) as u8])?;
+        self.hal.send_data(&[0x00, (EPD_WIDTH_BYTES - 1) as u8])?;
 
         self.hal.send_command(CMD_SET_RAM_Y_RANGE)?;
         self.hal.send_data(&[0x00, 0x00, 0xF9, 0x00])?;
@@ -379,7 +381,7 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
         self.hal.send_command(CMD_BORDER_WAVEFORM)?;
         self.hal.send_data(&[0x05])?;
 
-        // Display update control 1: normal RAM, inverted source output
+        // Display update control 1: normal RAM, source output mode (always 0x80, matches Python)
         self.hal.send_command(CMD_DISPLAY_UPDATE_CTRL1)?;
         self.hal.send_data(&[0x00, 0x80])?;
 
@@ -454,8 +456,13 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
     /// clean e-ink state and border.
     pub fn clear(&mut self) -> Result<(), String> {
         let white = vec![0xFFu8; (EPD_WIDTH_BYTES * EPD_HEIGHT) as usize];
+        // Clear BW RAM
         self.set_ram_cursor(0, 0)?;
         self.hal.send_command(CMD_WRITE_RAM_BW)?;
+        self.hal.send_data(&white)?;
+        // Clear RED RAM too (prevents edge artifacts on partial refresh after reinit)
+        self.set_ram_cursor(0, 0)?;
+        self.hal.send_command(CMD_WRITE_RAM_RED)?;
         self.hal.send_data(&white)?;
         self.hal.send_command(CMD_DISPLAY_UPDATE_CTRL2)?;
         self.hal.send_data(&[UPDATE_FULL])?;
@@ -508,11 +515,14 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
         self.hal.send_data(&[0x03])?;
 
         self.hal.send_command(CMD_SET_RAM_X_RANGE)?;
-        self.hal
-            .send_data(&[0x00, (EPD_WIDTH_BYTES - 1) as u8])?;
+        self.hal.send_data(&[0x00, (EPD_WIDTH_BYTES - 1) as u8])?;
 
         self.hal.send_command(CMD_SET_RAM_Y_RANGE)?;
         self.hal.send_data(&[0x00, 0x00, 0xF9, 0x00])?;
+
+        // Re-send display update control 1 (lost after partial reset, always 0x80 like Python)
+        self.hal.send_command(CMD_DISPLAY_UPDATE_CTRL1)?;
+        self.hal.send_data(&[0x00, 0x80])?;
 
         self.set_ram_cursor(0, 0)?;
 
@@ -588,11 +598,30 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
             }
         }
 
+        // When invert=false (black on white), flip all bits so the hardware
+        // source output inversion (0x80, always on) produces normal polarity.
+        if !self.invert {
+            for byte in out.iter_mut() {
+                *byte ^= 0xFF;
+            }
+        }
+
         out
     }
 }
 
 // ── Public convenience function (backward-compatible) ───────────────
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Flag to force a full display reinit on next flush.
+static DISPLAY_REINIT: AtomicBool = AtomicBool::new(false);
+
+/// Request a full display reinit on the next flush cycle.
+/// Used when display settings (invert, rotation) change at runtime.
+pub fn request_reinit() {
+    DISPLAY_REINIT.store(true, Ordering::Relaxed);
+}
 
 /// Send the framebuffer to the Waveshare 2.13" V4 e-ink display via SPI.
 ///
@@ -605,15 +634,26 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
 
     static DRIVER: Mutex<Option<Ssd1680Driver<RppalHal>>> = Mutex::new(None);
 
+    // Check if a reinit was requested (display settings changed)
+    if DISPLAY_REINIT.swap(false, Ordering::Relaxed) {
+        let mut guard = DRIVER.lock().map_err(|e| format!("driver lock: {e}"))?;
+        log::info!("display: reinit requested (settings changed)");
+        *guard = None;
+        drop(guard);
+    }
+
     let mut guard = DRIVER.lock().map_err(|e| format!("driver lock: {e}"))?;
 
     let start = Instant::now();
     match guard.as_mut() {
         None => {
             // First call (or recovery): full init + clear + base image
-            log::info!("display: init + clear + base (rotation={})", config.rotation);
+            log::info!(
+                "display: init + clear + base (rotation={})",
+                config.rotation
+            );
             let hal = RppalHal::new()?;
-            let mut driver = Ssd1680Driver::new(hal, config.rotation);
+            let mut driver = Ssd1680Driver::with_invert(hal, config.rotation, config.invert);
             driver.init()?;
             driver.clear()?;
             driver.flush_base(fb)?;
@@ -629,7 +669,11 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
             }
             driver.partial_count += 1;
             if driver.partial_count % 50 == 0 {
-                log::info!("display: partial refresh #{} OK ({:.0}ms)", driver.partial_count, start.elapsed().as_millis());
+                log::info!(
+                    "display: partial refresh #{} OK ({:.0}ms)",
+                    driver.partial_count,
+                    start.elapsed().as_millis()
+                );
             }
         }
     }
@@ -660,6 +704,7 @@ mod tests {
             enabled: true,
             display_type: "waveshare_4".into(),
             rotation,
+            invert: true,
         }
     }
 
@@ -852,7 +897,10 @@ mod tests {
         );
 
         // First scanline byte 0 should be untouched
-        assert_eq!(data[0], 0xFF, "physical scanline 0 byte 0 should be untouched");
+        assert_eq!(
+            data[0], 0xFF,
+            "physical scanline 0 byte 0 should be untouched"
+        );
     }
 
     #[test]
@@ -1363,6 +1411,63 @@ mod tests {
             last,
             &vec![UPDATE_PARTIAL],
             "flush_partial should trigger partial update (0xFF)"
+        );
+    }
+
+    #[test]
+    fn test_flush_partial_resends_ctrl1() {
+        // CMD_DISPLAY_UPDATE_CTRL1 should always be [0x00, 0x80] regardless of invert
+        let mut drv = Ssd1680Driver::new(MockHal::new(), 0);
+        drv.init().unwrap();
+        let pre_len = drv.hal.snapshot().len();
+        drv.flush_partial(&make_fb()).unwrap();
+        let snap = drv.hal.snapshot();
+        let flush_transfers = &snap[pre_len..];
+        let ctrl1_idx = flush_transfers
+            .iter()
+            .position(|t| *t == SpiTransfer::Command(CMD_DISPLAY_UPDATE_CTRL1))
+            .expect("flush_partial must re-send DISPLAY_UPDATE_CTRL1 after partial reset");
+        assert_eq!(
+            flush_transfers[ctrl1_idx + 1],
+            SpiTransfer::Data(vec![0x00, 0x80]),
+            "ctrl1 must always be [0x00, 0x80] (matches Python driver)"
+        );
+    }
+
+    #[test]
+    fn test_invert_false_flips_spi_data() {
+        let fb = make_fb(); // all white
+        let drv_inv = Ssd1680Driver::new(MockHal::new(), 0); // invert=true
+        let drv_noinv = Ssd1680Driver::with_invert(MockHal::new(), 0, false);
+        let data_inv = drv_inv.prepare_spi_data(&fb);
+        let data_noinv = drv_noinv.prepare_spi_data(&fb);
+        // With invert=true (default), all-white fb → all 0xFF in SPI data
+        assert!(data_inv.iter().all(|&b| b == 0xFF), "invert=true, white fb should be all 0xFF");
+        // With invert=false, all bits should be flipped
+        assert!(data_noinv.iter().all(|&b| b == 0x00), "invert=false, white fb should be all 0x00");
+    }
+
+    #[test]
+    fn test_clear_writes_both_bw_and_red_ram() {
+        let mut drv = Ssd1680Driver::new(MockHal::new(), 0);
+        drv.init().unwrap();
+        let pre_len = drv.hal.snapshot().len();
+        drv.clear().unwrap();
+        let snap = drv.hal.snapshot();
+        let clear_cmds: Vec<u8> = snap[pre_len..]
+            .iter()
+            .filter_map(|t| match t {
+                SpiTransfer::Command(c) => Some(*c),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            clear_cmds.contains(&CMD_WRITE_RAM_BW),
+            "clear must write BW RAM"
+        );
+        assert!(
+            clear_cmds.contains(&CMD_WRITE_RAM_RED),
+            "clear must write RED RAM to prevent edge artifacts"
         );
     }
 }

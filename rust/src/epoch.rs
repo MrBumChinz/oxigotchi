@@ -130,14 +130,10 @@ impl EpochLoop {
                 "Scanning... CH {} | {} APs",
                 self.metrics.channel, self.metrics.aps_this_epoch
             ),
-            EpochPhase::Attack => format!(
-                "Attacking... {} deauths",
-                self.metrics.deauths_this_epoch
-            ),
-            EpochPhase::Capture => format!(
-                "Capturing... {} handshakes",
-                self.metrics.handshakes
-            ),
+            EpochPhase::Attack => {
+                format!("Attacking... {} deauths", self.metrics.deauths_this_epoch)
+            }
+            EpochPhase::Capture => format!("Capturing... {} handshakes", self.metrics.handshakes),
             EpochPhase::Display => self.personality.mood.status_message().to_string(),
             EpochPhase::Sleep => "Sleeping...".to_string(),
         }

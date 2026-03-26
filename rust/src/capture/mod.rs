@@ -29,7 +29,7 @@ fn parse_22000_metadata(pcapng_path: &Path) -> ([u8; 6], String) {
         if hex.len() == 12 {
             let mut b = [0u8; 6];
             for i in 0..6 {
-                b[i] = u8::from_str_radix(&hex[i*2..i*2+2], 16).unwrap_or(0);
+                b[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
             }
             b
         } else {
@@ -39,8 +39,8 @@ fn parse_22000_metadata(pcapng_path: &Path) -> ([u8; 6], String) {
     // Field 5 = SSID (hex-encoded)
     let ssid = {
         let hex = fields[5];
-        let bytes: Vec<u8> = (0..hex.len()/2)
-            .filter_map(|i| u8::from_str_radix(&hex[i*2..i*2+2], 16).ok())
+        let bytes: Vec<u8> = (0..hex.len() / 2)
+            .filter_map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
             .collect();
         String::from_utf8(bytes).unwrap_or_default()
     };
@@ -292,10 +292,15 @@ impl CaptureManager {
                 for i in 0..6 {
                     match u8::from_str_radix(&bssid_hex[i * 2..i * 2 + 2], 16) {
                         Ok(b) => bssid[i] = b,
-                        Err(_) => { ok = false; break; }
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
-                if !ok { continue; }
+                if !ok {
+                    continue;
+                }
                 // Keep latest (last) RSSI per BSSID (lts output is chronological)
                 self.bssid_rssi.insert(bssid, rssi_raw);
                 // Backfill SSID on any capture file that has a zeroed/empty SSID
@@ -672,7 +677,11 @@ pub fn fetch_cracked_from_wpasec(config: &WpaSecConfig) -> Vec<(String, String, 
                 .filter_map(|line| {
                     let parts: Vec<&str> = line.splitn(3, ':').collect();
                     if parts.len() == 3 && !parts[2].is_empty() {
-                        Some((parts[0].to_string(), parts[1].to_string(), parts[2].to_string()))
+                        Some((
+                            parts[0].to_string(),
+                            parts[1].to_string(),
+                            parts[2].to_string(),
+                        ))
                     } else {
                         None
                     }
@@ -846,11 +855,7 @@ pub fn attack_all_captures(
     store: &mut CrackedPasswordStore,
 ) -> Vec<(PathBuf, String)> {
     let mut cracked = Vec::new();
-    let already_cracked: Vec<String> = store
-        .passwords
-        .iter()
-        .map(|p| p.ssid.clone())
-        .collect();
+    let already_cracked: Vec<String> = store.passwords.iter().map(|p| p.ssid.clone()).collect();
 
     for file in &manager.files {
         // Skip files already cracked (by SSID match) or already uploaded
@@ -983,7 +988,10 @@ pub fn list_downloadable_captures(capture_dir: &Path) -> Result<Vec<PathBuf>, St
         .map_err(|e| format!("Failed to read {}: {e}", capture_dir.display()))?;
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "pcapng" || ext == "pcap") {
+        if path
+            .extension()
+            .is_some_and(|ext| ext == "pcapng" || ext == "pcap")
+        {
             files.push(path);
         }
     }
@@ -1068,11 +1076,7 @@ pub fn auto_backup(
         .arg("-czf")
         .arg(&tarball)
         .arg("-C")
-        .arg(
-            capture_dir
-                .parent()
-                .unwrap_or(Path::new("/")),
-        )
+        .arg(capture_dir.parent().unwrap_or(Path::new("/")))
         .arg(
             capture_dir
                 .file_name()
@@ -1153,15 +1157,19 @@ pub fn move_validated_captures(
                     let _ = fs::remove_file(&path);
                     let _ = fs::remove_file(&companion);
                     moved += 1;
-                    log::info!("capture: moved validated {} to SD",
-                        path.file_name().unwrap().to_string_lossy());
+                    log::info!(
+                        "capture: moved validated {} to SD",
+                        path.file_name().unwrap().to_string_lossy()
+                    );
                 }
             } else {
                 // Check if conversion was attempted (file is old enough).
                 // Only delete if file hasn't been modified in last 60 seconds
                 // (give batch_convert time to process it first).
                 if let Ok(meta) = path.metadata() {
-                    let age = meta.modified().ok()
+                    let age = meta
+                        .modified()
+                        .ok()
                         .and_then(|m| m.elapsed().ok())
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
@@ -1212,7 +1220,8 @@ mod tests {
 
     /// Helper: create a temp directory with some fake pcapng files.
     fn make_temp_captures(prefix: &str, count: usize) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("oxigotchi_test_{prefix}_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("oxigotchi_test_{prefix}_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         for i in 0..count {
@@ -1679,7 +1688,8 @@ mod tests {
 
     #[test]
     fn test_has_22000_companion() {
-        let dir = std::env::temp_dir().join(format!("oxigotchi_test_companion_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("oxigotchi_test_companion_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 
@@ -1902,14 +1912,19 @@ mod tests {
 
     #[test]
     fn test_cracked_password_save_load() {
-        let dir = std::env::temp_dir().join(format!("oxigotchi_test_cracked_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("oxigotchi_test_cracked_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cracked.txt");
 
         // Save
         let mut store = CrackedPasswordStore::new();
-        store.add("HomeWifi", "mypassword", [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+        store.add(
+            "HomeWifi",
+            "mypassword",
+            [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF],
+        );
         store.add("OfficeNet", "secret123", [0; 6]);
         store.save_to_file(&path).unwrap();
 
@@ -1930,13 +1945,18 @@ mod tests {
     #[test]
     fn test_cracked_password_load_nonexistent() {
         let mut store = CrackedPasswordStore::new();
-        let count = store.load_from_file(Path::new("/nonexistent/cracked.txt")).unwrap();
+        let count = store
+            .load_from_file(Path::new("/nonexistent/cracked.txt"))
+            .unwrap();
         assert_eq!(count, 0);
     }
 
     #[test]
     fn test_cracked_password_load_empty_file() {
-        let dir = std::env::temp_dir().join(format!("oxigotchi_test_crackedempty_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "oxigotchi_test_crackedempty_{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cracked.txt");
@@ -1952,7 +1972,10 @@ mod tests {
 
     #[test]
     fn test_cracked_password_load_with_blank_lines() {
-        let dir = std::env::temp_dir().join(format!("oxigotchi_test_crackedblank_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "oxigotchi_test_crackedblank_{}",
+            std::process::id()
+        ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("cracked.txt");
