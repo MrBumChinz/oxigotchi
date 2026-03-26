@@ -12,16 +12,16 @@ mod display;
 mod epoch;
 mod firmware;
 mod gpu;
+mod lua;
+mod migration;
+mod network;
 mod personality;
 mod pisugar;
-mod network;
 mod radio;
+mod rage;
 mod recovery;
-mod migration;
 mod web;
 mod wifi;
-mod lua;
-mod rage;
 
 use chrono::Timelike;
 use log::info;
@@ -96,6 +96,7 @@ struct Daemon {
     radio: radio::RadioManager,
     firmware_monitor: firmware::FirmwareMonitor,
     gpu_state: gpu::state::gpu_state::GpuFeatureState,
+    gpu_runtime_ingestor: gpu::runtime::ingest::GpuRuntimeIngestor,
     gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer,
     mode: OperatingMode,
     shared_state: web::SharedState,
@@ -122,7 +123,11 @@ struct Daemon {
 }
 
 impl Daemon {
-    fn new(config: config::Config, shared_state: web::SharedState, ws_tx: tokio::sync::broadcast::Sender<String>) -> Self {
+    fn new(
+        config: config::Config,
+        shared_state: web::SharedState,
+        ws_tx: tokio::sync::broadcast::Sender<String>,
+    ) -> Self {
         let screen = display::Screen::new(config.display.clone());
         let epoch_loop = epoch::EpochLoop::new(Duration::from_secs(EPOCH_DURATION_SECS));
         let wifi = wifi::WifiManager::new();
@@ -180,6 +185,7 @@ impl Daemon {
                 mode: gpu_mode,
                 ..gpu::state::gpu_state::GpuFeatureState::default()
             },
+            gpu_runtime_ingestor: gpu::runtime::ingest::GpuRuntimeIngestor::new(),
             gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer::new(),
             mode: OperatingMode::Rage,
             shared_state,
@@ -207,10 +213,10 @@ impl Daemon {
         let (xp, mood) = personality::XpTracker::load(xp_path);
         self.epoch_loop.personality.xp = xp;
         self.epoch_loop.personality.mood = personality::Mood::new(mood);
-        info!("loaded XP: Lv {} ({} xp), mood {:.2}",
-            self.epoch_loop.personality.xp.level,
-            self.epoch_loop.personality.xp.xp_total,
-            mood);
+        info!(
+            "loaded XP: Lv {} ({} xp), mood {:.2}",
+            self.epoch_loop.personality.xp.level, self.epoch_loop.personality.xp.xp_total, mood
+        );
 
         // Display boot screen with debug face (Feature 7: debug on boot)
         let boot_face_key = self.epoch_loop.personality.variety.boot_face();
@@ -224,7 +230,8 @@ impl Daemon {
         // Face: 120x66, centered horizontally: x = (250-120)/2 = 65
         self.screen.draw_bitmap(
             display::faces::bitmap_for_face(&boot_face),
-            65, 5,
+            65,
+            5,
             display::faces::FACE_WIDTH,
             display::faces::FACE_HEIGHT,
         );
@@ -273,7 +280,9 @@ impl Daemon {
             Ok(()) => info!("WiFi monitor mode started"),
             Err(e) => {
                 log::error!("Failed to start WiFi monitor: {e}");
-                self.epoch_loop.personality.set_override(personality::Face::WifiDown);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::WifiDown);
             }
         }
 
@@ -285,17 +294,17 @@ impl Daemon {
 
         // Load Lua plugins — read persisted positions from plugins.toml, fall back to defaults
         let plugin_defaults = vec![
-            lua::PluginConfig::default_for("ao_status",  0,   0),
-            lua::PluginConfig::default_for("aps",        178, 112),
-            lua::PluginConfig::default_for("uptime",     178, 0),
+            lua::PluginConfig::default_for("ao_status", 0, 0),
+            lua::PluginConfig::default_for("aps", 178, 112),
+            lua::PluginConfig::default_for("uptime", 178, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
-            lua::PluginConfig::default_for("sys_stats",  125, 85),
-            lua::PluginConfig::default_for("ip_display", 0,   95),
-            lua::PluginConfig::default_for("crash",      0,   112),
-            lua::PluginConfig::default_for("www",        48,  112),
-            lua::PluginConfig::default_for("bt_status",  86,  112),
-            lua::PluginConfig::default_for("battery",    118, 112),
-            lua::PluginConfig::default_for("mode",       222, 112),
+            lua::PluginConfig::default_for("sys_stats", 125, 85),
+            lua::PluginConfig::default_for("ip_display", 0, 95),
+            lua::PluginConfig::default_for("crash", 0, 112),
+            lua::PluginConfig::default_for("www", 48, 112),
+            lua::PluginConfig::default_for("bt_status", 86, 112),
+            lua::PluginConfig::default_for("battery", 118, 112),
+            lua::PluginConfig::default_for("mode", 222, 112),
         ];
         let plugin_configs = match lua::config::read_plugins_toml() {
             Some(pt) => {
@@ -304,7 +313,9 @@ impl Daemon {
             }
             None => plugin_defaults,
         };
-        let loaded = self.lua.load_plugins_from_dir("/etc/oxigotchi/plugins", &plugin_configs);
+        let loaded = self
+            .lua
+            .load_plugins_from_dir("/etc/oxigotchi/plugins", &plugin_configs);
         info!("loaded {loaded} Lua plugin(s)");
 
         // Start watching plugin directory for hot-reload
@@ -333,10 +344,16 @@ impl Daemon {
         // Point AO output to tmpfs (verified mode) or SD directly (collect-all mode).
         if self.capture_all {
             self.ao.config.output_dir = CAPTURE_DIR.to_string();
-            info!("capture pipeline: collect-all mode — AO output -> SD ({})", CAPTURE_DIR);
+            info!(
+                "capture pipeline: collect-all mode — AO output -> SD ({})",
+                CAPTURE_DIR
+            );
         } else {
             self.ao.config.output_dir = format!("{}/capture", self.tmpfs_capture_dir);
-            info!("capture pipeline: verified mode — AO output -> tmpfs ({})", self.tmpfs_capture_dir);
+            info!(
+                "capture pipeline: verified mode — AO output -> tmpfs ({})",
+                self.tmpfs_capture_dir
+            );
         }
 
         // Pass SSID whitelist to AO so it skips our own APs
@@ -350,7 +367,9 @@ impl Daemon {
             Ok(()) => info!("AO started: PID {}", self.ao.pid),
             Err(e) => {
                 log::error!("AO failed to start: {e}");
-                self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::AoCrashed);
             }
         }
 
@@ -373,7 +392,9 @@ impl Daemon {
 
         // ---- AO health (RAGE mode only) ----
         if self.mode == OperatingMode::Rage && self.ao.check_health() {
-            self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+            self.epoch_loop
+                .personality
+                .set_override(personality::Face::AoCrashed);
         }
         if self.mode == OperatingMode::Rage {
             self.ao.try_auto_restart();
@@ -408,12 +429,18 @@ impl Daemon {
             let fw_health = self.firmware_monitor.poll();
             match fw_health {
                 firmware::FirmwareHealth::Critical => {
-                    log::warn!("firmware: CRITICAL -- counters spiking (crash={}, fault={}), triggering preemptive recovery",
-                        self.firmware_monitor.crash_suppress, self.firmware_monitor.hardfault);
+                    log::warn!(
+                        "firmware: CRITICAL -- counters spiking (crash={}, fault={}), triggering preemptive recovery",
+                        self.firmware_monitor.crash_suppress,
+                        self.firmware_monitor.hardfault
+                    );
                 }
                 firmware::FirmwareHealth::Degraded => {
-                    log::info!("firmware: degraded -- counters increasing (crash={}, fault={})",
-                        self.firmware_monitor.crash_suppress, self.firmware_monitor.hardfault);
+                    log::info!(
+                        "firmware: degraded -- counters increasing (crash={}, fault={})",
+                        self.firmware_monitor.crash_suppress,
+                        self.firmware_monitor.hardfault
+                    );
                 }
                 _ => {}
             }
@@ -425,7 +452,8 @@ impl Daemon {
 
             // Feed AP data from WiFi tracker (has RSSI + client counts)
             for ap in self.wifi.tracker.sorted_by_rssi() {
-                self.channel_scorer.record_ap(ap.channel, ap.rssi, ap.client_count);
+                self.channel_scorer
+                    .record_ap(ap.channel, ap.rssi, ap.client_count);
             }
 
             // Feed capture info from AO (which APs had captures this session)
@@ -452,9 +480,11 @@ impl Daemon {
                 if !best.is_empty() {
                     self.wifi.channel_config.channels = best.clone();
                     self.ao.config.channels = best;
-                    info!("adaptive channels: top {} -> {:?}",
+                    info!(
+                        "adaptive channels: top {} -> {:?}",
                         self.wifi.channel_config.channels.len(),
-                        self.wifi.channel_config.channels);
+                        self.wifi.channel_config.channels
+                    );
                 }
             }
         }
@@ -534,7 +564,11 @@ impl Daemon {
                 // ao_status format: "AO: X/Y | Zm | CH:N"
                 let hs = self.epoch_loop.metrics.handshakes;
                 let caps = self.captures.count();
-                let up_secs = self.ao.start_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+                let up_secs = self
+                    .ao
+                    .start_time
+                    .map(|t| t.elapsed().as_secs())
+                    .unwrap_or(0);
                 let uptime = if up_secs < 60 {
                     format!("{up_secs}s")
                 } else if up_secs < 3600 {
@@ -542,7 +576,11 @@ impl Daemon {
                 } else {
                     let h = up_secs / 3600;
                     let m = (up_secs % 3600) / 60;
-                    if m == 0 { format!("{h}h") } else { format!("{h}h{m}m") }
+                    if m == 0 {
+                        format!("{h}h")
+                    } else {
+                        format!("{h}h{m}m")
+                    }
                 };
                 let ao_text = format!("AO: {hs}/{caps} | {uptime} | {ch_str}");
                 self.lua.update_indicator_value("ao_status", &ao_text);
@@ -550,9 +588,9 @@ impl Daemon {
 
             if self.mode == OperatingMode::Safe {
                 self.network.rotate_display(false);
-                let ip_str = self.network.display_ip_str(
-                    self.bluetooth.ip_address.as_deref(),
-                );
+                let ip_str = self
+                    .network
+                    .display_ip_str(self.bluetooth.ip_address.as_deref());
                 self.lua.update_indicator_value("ip_display", &ip_str);
             }
 
@@ -567,7 +605,8 @@ impl Daemon {
     /// Scan phase: count tracked APs, check WiFi health (RAGE mode only).
     fn run_scan_phase(&mut self, result: &mut epoch::EpochResult) {
         self.epoch_loop.phase = epoch::EpochPhase::Scan;
-        self.recovery.log(recovery::DiagLevel::Info, "epoch scan start");
+        self.recovery
+            .log(recovery::DiagLevel::Info, "epoch scan start");
 
         result.channel = self.ao.channel() as u8;
         // Use AO's AP count (from stdout BSSID tracking) since AO owns the
@@ -612,12 +651,20 @@ impl Daemon {
         // Read attack toggles from web state (all 6 types)
         let enabled_types = {
             let s = self.shared_state.lock().unwrap();
-            [s.attack_deauth, s.attack_pmkid, s.attack_csa, s.attack_disassoc,
-             s.attack_anon_reassoc, s.attack_rogue_m2]
+            [
+                s.attack_deauth,
+                s.attack_pmkid,
+                s.attack_csa,
+                s.attack_disassoc,
+                s.attack_anon_reassoc,
+                s.attack_rogue_m2,
+            ]
         };
         // Smart Skip: collect BSSIDs that already have handshakes on SD
         let captured_bssids: std::collections::HashSet<[u8; 6]> = if self.skip_captured {
-            self.captures.files.iter()
+            self.captures
+                .files
+                .iter()
                 .filter(|f| f.has_handshake)
                 .map(|f| f.bssid)
                 .collect()
@@ -693,16 +740,15 @@ impl Daemon {
 
             // 3. Move validated captures to SD, delete junk from tmpfs
             let permanent_dir = self.captures.capture_dir.clone();
-            let (moved, deleted) = capture::move_validated_captures(
-                tmpfs_dir,
-                &permanent_dir,
-                &mut self.captures,
-            );
+            let (moved, deleted) =
+                capture::move_validated_captures(tmpfs_dir, &permanent_dir, &mut self.captures);
             if moved > 0 || deleted > 0 {
                 info!("capture pipeline: {moved} saved to SD, {deleted} junk deleted from RAM");
             }
             if moved > 0 {
-                self.ao.session_handshakes.fetch_add(moved as u32, std::sync::atomic::Ordering::Relaxed);
+                self.ao
+                    .session_handshakes
+                    .fetch_add(moved as u32, std::sync::atomic::Ordering::Relaxed);
             }
         } else {
             // === COLLECT ALL MODE: AO writes directly to SD ===
@@ -714,7 +760,9 @@ impl Daemon {
                 info!("collect-all: converted {converted} capture(s) to .22000 on SD");
                 let with_hs = converted.saturating_sub(no_hs);
                 if with_hs > 0 {
-                    self.ao.session_handshakes.fetch_add(with_hs as u32, std::sync::atomic::Ordering::Relaxed);
+                    self.ao
+                        .session_handshakes
+                        .fetch_add(with_hs as u32, std::sync::atomic::Ordering::Relaxed);
                 }
             }
             if failed > 0 {
@@ -752,13 +800,22 @@ impl Daemon {
                 info!("WPA-SEC: fetched {} cracked password(s)", cracked.len());
                 let mut s = self.shared_state.lock().unwrap();
                 let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-                s.cracked = cracked.into_iter().map(|(bssid, ssid, password)| {
-                    web::CrackedEntry { bssid, ssid, password, date: today.clone() }
-                }).collect();
+                s.cracked = cracked
+                    .into_iter()
+                    .map(|(bssid, ssid, password)| web::CrackedEntry {
+                        bssid,
+                        ssid,
+                        password,
+                        date: today.clone(),
+                    })
+                    .collect();
             }
         }
 
-        let new_handshakes = self.captures.handshake_count().saturating_sub(handshakes_before);
+        let new_handshakes = self
+            .captures
+            .handshake_count()
+            .saturating_sub(handshakes_before);
         result.handshakes_captured = new_handshakes as u32;
 
         // Discord notification for new handshakes
@@ -780,7 +837,14 @@ impl Daemon {
         }
         let body = format!(r#"{{"content":"{}"}}"#, message.replace('"', r#"\""#));
         let _ = std::process::Command::new("curl")
-            .args(["-s", "-H", "Content-Type: application/json", "-d", &body, webhook_url])
+            .args([
+                "-s",
+                "-H",
+                "Content-Type: application/json",
+                "-d",
+                &body,
+                webhook_url,
+            ])
             .output();
     }
 
@@ -882,6 +946,47 @@ impl Daemon {
             info!("web: rate change to {rate}, restarting AO");
             self.ao.set_rate(rate);
             let _ = self.ao.restart();
+            // Manual rate change breaks out of RAGE
+            let mut s = self.shared_state.lock().unwrap();
+            s.rage_enabled = false;
+        }
+
+        // Process pending rage slider change
+        let rage_change = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_rage_change.take()
+        };
+        if let Some(rage) = rage_change {
+            any_command = true;
+            match rage {
+                Some(level) => {
+                    if let Some(p) = crate::rage::preset(level) {
+                        info!("web: RAGE level {} ({}) — rate={} dwell={}ms ch={:?}",
+                              p.level, p.name, p.rate, p.dwell_ms, p.channels);
+                        self.ao.set_rate(p.rate);
+                        self.wifi.channel_config.channels = p.channels.to_vec();
+                        self.wifi.channel_config.dwell_ms = p.dwell_ms;
+                        self.wifi.channel_config.current_index = 0;
+                        self.autohunt = false;
+                        self.ao.config.channels = p.channels.to_vec();
+                        self.ao.config.dwell = (p.dwell_ms / 1000).max(1) as u32;
+                        let mut s = self.shared_state.lock().unwrap();
+                        s.rage_enabled = true;
+                        s.rage_level = level;
+                        s.autohunt_enabled = false;
+                        s.wifi_channels = p.channels.to_vec();
+                        s.wifi_dwell_ms = p.dwell_ms;
+                        s.attack_rate = p.rate;
+                        drop(s);
+                        let _ = self.ao.restart();
+                    }
+                }
+                None => {
+                    info!("web: RAGE disabled, Custom mode");
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.rage_enabled = false;
+                }
+            }
         }
 
         if restart {
@@ -959,9 +1064,10 @@ impl Daemon {
                 .spawn(move || {
                     // Run scan on this thread (blocking ~10s)
                     let devices = bluetooth::BtTether::scan_devices_static();
-                    let results: Vec<web::BtScanDevice> = devices.into_iter().map(|(mac, name)| {
-                        web::BtScanDevice { mac, name }
-                    }).collect();
+                    let results: Vec<web::BtScanDevice> = devices
+                        .into_iter()
+                        .map(|(mac, name)| web::BtScanDevice { mac, name })
+                        .collect();
                     let mut s = shared.lock().unwrap();
                     s.bt_scan_results = results;
                     s.bt_scan_in_progress = false;
@@ -1008,7 +1114,10 @@ impl Daemon {
         let mut whitelist_changed = false;
         let (wl_adds, wl_removes) = {
             let mut s = self.shared_state.lock().unwrap();
-            (std::mem::take(&mut s.pending_whitelist_adds), std::mem::take(&mut s.pending_whitelist_removes))
+            (
+                std::mem::take(&mut s.pending_whitelist_adds),
+                std::mem::take(&mut s.pending_whitelist_removes),
+            )
         };
         for add in wl_adds {
             let entry = wifi::parse_whitelist_entry(&add.value);
@@ -1038,7 +1147,10 @@ impl Daemon {
                 for (i, p) in parts.iter().enumerate() {
                     match u8::from_str_radix(p, 16) {
                         Ok(b) => mac[i] = b,
-                        Err(_) => { ok = false; break; }
+                        Err(_) => {
+                            ok = false;
+                            break;
+                        }
                     }
                 }
                 if ok {
@@ -1091,6 +1203,9 @@ impl Daemon {
             // Restart AO so new channel/dwell/autohunt settings take effect
             info!("web: restarting AO with new channel config");
             let _ = self.ao.restart();
+            // Manual channel change breaks out of RAGE
+            let mut s = self.shared_state.lock().unwrap();
+            s.rage_enabled = false;
         }
 
         // Process pending skip_captured toggle (Smart Skip)
@@ -1122,8 +1237,12 @@ impl Daemon {
             // updated output_dir will take effect when RAGE mode is next entered.
             if self.mode == OperatingMode::Rage {
                 info!("web: restarting AO for capture mode change");
-                self.ao.session_captures.store(0, std::sync::atomic::Ordering::Relaxed);
-                self.ao.session_handshakes.store(0, std::sync::atomic::Ordering::Relaxed);
+                self.ao
+                    .session_captures
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                self.ao
+                    .session_handshakes
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 let _ = self.ao.restart();
             } else {
                 info!("web: capture mode updated (SAFE mode — AO restart deferred to RAGE entry)");
@@ -1138,12 +1257,17 @@ impl Daemon {
         };
         if let Some(filename) = pending_delete {
             if let Some(pos) = self.captures.files.iter().position(|f| {
-                f.path.file_name().is_some_and(|n| n.to_string_lossy() == filename)
+                f.path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy() == filename)
             }) {
                 let file = self.captures.files.remove(pos);
                 let companion = file.path.with_extension("22000");
                 if let Err(e) = std::fs::remove_file(&file.path) {
-                    log::warn!("delete capture: failed to remove {}: {e}", file.path.display());
+                    log::warn!(
+                        "delete capture: failed to remove {}: {e}",
+                        file.path.display()
+                    );
                 } else {
                     info!("deleted capture: {filename}");
                 }
@@ -1160,7 +1284,10 @@ impl Daemon {
         if let Some(key) = wpasec_key {
             self.wpasec_config.api_key = key.clone();
             self.wpasec_config.enabled = !key.is_empty();
-            info!("web: WPA-SEC key updated, enabled={}", self.wpasec_config.enabled);
+            info!(
+                "web: WPA-SEC key updated, enabled={}",
+                self.wpasec_config.enabled
+            );
             any_command = true;
         }
 
@@ -1250,7 +1377,9 @@ impl Daemon {
                     .unwrap_or_else(|| "---".into())
             }
             #[cfg(not(target_os = "linux"))]
-            { "---".to_string() }
+            {
+                "---".to_string()
+            }
         };
 
         // Get CPU percent from shared state
@@ -1259,7 +1388,8 @@ impl Daemon {
             s.cpu_percent
         };
 
-        let (bat_level, bat_charging, bat_mv, bat_low, bat_crit, bat_avail) = self.battery_snapshot();
+        let (bat_level, bat_charging, bat_mv, bat_low, bat_crit, bat_avail) =
+            self.battery_snapshot();
         let (ao_state, ao_pid, ao_crashes, ao_uptime, ao_up_secs) = self.ao_snapshot();
         let (bt_conn, bt_short, bt_ip, bt_inet) = self.bt_snapshot();
 
@@ -1267,7 +1397,10 @@ impl Daemon {
             uptime_secs: self.epoch_loop.uptime_secs(),
             epoch: m.epoch,
             mode: self.mode.as_str().to_string(),
-            channel: { let ch = self.ao.channel(); if ch > 0 { ch as u8 } else { m.channel } },
+            channel: {
+                let ch = self.ao.channel();
+                if ch > 0 { ch as u8 } else { m.channel }
+            },
             aps_seen: (self.lifetime_aps_base + self.ao.ap_count() as u64) as u32,
             handshakes: m.handshakes,
             captures_total: self.captures.count(),
@@ -1279,7 +1412,11 @@ impl Daemon {
             ao_uptime_secs: ao_up_secs,
             ao_channels: {
                 let ch = self.ao.channel();
-                if ch > 0 { ch.to_string() } else { "?".to_string() }
+                if ch > 0 {
+                    ch.to_string()
+                } else {
+                    "?".to_string()
+                }
             },
             session_captures: self.ao.session_captures(),
             session_handshakes: self.ao.session_handshakes(),
@@ -1294,7 +1431,9 @@ impl Daemon {
             bt_ip,
             bt_internet: bt_inet,
             internet_online: self.network.internet == network::InternetStatus::Online,
-            display_ip: self.network.display_ip_str(self.bluetooth.ip_address.as_deref()),
+            display_ip: self
+                .network
+                .display_ip_str(self.bluetooth.ip_address.as_deref()),
             mood: self.epoch_loop.personality.mood.value(),
             face: self.epoch_loop.current_face().as_str().to_string(),
             level: self.epoch_loop.personality.xp.level,
@@ -1342,7 +1481,10 @@ impl Daemon {
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
         let _ = std::fs::create_dir_all("/var/lib/oxigotchi");
-        if let Err(e) = std::fs::write(path, serde_json::to_string_pretty(&state).unwrap_or_default()) {
+        if let Err(e) = std::fs::write(
+            path,
+            serde_json::to_string_pretty(&state).unwrap_or_default(),
+        ) {
             log::warn!("state save failed: {e}");
         }
     }
@@ -1402,7 +1544,10 @@ impl Daemon {
                         for (i, p) in parts.iter().enumerate() {
                             match u8::from_str_radix(p, 16) {
                                 Ok(b) => mac[i] = b,
-                                Err(_) => { ok = false; break; }
+                                Err(_) => {
+                                    ok = false;
+                                    break;
+                                }
                             }
                         }
                         if ok {
@@ -1446,7 +1591,8 @@ impl Daemon {
             self.capture_all = v;
         }
         if let Some(channels_arr) = state.get("wifi_channels").and_then(|v| v.as_array()) {
-            let channels: Vec<u8> = channels_arr.iter()
+            let channels: Vec<u8> = channels_arr
+                .iter()
                 .filter_map(|v| v.as_u64().map(|n| n as u8))
                 .collect();
             if !channels.is_empty() {
@@ -1477,22 +1623,76 @@ impl Daemon {
 
     /// Sync daemon state into the shared web state.
     fn sync_to_web(&mut self) {
+        if self.config.gpu.enabled && self.config.gpu.runtime.trace_enabled {
+            match self
+                .gpu_runtime_ingestor
+                .load(&self.config.gpu.runtime.summary_source)
+            {
+                Ok(Some(summary)) => {
+                    self.gpu_state.runtime = summary;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    log::warn!("gpu runtime summary ingest failed: {e}");
+                }
+            }
+        }
+
+        let scan_snapshot = {
+            let s = self.shared_state.lock().unwrap();
+            (s.bt_scan_results.clone(), s.bt_scan_in_progress)
+        };
+
+        self.bt_discovery.reset();
+        if scan_snapshot.1 {
+            let _ = self
+                .bt_discovery
+                .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStarted);
+        }
+        for device in &scan_snapshot.0 {
+            let _ = self.bt_discovery.apply(
+                bluetooth::model::observation::BtDiscoveryObservation::DeviceSeen(
+                    bluetooth::model::observation::BtDeviceObservation {
+                        id: device.mac.clone(),
+                        address: device.mac.clone(),
+                        name: if device.name.is_empty() {
+                            None
+                        } else {
+                            Some(device.name.clone())
+                        },
+                        rssi: None,
+                        ts: chrono::Utc::now(),
+                    },
+                ),
+            );
+        }
+        if !scan_snapshot.1 {
+            let _ = self
+                .bt_discovery
+                .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStopped);
+        }
+
         let bt_mode = self.bt_feature.state.mode.clone();
         let bt_state_str = self.bluetooth.status_str().to_string();
         let bt_enabled = self.config.bluetooth.enabled;
-        let bt_overlap_active = self.wifi.state == wifi::WifiState::Monitor && self.bluetooth.state == bluetooth::BtState::Connected;
+        let bt_overlap_active = self.wifi.state == wifi::WifiState::Monitor
+            && self.bluetooth.state == bluetooth::BtState::Connected;
 
         let mut s = self.shared_state.lock().unwrap();
         let m = &self.epoch_loop.metrics;
 
-        let (bat_level, bat_charging, bat_mv, bat_low, bat_crit, bat_avail) = self.battery_snapshot();
+        let (bat_level, bat_charging, bat_mv, bat_low, bat_crit, bat_avail) =
+            self.battery_snapshot();
         let (ao_state, ao_pid, ao_crashes, ao_uptime, _ao_up_secs) = self.ao_snapshot();
         let (bt_conn, _bt_short, bt_ip, bt_inet) = self.bt_snapshot();
 
         s.uptime_str = self.epoch_loop.uptime_str();
         s.mode = self.mode.as_str().to_string();
         s.epoch = m.epoch;
-        s.channel = { let ch = self.ao.channel(); if ch > 0 { ch as u8 } else { m.channel } };
+        s.channel = {
+            let ch = self.ao.channel();
+            if ch > 0 { ch as u8 } else { m.channel }
+        };
         s.aps_seen = (self.lifetime_aps_base + self.ao.ap_count() as u64) as u32;
         s.handshakes = self.captures.handshake_count() as u32;
         s.blind_epochs = m.blind_epochs;
@@ -1513,26 +1713,36 @@ impl Daemon {
         s.session_captures = self.ao.session_captures();
         s.session_handshakes = self.ao.session_handshakes();
         s.capture_all = self.capture_all;
-        s.capture_list = self.captures.files.iter().map(|f| {
-            let bssid_mac = format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                f.bssid[0], f.bssid[1], f.bssid[2], f.bssid[3], f.bssid[4], f.bssid[5]);
-            let captured_date = f.mtime
-                .map(|t| {
-                    let dt: chrono::DateTime<chrono::Utc> = t.into();
-                    dt.format("%Y-%m-%d").to_string()
-                })
-                .unwrap_or_else(|| "unknown".to_string());
-            web::CaptureEntry {
-                filename: f.path.file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default(),
-                size_bytes: f.size,
-                ssid: f.ssid.clone(),
-                bssid_mac,
-                captured_date,
-                has_handshake: f.has_handshake,
-            }
-        }).collect();
+        s.capture_list = self
+            .captures
+            .files
+            .iter()
+            .map(|f| {
+                let bssid_mac = format!(
+                    "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                    f.bssid[0], f.bssid[1], f.bssid[2], f.bssid[3], f.bssid[4], f.bssid[5]
+                );
+                let captured_date = f
+                    .mtime
+                    .map(|t| {
+                        let dt: chrono::DateTime<chrono::Utc> = t.into();
+                        dt.format("%Y-%m-%d").to_string()
+                    })
+                    .unwrap_or_else(|| "unknown".to_string());
+                web::CaptureEntry {
+                    filename: f
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    size_bytes: f.size,
+                    ssid: f.ssid.clone(),
+                    bssid_mac,
+                    captured_date,
+                    has_handshake: f.has_handshake,
+                }
+            })
+            .collect();
 
         s.battery_level = bat_level;
         s.battery_charging = bat_charging;
@@ -1560,12 +1770,13 @@ impl Daemon {
         self.bt_feature.state.health.stack_up = bt_enabled;
         self.bt_feature.state.health.controller_present = bt_enabled;
         self.bt_feature.state.health.degraded = self.bluetooth.state == bluetooth::BtState::Error;
-        self.bt_feature.state.health.last_error = if self.bluetooth.state == bluetooth::BtState::Error {
-            Some(bt_state_str.clone())
-        } else {
-            None
-        };
-        self.bt_feature.state.summary.devices_now = s.bt_scan_results.len() as u32;
+        self.bt_feature.state.health.last_error =
+            if self.bluetooth.state == bluetooth::BtState::Error {
+                Some(bt_state_str.clone())
+            } else {
+                None
+            };
+        self.bt_feature.state.summary = self.bt_discovery.summary();
         self.bt_feature.state.controller.last_probe_status = Some(bt_state_str.clone());
         self.bt_feature.state.coex.overlap_active = bt_overlap_active;
         self.bt_feature.state.coex.contention_score = if bt_overlap_active { 1 } else { 0 };
@@ -1575,7 +1786,10 @@ impl Daemon {
         s.bt_feature_contention_score = self.bt_feature.state.coex.contention_score;
 
         s.gpu_mode = format!("{:?}", self.gpu_state.mode);
-        s.gpu_signal = self.gpu_state.runtime.strongest_signal
+        s.gpu_signal = self
+            .gpu_state
+            .runtime
+            .strongest_signal
             .as_ref()
             .map(|s| format!("{s:?}"))
             .unwrap_or_else(|| "None".to_string());
@@ -1601,11 +1815,19 @@ impl Daemon {
 
         // Refresh system metrics so WS broadcast has real values (not zeroes)
         let cpu_temp = web::read_cpu_temp();
-        if cpu_temp > 0.0 { s.cpu_temp_c = cpu_temp; }
+        if cpu_temp > 0.0 {
+            s.cpu_temp_c = cpu_temp;
+        }
         let (mem_used, mem_total) = web::read_mem_info();
-        if mem_total > 0 { s.mem_used_mb = mem_used; s.mem_total_mb = mem_total; }
+        if mem_total > 0 {
+            s.mem_used_mb = mem_used;
+            s.mem_total_mb = mem_total;
+        }
         let (disk_used, disk_total) = web::read_disk_info();
-        if disk_total > 0 { s.disk_used_mb = disk_used; s.disk_total_mb = disk_total; }
+        if disk_total > 0 {
+            s.disk_used_mb = disk_used;
+            s.disk_total_mb = disk_total;
+        }
 
         s.recovery_state = format!("{:?}", self.recovery.state);
         s.recovery_total = self.recovery.total_recoveries;
@@ -1622,48 +1844,73 @@ impl Daemon {
         s.screen_bytes = self.screen.fb.as_bytes().to_vec();
 
         // Sync AP list for web dashboard — merge WiFi tracker + AO stdout data
-        let mut ap_entries: Vec<web::ApEntry> = self.wifi.tracker.sorted_by_rssi().iter().map(|ap| {
-            let has_hs = self.captures.files.iter().any(|f| {
-                f.has_handshake && f.bssid == ap.bssid
-            });
-            web::ApEntry {
-                bssid: ap.bssid_str(),
-                ssid: if ap.ssid.is_empty() { "(hidden)".into() } else { ap.ssid.clone() },
-                rssi: ap.rssi as i16,
-                channel: ap.channel,
-                clients: ap.client_count,
-                has_handshake: has_hs,
-            }
-        }).collect();
+        let mut ap_entries: Vec<web::ApEntry> = self
+            .wifi
+            .tracker
+            .sorted_by_rssi()
+            .iter()
+            .map(|ap| {
+                let has_hs = self
+                    .captures
+                    .files
+                    .iter()
+                    .any(|f| f.has_handshake && f.bssid == ap.bssid);
+                web::ApEntry {
+                    bssid: ap.bssid_str(),
+                    ssid: if ap.ssid.is_empty() {
+                        "(hidden)".into()
+                    } else {
+                        ap.ssid.clone()
+                    },
+                    rssi: ap.rssi as i16,
+                    channel: ap.channel,
+                    clients: ap.client_count,
+                    has_handshake: has_hs,
+                }
+            })
+            .collect();
 
         // Add APs seen by AO that aren't already in the WiFi tracker
         let ao_aps = self.ao.ap_snapshot();
-        let existing_bssids: std::collections::HashSet<String> =
-            ap_entries.iter().map(|e| e.bssid.replace(':', "").to_lowercase()).collect();
+        let existing_bssids: std::collections::HashSet<String> = ap_entries
+            .iter()
+            .map(|e| e.bssid.replace(':', "").to_lowercase())
+            .collect();
         for ao_ap in &ao_aps {
             if !existing_bssids.contains(&ao_ap.bssid) {
                 // Format BSSID with colons: aabbccddeeff -> AA:BB:CC:DD:EE:FF
-                let bssid_fmt = ao_ap.bssid.as_bytes().chunks(2)
+                let bssid_fmt = ao_ap
+                    .bssid
+                    .as_bytes()
+                    .chunks(2)
                     .map(|c| std::str::from_utf8(c).unwrap_or("??").to_uppercase())
-                    .collect::<Vec<_>>().join(":");
+                    .collect::<Vec<_>>()
+                    .join(":");
                 // Check if we have a capture for this BSSID on SD
                 let ao_bssid_bytes: [u8; 6] = {
                     let hex = &ao_ap.bssid;
                     let mut b = [0u8; 6];
                     if hex.len() == 12 {
                         for i in 0..6 {
-                            b[i] = u8::from_str_radix(&hex[i*2..i*2+2], 16).unwrap_or(0);
+                            b[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
                         }
                     }
                     b
                 };
-                let has_hs = ao_ap.captured || self.captures.files.iter().any(|f| {
-                    f.has_handshake && f.bssid == ao_bssid_bytes
-                });
-                let ssid = self.captures.ssid_for(&ao_bssid_bytes)
+                let has_hs = ao_ap.captured
+                    || self
+                        .captures
+                        .files
+                        .iter()
+                        .any(|f| f.has_handshake && f.bssid == ao_bssid_bytes);
+                let ssid = self
+                    .captures
+                    .ssid_for(&ao_bssid_bytes)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "(AO)".into());
-                let rssi = self.captures.bssid_rssi
+                let rssi = self
+                    .captures
+                    .bssid_rssi
                     .get(&ao_bssid_bytes)
                     .copied()
                     .unwrap_or(-100);
@@ -1680,12 +1927,19 @@ impl Daemon {
         s.ap_list = ap_entries;
 
         // Sync whitelist for web dashboard (MAC + SSID entries)
-        let mut wl: Vec<web::WhitelistEntry> = self.attacks.whitelist.iter().map(|mac| {
-            web::WhitelistEntry {
-                value: mac.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(":"),
+        let mut wl: Vec<web::WhitelistEntry> = self
+            .attacks
+            .whitelist
+            .iter()
+            .map(|mac| web::WhitelistEntry {
+                value: mac
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(":"),
                 entry_type: "MAC".into(),
-            }
-        }).collect();
+            })
+            .collect();
         for ssid in &self.wifi.tracker.ssid_whitelist {
             wl.push(web::WhitelistEntry {
                 value: ssid.clone(),
@@ -1695,8 +1949,11 @@ impl Daemon {
         s.whitelist = wl;
 
         // Sync plugin list for web dashboard
-        s.plugin_list = self.lua.get_web_plugin_list().into_iter().map(|(meta, enabled, x, y)| {
-            web::PluginInfo {
+        s.plugin_list = self
+            .lua
+            .get_web_plugin_list()
+            .into_iter()
+            .map(|(meta, enabled, x, y)| web::PluginInfo {
                 name: meta.name,
                 version: meta.version,
                 author: meta.author,
@@ -1704,8 +1961,8 @@ impl Daemon {
                 enabled,
                 x,
                 y,
-            }
-        }).collect();
+            })
+            .collect();
 
         // Sync WPA-SEC and Discord config for web dashboard
         s.wpasec_api_key = self.wpasec_config.api_key.clone();
@@ -1743,17 +2000,37 @@ impl Daemon {
         };
         // Outline
         for dx in 0..bar_w {
-            self.screen.set_pixel(bar_x + dx, bar_y, embedded_graphics::pixelcolor::BinaryColor::On);
-            self.screen.set_pixel(bar_x + dx, bar_y + bar_h - 1, embedded_graphics::pixelcolor::BinaryColor::On);
+            self.screen.set_pixel(
+                bar_x + dx,
+                bar_y,
+                embedded_graphics::pixelcolor::BinaryColor::On,
+            );
+            self.screen.set_pixel(
+                bar_x + dx,
+                bar_y + bar_h - 1,
+                embedded_graphics::pixelcolor::BinaryColor::On,
+            );
         }
         for dy in 0..bar_h {
-            self.screen.set_pixel(bar_x, bar_y + dy, embedded_graphics::pixelcolor::BinaryColor::On);
-            self.screen.set_pixel(bar_x + bar_w - 1, bar_y + dy, embedded_graphics::pixelcolor::BinaryColor::On);
+            self.screen.set_pixel(
+                bar_x,
+                bar_y + dy,
+                embedded_graphics::pixelcolor::BinaryColor::On,
+            );
+            self.screen.set_pixel(
+                bar_x + bar_w - 1,
+                bar_y + dy,
+                embedded_graphics::pixelcolor::BinaryColor::On,
+            );
         }
         // Fill
         for dy in 1..(bar_h - 1) {
             for dx in 1..=filled_w {
-                self.screen.set_pixel(bar_x + dx, bar_y + dy, embedded_graphics::pixelcolor::BinaryColor::On);
+                self.screen.set_pixel(
+                    bar_x + dx,
+                    bar_y + dy,
+                    embedded_graphics::pixelcolor::BinaryColor::On,
+                );
             }
         }
 
@@ -1775,9 +2052,13 @@ impl Daemon {
         }
         self.battery.read_status();
         if self.battery.status.critical {
-            self.epoch_loop.personality.set_override(personality::Face::BatteryCritical);
+            self.epoch_loop
+                .personality
+                .set_override(personality::Face::BatteryCritical);
         } else if self.battery.status.low {
-            self.epoch_loop.personality.set_override(personality::Face::BatteryLow);
+            self.epoch_loop
+                .personality
+                .set_override(personality::Face::BatteryLow);
         } else {
             // Clear battery overrides if we previously set one
             if matches!(
@@ -1792,7 +2073,9 @@ impl Daemon {
 
         if self.battery.should_shutdown() {
             info!("battery critical, shutting down");
-            self.epoch_loop.personality.set_override(personality::Face::Shutdown);
+            self.epoch_loop
+                .personality
+                .set_override(personality::Face::Shutdown);
             self.update_display();
             // Real implementation would call `shutdown -h now`
         }
@@ -1822,10 +2105,8 @@ impl Daemon {
         personality::Face::Upload,
         personality::Face::Motivated,
     ];
-    const SAFE_FACES: &'static [personality::Face] = &[
-        personality::Face::Debug,
-        personality::Face::Grateful,
-    ];
+    const SAFE_FACES: &'static [personality::Face] =
+        &[personality::Face::Debug, personality::Face::Grateful];
 
     /// Transition from RAGE to SAFE mode via radio lock manager.
     fn enter_safe_mode(&mut self) {
@@ -1834,7 +2115,10 @@ impl Daemon {
         self.show_transition(face, "Switching to SAFE...");
 
         // Atomic transition: WiFi -> BT via radio lock manager
-        match self.radio.transition_to_bt(&mut self.ao, &mut self.wifi, &mut self.bluetooth) {
+        match self
+            .radio
+            .transition_to_bt(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
+        {
             Ok(()) => {
                 info!("radio: WIFI -> BT transition complete");
                 // Now set up BT PAN connection
@@ -1861,7 +2145,10 @@ impl Daemon {
         self.show_transition(face, "Switching to RAGE...");
 
         // Atomic transition: BT -> WiFi via radio lock manager
-        match self.radio.transition_to_wifi(&mut self.ao, &mut self.wifi, &mut self.bluetooth) {
+        match self
+            .radio
+            .transition_to_wifi(&mut self.ao, &mut self.wifi, &mut self.bluetooth)
+        {
             Ok(()) => {
                 info!("radio: BT -> WIFI transition complete");
             }
@@ -1887,7 +2174,9 @@ impl Daemon {
                     return;
                 }
                 info!("attempting soft WiFi recovery (modprobe cycle)");
-                self.epoch_loop.personality.set_override(personality::Face::WifiDown);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::WifiDown);
 
                 // Stop AO first — it's using the interface
                 self.ao.stop();
@@ -1902,9 +2191,13 @@ impl Daemon {
                     // Bring down all WiFi interfaces first — modprobe -r fails with
                     // "Module brcmfmac is in use" if interfaces are still up
                     info!("bringing down WiFi interfaces before rmmod");
-                    let _ = Command::new("ip").args(["link", "set", "wlan0mon", "down"]).output();
+                    let _ = Command::new("ip")
+                        .args(["link", "set", "wlan0mon", "down"])
+                        .output();
                     let _ = Command::new("iw").args(["dev", "wlan0mon", "del"]).output();
-                    let _ = Command::new("ip").args(["link", "set", "wlan0", "down"]).output();
+                    let _ = Command::new("ip")
+                        .args(["link", "set", "wlan0", "down"])
+                        .output();
                     std::thread::sleep(Duration::from_secs(1));
                     info!("removing brcmfmac module");
                     let _ = Command::new("modprobe").args(["-r", "brcmfmac"]).output();
@@ -1944,7 +2237,9 @@ impl Daemon {
                     return;
                 }
                 info!("attempting hard WiFi recovery (full GPIO power cycle)");
-                self.epoch_loop.personality.set_override(personality::Face::FwCrash);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::FwCrash);
                 match recovery::execute_gpio_recovery(self.recovery.config.gpio_cycle_delay_ms) {
                     Ok(true) => info!("GPIO recovery succeeded, wlan0 is back"),
                     Ok(false) => log::error!("GPIO recovery failed: wlan0 did not return"),
@@ -1955,7 +2250,9 @@ impl Daemon {
             }
             recovery::RecoveryAction::Reboot => {
                 log::error!("WiFi recovery exhausted after max retries, rebooting");
-                self.epoch_loop.personality.set_override(personality::Face::Broken);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::Broken);
                 self.recovery.log(
                     recovery::DiagLevel::Error,
                     "all recovery attempts exhausted -- rebooting",
@@ -1964,7 +2261,9 @@ impl Daemon {
             }
             recovery::RecoveryAction::GiveUp => {
                 log::error!("WiFi recovery exhausted — giving up (no reboot to avoid loop)");
-                self.epoch_loop.personality.set_override(personality::Face::Broken);
+                self.epoch_loop
+                    .personality
+                    .set_override(personality::Face::Broken);
                 self.recovery.log(
                     recovery::DiagLevel::Error,
                     "all recovery attempts exhausted — WiFi offline, daemon continues",
@@ -2009,7 +2308,6 @@ impl Daemon {
             rogue_m2: s.attack_rogue_m2,
         }
     }
-
 }
 
 #[tokio::main]
@@ -2034,7 +2332,12 @@ async fn main() {
 
     // Load oxigotchi config (may have been created by migration above)
     let config = if oxi_paths.config.exists() {
-        config::Config::load_or_default(oxi_paths.config.to_str().unwrap_or("/etc/oxigotchi/config.toml"))
+        config::Config::load_or_default(
+            oxi_paths
+                .config
+                .to_str()
+                .unwrap_or("/etc/oxigotchi/config.toml"),
+        )
     } else {
         config::Config::defaults()
     };
@@ -2236,18 +2539,36 @@ mod tests {
         use personality::Face;
 
         let mood_faces = [
-            Face::Excited, Face::Happy, Face::Awake, Face::Bored,
-            Face::Sad, Face::Demotivated,
+            Face::Excited,
+            Face::Happy,
+            Face::Awake,
+            Face::Bored,
+            Face::Sad,
+            Face::Demotivated,
         ];
         let override_faces = [
-            Face::BatteryCritical, Face::BatteryLow, Face::Shutdown,
-            Face::WifiDown, Face::FwCrash, Face::Broken,
+            Face::BatteryCritical,
+            Face::BatteryLow,
+            Face::Shutdown,
+            Face::WifiDown,
+            Face::FwCrash,
+            Face::Broken,
         ];
         let manual_override_faces = [
-            Face::Sleep, Face::Intense, Face::Cool, Face::Angry,
-            Face::Friend, Face::Debug, Face::Upload, Face::Lonely,
-            Face::Grateful, Face::Motivated, Face::Smart, Face::AoCrashed,
-            Face::Raging, Face::Grazing,
+            Face::Sleep,
+            Face::Intense,
+            Face::Cool,
+            Face::Angry,
+            Face::Friend,
+            Face::Debug,
+            Face::Upload,
+            Face::Lonely,
+            Face::Grateful,
+            Face::Motivated,
+            Face::Smart,
+            Face::AoCrashed,
+            Face::Raging,
+            Face::Grazing,
         ];
 
         let mut reachable: std::collections::HashSet<Face> = std::collections::HashSet::new();
@@ -2284,7 +2605,9 @@ mod tests {
         );
 
         for _ in 0..50 {
-            daemon.epoch_loop.record_result(&epoch::EpochResult::default());
+            daemon
+                .epoch_loop
+                .record_result(&epoch::EpochResult::default());
         }
         let face = daemon.epoch_loop.current_face();
         assert!(
@@ -2430,7 +2753,9 @@ mod tests {
     #[test]
     fn test_lua_plugins_load_and_register_indicators() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("test_ind.lua"), r#"
+        std::fs::write(
+            dir.path().join("test_ind.lua"),
+            r#"
             plugin = {}
             plugin.name = "test_ind"
             plugin.version = "1.0.0"
@@ -2442,14 +2767,19 @@ mod tests {
             function on_epoch(state)
                 set_indicator("test", "E:" .. state.epoch)
             end
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
 
         let mut rt = lua::PluginRuntime::new();
         let configs = vec![lua::PluginConfig::default_for("test_ind", 50, 60)];
         let loaded = rt.load_plugins_from_dir(dir.path().to_str().unwrap(), &configs);
         assert_eq!(loaded, 1);
 
-        let state = lua::state::EpochState { epoch: 99, ..Default::default() };
+        let state = lua::state::EpochState {
+            epoch: 99,
+            ..Default::default()
+        };
         rt.tick_epoch(&state);
 
         let indicators = rt.get_indicators();
@@ -2475,5 +2805,51 @@ mod tests {
     fn test_daemon_starts_in_rage_mode() {
         let daemon = make_daemon();
         assert_eq!(daemon.mode, OperatingMode::Rage);
+    }
+
+    #[test]
+    fn test_process_web_commands_rage_level() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.pending_rage_change = Some(Some(4));
+        }
+        daemon.process_web_commands();
+        // Level 4 = Hunt: rate 2, dwell 2000ms, all 13 channels
+        assert_eq!(daemon.ao.config.rate, 2);
+        assert_eq!(daemon.wifi.channel_config.dwell_ms, 2000);
+        assert_eq!(daemon.wifi.channel_config.channels, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+        assert!(!daemon.autohunt);
+        let s = daemon.shared_state.lock().unwrap();
+        assert!(s.rage_enabled);
+        assert_eq!(s.rage_level, 4);
+    }
+
+    #[test]
+    fn test_process_web_commands_rage_disable() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.rage_enabled = true;
+            s.rage_level = 4;
+            s.pending_rage_change = Some(None);
+        }
+        daemon.process_web_commands();
+        let s = daemon.shared_state.lock().unwrap();
+        assert!(!s.rage_enabled);
+    }
+
+    #[test]
+    fn test_process_web_commands_rate_breaks_rage() {
+        let mut daemon = make_daemon();
+        {
+            let mut s = daemon.shared_state.lock().unwrap();
+            s.rage_enabled = true;
+            s.rage_level = 5;
+            s.pending_rate_change = Some(1);
+        }
+        daemon.process_web_commands();
+        let s = daemon.shared_state.lock().unwrap();
+        assert!(!s.rage_enabled, "manual rate change should break out of RAGE");
     }
 }
