@@ -96,6 +96,14 @@ pub struct DaemonState {
     pub bt_phone_mac: String,
     pub bt_internet_available: bool,
     pub bt_retry_count: u32,
+    pub bt_feature_mode: String,
+    pub bt_feature_devices_now: u32,
+    pub bt_feature_contention_score: u32,
+
+    // -- gpu --
+    pub gpu_mode: String,
+    pub gpu_signal: String,
+    pub gpu_submit_seen: bool,
 
     // -- ao --
     pub ao_state: String,
@@ -241,6 +249,12 @@ impl DaemonState {
             bt_phone_mac: String::new(),
             bt_internet_available: false,
             bt_retry_count: 0,
+            bt_feature_mode: "Off".into(),
+            bt_feature_devices_now: 0,
+            bt_feature_contention_score: 0,
+            gpu_mode: "Off".into(),
+            gpu_signal: "None".into(),
+            gpu_submit_seen: false,
             ao_state: "STOPPED".into(),
             ao_pid: 0,
             ao_crash_count: 0,
@@ -345,6 +359,8 @@ struct WsSnapshot {
     wifi: WifiInfo,
     // -- bluetooth --
     bluetooth: BluetoothInfo,
+    // -- gpu --
+    gpu: GpuInfo,
     // -- personality --
     personality: PersonalityInfo,
     // -- system --
@@ -430,6 +446,14 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             phone_mac: s.bt_phone_mac.clone(),
             internet_available: s.bt_internet_available,
             retry_count: s.bt_retry_count,
+            feature_mode: s.bt_feature_mode.clone(),
+            nearby_devices: s.bt_feature_devices_now,
+            contention_score: s.bt_feature_contention_score,
+        },
+        gpu: GpuInfo {
+            mode: s.gpu_mode.clone(),
+            signal: s.gpu_signal.clone(),
+            submit_seen: s.gpu_submit_seen,
         },
         personality: PersonalityInfo {
             mood: s.mood,
@@ -679,6 +703,17 @@ pub struct BluetoothInfo {
     pub phone_mac: String,
     pub internet_available: bool,
     pub retry_count: u32,
+    pub feature_mode: String,
+    pub nearby_devices: u32,
+    pub contention_score: u32,
+}
+
+/// GPU info surfaced through the shared state/web snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GpuInfo {
+    pub mode: String,
+    pub signal: String,
+    pub submit_seen: bool,
 }
 
 /// Bluetooth visibility toggle request.
@@ -1145,6 +1180,9 @@ async fn bluetooth_handler(State(state): State<SharedState>) -> Json<BluetoothIn
         phone_mac: s.bt_phone_mac.clone(),
         internet_available: s.bt_internet_available,
         retry_count: s.bt_retry_count,
+        feature_mode: s.bt_feature_mode.clone(),
+        nearby_devices: s.bt_feature_devices_now,
+        contention_score: s.bt_feature_contention_score,
     })
 }
 
@@ -2027,6 +2065,7 @@ mod tests {
             device_name: "Phone".into(), ip: "10.0.0.1".into(),
             phone_mac: "AA:BB:CC:DD:EE:FF".into(),
             internet_available: true, retry_count: 0,
+            feature_mode: "tether".into(), nearby_devices: 0, contention_score: 0,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"connected\":true"));

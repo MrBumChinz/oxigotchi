@@ -11,6 +11,7 @@ mod config;
 mod display;
 mod epoch;
 mod firmware;
+mod gpu;
 mod personality;
 mod pisugar;
 mod network;
@@ -20,6 +21,7 @@ mod migration;
 mod web;
 mod wifi;
 mod lua;
+mod rage;
 
 use chrono::Timelike;
 use log::info;
@@ -45,7 +47,7 @@ fn ensure_tmpfs_capture_dir() -> String {
 
 /// Epoch duration in seconds.
 const EPOCH_DURATION_SECS: u64 = 30;
-/// Attack rate (attacks per second). Rate 2+ crashes BCM43436B0.
+/// Default attack rate. All rates (1-3) stable with v6 firmware patch.
 const ATTACK_RATE: u32 = 1;
 /// Default capture directory.
 const CAPTURE_DIR: &str = "/home/pi/captures";
@@ -82,6 +84,10 @@ struct Daemon {
     attacks: attacks::AttackScheduler,
     captures: capture::CaptureManager,
     bluetooth: bluetooth::BtTether,
+    bt_feature: bluetooth::supervisor::BtSupervisor,
+    bt_discovery: bluetooth::discovery::BtDiscoveryWorker,
+    bt_controller_worker: bluetooth::controller::BtControllerWorker,
+    bt_coex_worker: bluetooth::coex::BtCoexWorker,
     battery: pisugar::PiSugar,
     network: network::NetworkManager,
     recovery: recovery::RecoveryManager,
@@ -89,6 +95,8 @@ struct Daemon {
     ao: ao::AoManager,
     radio: radio::RadioManager,
     firmware_monitor: firmware::FirmwareMonitor,
+    gpu_state: gpu::state::gpu_state::GpuFeatureState,
+    gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer,
     mode: OperatingMode,
     shared_state: web::SharedState,
     ws_tx: tokio::sync::broadcast::Sender<String>,
@@ -137,6 +145,12 @@ impl Daemon {
             max_retries: config.bluetooth.max_retries,
         };
         let bluetooth = bluetooth::BtTether::new(bt_config);
+        let bt_feature = bluetooth::supervisor::BtSupervisor::new(config.bt_feature.clone());
+        let gpu_mode = if config.gpu.enabled {
+            config.gpu.mode.clone()
+        } else {
+            gpu::state::gpu_state::GpuMode::Off
+        };
         let battery = pisugar::PiSugar::default();
         let network = network::NetworkManager::new();
         let recovery = recovery::RecoveryManager::default();
@@ -151,6 +165,10 @@ impl Daemon {
             attacks,
             captures,
             bluetooth,
+            bt_feature,
+            bt_discovery: bluetooth::discovery::BtDiscoveryWorker::new(),
+            bt_controller_worker: bluetooth::controller::BtControllerWorker::new(),
+            bt_coex_worker: bluetooth::coex::BtCoexWorker::new(),
             battery,
             network,
             recovery,
@@ -158,6 +176,11 @@ impl Daemon {
             ao,
             radio: radio::RadioManager::new(),
             firmware_monitor: firmware::FirmwareMonitor::new(),
+            gpu_state: gpu::state::gpu_state::GpuFeatureState {
+                mode: gpu_mode,
+                ..gpu::state::gpu_state::GpuFeatureState::default()
+            },
+            gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer::new(),
             mode: OperatingMode::Rage,
             shared_state,
             ws_tx,
@@ -1453,7 +1476,12 @@ impl Daemon {
     }
 
     /// Sync daemon state into the shared web state.
-    fn sync_to_web(&self) {
+    fn sync_to_web(&mut self) {
+        let bt_mode = self.bt_feature.state.mode.clone();
+        let bt_state_str = self.bluetooth.status_str().to_string();
+        let bt_enabled = self.config.bluetooth.enabled;
+        let bt_overlap_active = self.wifi.state == wifi::WifiState::Monitor && self.bluetooth.state == bluetooth::BtState::Connected;
+
         let mut s = self.shared_state.lock().unwrap();
         let m = &self.epoch_loop.metrics;
 
@@ -1527,6 +1555,31 @@ impl Daemon {
         s.bt_retry_count = self.bluetooth.retry_count;
         s.bt_device_name = self.bluetooth.config.phone_name.clone();
         s.bt_phone_mac = self.bluetooth.config.phone_mac.clone();
+
+        self.bt_feature.state.mode = bt_mode;
+        self.bt_feature.state.health.stack_up = bt_enabled;
+        self.bt_feature.state.health.controller_present = bt_enabled;
+        self.bt_feature.state.health.degraded = self.bluetooth.state == bluetooth::BtState::Error;
+        self.bt_feature.state.health.last_error = if self.bluetooth.state == bluetooth::BtState::Error {
+            Some(bt_state_str.clone())
+        } else {
+            None
+        };
+        self.bt_feature.state.summary.devices_now = s.bt_scan_results.len() as u32;
+        self.bt_feature.state.controller.last_probe_status = Some(bt_state_str.clone());
+        self.bt_feature.state.coex.overlap_active = bt_overlap_active;
+        self.bt_feature.state.coex.contention_score = if bt_overlap_active { 1 } else { 0 };
+
+        s.bt_feature_mode = format!("{:?}", self.bt_feature.state.mode);
+        s.bt_feature_devices_now = self.bt_feature.state.summary.devices_now;
+        s.bt_feature_contention_score = self.bt_feature.state.coex.contention_score;
+
+        s.gpu_mode = format!("{:?}", self.gpu_state.mode);
+        s.gpu_signal = self.gpu_state.runtime.strongest_signal
+            .as_ref()
+            .map(|s| format!("{s:?}"))
+            .unwrap_or_else(|| "None".to_string());
+        s.gpu_submit_seen = self.gpu_state.runtime.vc4_submit_cl_seen;
 
         s.ao_state = ao_state;
         s.ao_pid = ao_pid;
