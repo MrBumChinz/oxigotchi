@@ -2581,6 +2581,7 @@ mod tests {
             DASHBOARD_HTML.contains("/api/download/"),
             "missing /api/download"
         );
+        assert!(DASHBOARD_HTML.contains("/api/rage"), "missing /api/rage");
     }
 
     #[test]
