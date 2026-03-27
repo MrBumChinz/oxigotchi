@@ -6,6 +6,12 @@ __pycache__/
 # Firmware binaries (proprietary)
 *.bin
 *.clm_blob
+*.hcd
+
+# Firmware reverse engineering (proprietary, local only)
+firmware_analysis/
+bt_firmware_analysis/
+gpu_firmware_analysis/
 
 # Development
 *.log
