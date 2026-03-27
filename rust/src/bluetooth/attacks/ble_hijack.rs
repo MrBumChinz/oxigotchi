@@ -29,7 +29,9 @@ pub fn run(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
         success: false,
         capture: None,
         error: Some(
-            "BLE connection hijack requires LL timing (conn interval, anchor point, hop increment)"
+            "BLE connection hijack requires >5KB patchram for LL hooks. BCM43430B0 has \
+             1,393B largest contiguous free block at 0x212A77. Hardware-limited — \
+             insufficient patchram space."
                 .into(),
         ),
         timestamp: start,
@@ -47,6 +49,6 @@ mod tests {
         let result = run(&hci, "AA:BB:CC:DD:EE:FF");
         assert_eq!(result.attack_type, BtAttackType::BleConnHijack);
         assert!(!result.success);
-        assert!(result.error.as_deref().unwrap().contains("LL timing"));
+        assert!(result.error.as_deref().unwrap().contains("Hardware-limited"));
     }
 }
