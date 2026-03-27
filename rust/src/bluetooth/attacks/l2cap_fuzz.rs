@@ -59,9 +59,9 @@ pub fn run(_hci: &HciSocket, target_addr: &str) -> BtAttackResult {
         attack_type: BtAttackType::L2capFuzz,
         target_address: target_addr.to_string(),
         target_name: None,
-        success: !captures.is_empty(),
+        success: false,
         capture,
-        error: None,
+        error: Some("payloads generated but not injected (needs ACL socket)".into()),
         timestamp: start,
     }
 }

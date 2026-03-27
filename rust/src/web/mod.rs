@@ -126,6 +126,7 @@ pub struct DaemonState {
     pub bt_capture_keys: u32,
     pub bt_capture_crashes: u32,
     pub bt_capture_vendor: u32,
+    pub bt_device_list: Vec<BtDeviceInfo>,
 
     // -- bt attack action requests --
     pub pending_bt_attack_toggle: Option<BtAttackToggle>,
@@ -314,6 +315,7 @@ impl DaemonState {
             bt_capture_keys: 0,
             bt_capture_crashes: 0,
             bt_capture_vendor: 0,
+            bt_device_list: Vec::new(),
             pending_bt_attack_toggle: None,
             pending_bt_rage_level: None,
             pending_bt_target: None,
@@ -800,10 +802,23 @@ pub struct BtAttackStats {
     pub devices_seen: u32,
 }
 
+/// Lightweight device info for the web API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtDeviceInfo {
+    pub address: String,
+    pub name: Option<String>,
+    pub rssi: Option<i16>,
+    pub category: String,
+    pub transport: String,
+    pub attack_state: String,
+    pub seen_count: u32,
+}
+
 /// BT devices response for GET /api/bt/devices.
 #[derive(Debug, Clone, Serialize)]
 pub struct BtDevicesResponse {
     pub count: u32,
+    pub devices: Vec<BtDeviceInfo>,
 }
 
 /// BT captures response for GET /api/bt/captures.
@@ -2218,11 +2233,12 @@ async fn bt_attacks_target_handler(
     })
 }
 
-/// GET /api/bt/devices -> JSON device count
+/// GET /api/bt/devices -> JSON device list with count
 async fn bt_devices_handler(State(state): State<SharedState>) -> Json<BtDevicesResponse> {
     let s = state.lock().unwrap();
     Json(BtDevicesResponse {
         count: s.bt_devices_seen,
+        devices: s.bt_device_list.clone(),
     })
 }
 

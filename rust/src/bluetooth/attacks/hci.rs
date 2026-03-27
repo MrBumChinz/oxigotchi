@@ -212,6 +212,19 @@ mod platform {
 // Re-export the platform-specific type at module level.
 pub use platform::HciSocket;
 
+/// Parse a BD_ADDR string "AA:BB:CC:DD:EE:FF" into 6 bytes in reversed
+/// (little-endian) order as required by HCI.
+pub fn parse_bdaddr(addr: &str) -> [u8; 6] {
+    let mut bytes = [0u8; 6];
+    let parts: Vec<&str> = addr.split(':').collect();
+    if parts.len() == 6 {
+        for (i, part) in parts.iter().enumerate() {
+            bytes[5 - i] = u8::from_str_radix(part, 16).unwrap_or(0);
+        }
+    }
+    bytes
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

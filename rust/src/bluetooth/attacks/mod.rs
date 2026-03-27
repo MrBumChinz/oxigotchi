@@ -86,11 +86,11 @@ impl BtAttackType {
     /// Minimum rage level required to activate this attack.
     fn min_rage_level(self) -> BtRageLevel {
         match self {
-            // Low: safe/passive-ish attacks
-            Self::SmpDowngrade | Self::Knob | Self::VendorCmdUnlock => BtRageLevel::Low,
-            // Medium: active injection / fuzzing
-            Self::BleAdvInjection | Self::L2capFuzz | Self::AttGattFuzz => BtRageLevel::Medium,
-            // High: aggressive / disruptive
+            // Low: passive diagnostics only (targets own controller, not external devices)
+            Self::VendorCmdUnlock => BtRageLevel::Low,
+            // Medium: active attacks that target external devices
+            Self::SmpDowngrade | Self::Knob | Self::BleAdvInjection | Self::L2capFuzz | Self::AttGattFuzz => BtRageLevel::Medium,
+            // High: aggressive / disruptive (MITM, connection hijack)
             Self::SmpMitm | Self::BleConnHijack => BtRageLevel::High,
         }
     }
@@ -129,7 +129,7 @@ impl BtRageLevel {
 
 impl Default for BtRageLevel {
     fn default() -> Self {
-        Self::Low
+        Self::Medium
     }
 }
 
@@ -222,7 +222,7 @@ fn default_stock_hcd() -> String {
 impl Default for BtAttackConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             rage_level: BtRageLevel::default(),
             smp_downgrade: true,
             smp_mitm: false,
@@ -408,8 +408,8 @@ mod tests {
     #[test]
     fn test_defaults() {
         let cfg = BtAttackConfig::default();
-        assert!(!cfg.enabled);
-        assert_eq!(cfg.rage_level, BtRageLevel::Low);
+        assert!(cfg.enabled);
+        assert_eq!(cfg.rage_level, BtRageLevel::Medium);
         assert!(cfg.smp_downgrade);
         assert!(!cfg.smp_mitm);
         assert!(cfg.knob);
@@ -445,24 +445,23 @@ mod tests {
 
     #[test]
     fn test_active_at_rage_low() {
-        let cfg = BtAttackConfig::default(); // rage = Low
+        let mut cfg = BtAttackConfig::default();
+        cfg.rage_level = BtRageLevel::Low;
         let active = cfg.active_at_rage_level();
-        // Only Low-level attacks that are also toggled on
-        assert!(active.contains(&BtAttackType::SmpDowngrade));
-        assert!(active.contains(&BtAttackType::Knob));
+        // Low: only VendorCmdUnlock (passive diagnostics) is allowed
         assert!(active.contains(&BtAttackType::VendorCmdUnlock));
-        assert_eq!(active.len(), 3);
+        assert_eq!(active.len(), 1);
     }
 
     #[test]
     fn test_active_at_rage_medium() {
-        let mut cfg = BtAttackConfig::default();
-        cfg.rage_level = BtRageLevel::Medium;
-        cfg.ble_adv_injection = true;
+        let cfg = BtAttackConfig::default(); // rage = Medium (new default)
         let active = cfg.active_at_rage_level();
-        // Low-level (3 on) + Medium-level ble_adv_injection
-        assert!(active.contains(&BtAttackType::BleAdvInjection));
-        assert_eq!(active.len(), 4);
+        // Medium: VendorCmdUnlock(Low) + SmpDowngrade + Knob (all toggled on by default)
+        assert!(active.contains(&BtAttackType::VendorCmdUnlock));
+        assert!(active.contains(&BtAttackType::SmpDowngrade));
+        assert!(active.contains(&BtAttackType::Knob));
+        assert_eq!(active.len(), 3);
     }
 
     #[test]
@@ -593,7 +592,7 @@ stock_hcd = "/tmp/stock.hcd"
     fn test_scheduler_active_types_delegates() {
         let sched = BtAttackScheduler::new(BtAttackConfig::default());
         let types = sched.active_attack_types();
-        // Default config: rage=Low, on=[smp_downgrade, knob, vendor_cmd_unlock]
+        // Default config: rage=Medium, on=[smp_downgrade, knob, vendor_cmd_unlock]
         assert_eq!(types.len(), 3);
         assert!(types.contains(&BtAttackType::SmpDowngrade));
         assert!(types.contains(&BtAttackType::Knob));

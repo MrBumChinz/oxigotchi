@@ -5,7 +5,7 @@
 
 use std::time::Instant;
 
-use super::hci::{HciCommand, HciSocket};
+use super::hci::{parse_bdaddr, HciCommand, HciSocket};
 use super::{BtAttackResult, BtAttackType, BtCapture};
 
 // HCI OGF for LE Controller commands
@@ -130,9 +130,9 @@ pub fn run(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
                 target_name: None,
                 success,
                 capture: if success {
-                    Some(BtCapture::PairingTranscript {
-                        address: target_addr.to_string(),
-                        data: adv_payload,
+                    Some(BtCapture::VendorResult {
+                        opcode: 0x0008, // LE_Set_Advertising_Data
+                        response: adv_payload,
                     })
                 } else {
                     None
@@ -158,18 +158,6 @@ pub fn run(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
             }
         }
     }
-}
-
-/// Parse BD_ADDR string to bytes in reversed (little-endian) order.
-fn parse_bdaddr(addr: &str) -> [u8; 6] {
-    let mut bytes = [0u8; 6];
-    let parts: Vec<&str> = addr.split(':').collect();
-    if parts.len() == 6 {
-        for (i, part) in parts.iter().enumerate() {
-            bytes[5 - i] = u8::from_str_radix(part, 16).unwrap_or(0);
-        }
-    }
-    bytes
 }
 
 #[cfg(test)]

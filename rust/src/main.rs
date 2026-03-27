@@ -106,6 +106,7 @@ struct Daemon {
     ao: ao::AoManager,
     radio: radio::RadioManager,
     patchram: bluetooth::patchram::PatchramManager,
+    bt_hci_socket: Option<bluetooth::attacks::hci::HciSocket>,
     firmware_monitor: firmware::FirmwareMonitor,
     gpu_state: gpu::state::gpu_state::GpuFeatureState,
     gpu_runtime_ingestor: gpu::runtime::ingest::GpuRuntimeIngestor,
@@ -201,6 +202,7 @@ impl Daemon {
             ao,
             radio: radio::RadioManager::new(),
             patchram,
+            bt_hci_socket: None,
             firmware_monitor: firmware::FirmwareMonitor::new(),
             gpu_state: gpu::state::gpu_state::GpuFeatureState {
                 mode: gpu_mode,
@@ -740,6 +742,57 @@ impl Daemon {
                     target.device_address,
                     target.device_name.as_deref().unwrap_or("?")
                 );
+
+                // Dispatch the actual attack worker
+                if let Some(ref hci) = self.bt_hci_socket {
+                    let result = match target.attack {
+                        bluetooth::attacks::BtAttackType::SmpDowngrade => {
+                            bluetooth::attacks::smp::run_downgrade(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::SmpMitm => {
+                            bluetooth::attacks::smp::run_mitm(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::Knob => {
+                            bluetooth::attacks::knob::run(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::BleAdvInjection => {
+                            bluetooth::attacks::ble_adv::run(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::BleConnHijack => {
+                            bluetooth::attacks::ble_hijack::run(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::L2capFuzz => {
+                            bluetooth::attacks::l2cap_fuzz::run(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::AttGattFuzz => {
+                            bluetooth::attacks::att_fuzz::run(hci, &target.device_address)
+                        }
+                        bluetooth::attacks::BtAttackType::VendorCmdUnlock => {
+                            bluetooth::attacks::vendor::run_diagnostics(hci, &target.device_address)
+                        }
+                    };
+
+                    // Store capture if present
+                    self.bt_capture_manager.store(&result);
+
+                    // Update device state based on result
+                    if let Some(dev) = self.bt_discovery.get_device_mut(&target.device_id) {
+                        dev.attack_state = if result.capture.is_some() {
+                            bluetooth::model::observation::BtDeviceAttackState::Captured
+                        } else if result.success {
+                            bluetooth::model::observation::BtDeviceAttackState::Targeted
+                        } else {
+                            bluetooth::model::observation::BtDeviceAttackState::Failed
+                        };
+                    }
+
+                    // Record in scheduler and remove from active set
+                    self.bt_attack_scheduler.remove_active(&target.device_id);
+                    self.bt_attack_scheduler.record(result);
+                } else {
+                    log::warn!("BT attack: no HCI socket — skipping dispatch for {}", target.device_address);
+                    self.bt_attack_scheduler.remove_active(&target.device_id);
+                }
             }
         }
 
@@ -2071,6 +2124,17 @@ impl Daemon {
         s.bt_total_captures = self.bt_attack_scheduler.total_captures;
         s.bt_active_attacks = self.bt_attack_scheduler.active_count();
         s.bt_devices_seen = self.bt_discovery.summary().devices_now;
+        s.bt_device_list = self.bt_discovery.devices_by_rssi().iter().map(|d| {
+            web::BtDeviceInfo {
+                address: d.address.clone(),
+                name: d.name.clone(),
+                rssi: d.rssi,
+                category: d.category.as_str().to_string(),
+                transport: format!("{:?}", d.transport),
+                attack_state: format!("{:?}", d.attack_state),
+                seen_count: d.seen_count,
+            }
+        }).collect();
         s.bt_patchram_state = self.patchram.state.as_str().to_string();
         s.bt_capture_keys = self.bt_capture_manager.total_keys;
         s.bt_capture_crashes = self.bt_capture_manager.total_crashes;
@@ -2289,8 +2353,59 @@ impl Daemon {
 
     /// Update the e-ink display with current state.
     /// Layout matches Python angryoxide.py AO mode — see docs/DISPLAY_SPEC.md.
+    /// In BT mode, uses a dedicated layout with BT-specific stats.
     fn update_display(&mut self) {
         self.screen.clear();
+
+        // ---- BT mode: dedicated layout ----
+        if self.mode == OperatingMode::Bt {
+            let summary = self.bt_discovery.summary();
+            let active = self.bt_attack_scheduler.active_count();
+            let captures = self.bt_capture_manager.total_captures();
+            let patchram_state = self.patchram.state.as_str();
+            let battery_str = if self.battery.available {
+                format!("{}%", self.battery.status.level)
+            } else {
+                "?".to_string()
+            };
+            let uptime = self.epoch_loop.uptime_str();
+
+            // BT-specific face
+            let patchram_error = self.patchram.state == bluetooth::patchram::PatchramState::Error;
+            let face = personality::bt_mode_face(
+                active,
+                summary.devices_now,
+                captures as u32,
+                patchram_error,
+            );
+
+            // LINE 1
+            self.screen.draw_hline(0, 14, display::DISPLAY_WIDTH);
+            // Face
+            self.screen.draw_face(&face);
+            // BT stats overlay
+            self.screen.draw_bt_mode(
+                summary.devices_now,
+                active,
+                captures as u32,
+                patchram_state,
+                &battery_str,
+                &uptime,
+            );
+            // Status text
+            let status = &self.epoch_loop.personality.current_status;
+            self.screen.draw_status(status);
+            // Name
+            self.screen.draw_name(&self.config.name);
+            // LINE 2
+            self.screen.draw_hline(0, 108, display::DISPLAY_WIDTH);
+            // Lua indicators
+            for ind in self.lua.get_indicators() {
+                self.screen.draw_indicator(&ind);
+            }
+            self.screen.flush();
+            return;
+        }
 
         // ---- LINE 1 (y=14) ----
         self.screen.draw_hline(0, 14, display::DISPLAY_WIDTH);
@@ -2432,6 +2547,8 @@ impl Daemon {
         self.show_transition(face, "Switching to SAFE...");
 
         if self.mode == OperatingMode::Bt {
+            // Close HCI socket before tearing down BT
+            self.bt_hci_socket = None;
             // BT attack mode → SAFE: swap attack patchram for stock
             match self.radio.transition_bt_to_safe(
                 &mut self.bluetooth,
@@ -2496,6 +2613,16 @@ impl Daemon {
                 self.mode = OperatingMode::Bt;
                 self.bt_feature.set_mode(bluetooth::model::config::BtMode::Attack);
                 self.epoch_loop.personality.set_override(face);
+                // Open raw HCI socket for attack dispatch
+                match bluetooth::attacks::hci::HciSocket::open(0) {
+                    Ok(sock) => {
+                        info!("bt: HCI socket opened for attack dispatch");
+                        self.bt_hci_socket = Some(sock);
+                    }
+                    Err(e) => log::error!("bt: failed to open HCI socket: {e}"),
+                }
+                // Init capture directories
+                self.bt_capture_manager.init_dirs();
                 // Radio transition disrupts SPI bus — force display reinit
                 display::driver::request_reinit();
             }
@@ -2513,6 +2640,8 @@ impl Daemon {
         self.show_transition(face, "Switching to RAGE...");
 
         if self.mode == OperatingMode::Bt {
+            // Close HCI socket before tearing down BT
+            self.bt_hci_socket = None;
             // BT attack mode → RAGE: unload patchram, restart WiFi+AO
             match self.radio.transition_bt_to_wifi(
                 &mut self.ao,

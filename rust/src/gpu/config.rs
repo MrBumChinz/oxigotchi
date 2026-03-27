@@ -6,9 +6,13 @@ use crate::gpu::state::gpu_state::GpuMode;
 pub struct GpuFeatureConfig {
     pub enabled: bool,
     pub mode: GpuMode,
+    #[serde(default)]
     pub runtime: GpuRuntimeConfig,
+    #[serde(default)]
     pub optimize: GpuOptimizeConfig,
+    #[serde(default)]
     pub ui: GpuUiConfig,
+    #[serde(default)]
     pub lab: GpuLabConfig,
 }
 
@@ -27,12 +31,18 @@ impl Default for GpuFeatureConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuRuntimeConfig {
+    #[serde(default = "default_true")]
     pub trace_enabled: bool,
+    #[serde(default = "default_true")]
     pub capture_summary_only: bool,
+    #[serde(default = "default_signal_window")]
     pub signal_window_sec: u64,
     #[serde(default)]
     pub summary_source: String,
 }
+
+fn default_true() -> bool { true }
+fn default_signal_window() -> u64 { 30 }
 
 impl Default for GpuRuntimeConfig {
     fn default() -> Self {

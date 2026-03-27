@@ -494,7 +494,7 @@ mode = "Telemetry"
 
 [gpu]
 enabled = true
-mode = "Lab"
+mode = "lab"
 
 [gpu.runtime]
 summary_source = "/tmp/gpu-runtime"

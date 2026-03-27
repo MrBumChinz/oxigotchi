@@ -6,7 +6,7 @@
 
 use std::time::Instant;
 
-use super::hci::{HciCommand, HciSocket};
+use super::hci::{parse_bdaddr, HciCommand, HciSocket};
 use super::{BtAttackResult, BtAttackType, BtCapture};
 
 // HCI Link Control OGF
@@ -72,7 +72,7 @@ pub fn run(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
     // HCI_Create_Connection parameters:
     //   BD_ADDR(6) + packet_type(2) + page_scan_rep_mode(1) + reserved(1) +
     //   clock_offset(2) + allow_role_switch(1)
-    let bdaddr = parse_bdaddr_classic(target_addr);
+    let bdaddr = parse_bdaddr(target_addr);
     let mut params = Vec::with_capacity(13);
     params.extend_from_slice(&bdaddr);
     params.extend_from_slice(&0xCC18u16.to_le_bytes()); // packet_type: DM1,DH1,DM3,DH3,DM5,DH5
@@ -129,25 +129,13 @@ pub fn run(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
     }
 }
 
-/// Parse BD_ADDR for classic BR/EDR (reversed byte order).
-fn parse_bdaddr_classic(addr: &str) -> [u8; 6] {
-    let mut bytes = [0u8; 6];
-    let parts: Vec<&str> = addr.split(':').collect();
-    if parts.len() == 6 {
-        for (i, part) in parts.iter().enumerate() {
-            bytes[5 - i] = u8::from_str_radix(part, 16).unwrap_or(0);
-        }
-    }
-    bytes
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_bdaddr_classic() {
-        let addr = parse_bdaddr_classic("11:22:33:44:55:66");
+    fn test_parse_bdaddr() {
+        let addr = parse_bdaddr("11:22:33:44:55:66");
         assert_eq!(addr, [0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
     }
 

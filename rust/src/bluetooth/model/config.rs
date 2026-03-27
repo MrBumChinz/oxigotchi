@@ -13,10 +13,15 @@ pub enum BtMode {
 pub struct BtFeatureConfig {
     pub enabled: bool,
     pub mode: BtMode,
+    #[serde(default)]
     pub discovery: BtDiscoveryConfig,
+    #[serde(default)]
     pub controller: BtControllerConfig,
+    #[serde(default)]
     pub coex: BtCoexConfig,
+    #[serde(default)]
     pub ui: BtUiConfig,
+    #[serde(default)]
     pub storage: BtStorageConfig,
 }
 
