@@ -333,6 +333,7 @@ pub fn extract_rusty_config(pwn: &PwnagotchiConfig) -> crate::config::Config {
         bt_feature: crate::bluetooth::model::config::BtFeatureConfig::default(),
         bt_attacks: crate::bluetooth::attacks::BtAttackConfig::default(),
         gpu: crate::gpu::config::GpuFeatureConfig::default(),
+        qpu: crate::qpu::QpuFeatureConfig::default(),
         name: String::new(),
         whitelist: Vec::new(),
         display: crate::config::DisplayConfig::default(),

@@ -27,6 +27,9 @@ pub struct Config {
     /// GPU/runtime observation and optimization config.
     #[serde(default)]
     pub gpu: crate::gpu::config::GpuFeatureConfig,
+    /// QPU WiFi acceleration config.
+    #[serde(default)]
+    pub qpu: crate::qpu::QpuFeatureConfig,
 
     // Convenience accessors populated after deserialization
     /// Shortcut for `main.name`.
@@ -257,6 +260,7 @@ impl Config {
             bt_feature: crate::bluetooth::model::config::BtFeatureConfig::default(),
             bt_attacks: crate::bluetooth::attacks::BtAttackConfig::default(),
             gpu: crate::gpu::config::GpuFeatureConfig::default(),
+            qpu: crate::qpu::QpuFeatureConfig::default(),
             name: String::new(),
             whitelist: Vec::new(),
             display: DisplayConfig::default(),

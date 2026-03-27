@@ -140,6 +140,17 @@ pub struct DaemonState {
     pub gpu_snapshot_policy: String,
     pub gpu_flush_threshold: u32,
 
+    // -- qpu --
+    pub qpu_enabled: bool,
+    pub qpu_available: bool,
+    pub qpu_num_cores: u32,
+    pub qpu_frames_submitted: u64,
+    pub qpu_frames_classified: u64,
+    pub qpu_batches_processed: u64,
+    pub qpu_overflow_count: u64,
+    pub qpu_last_batch_size: u32,
+    pub qpu_last_batch_duration_us: u64,
+
     // -- ao --
     pub ao_state: String,
     pub ao_pid: u32,
@@ -324,6 +335,15 @@ impl DaemonState {
             gpu_submit_seen: false,
             gpu_snapshot_policy: "flush_immediate".into(),
             gpu_flush_threshold: 1,
+            qpu_enabled: false,
+            qpu_available: false,
+            qpu_num_cores: 0,
+            qpu_frames_submitted: 0,
+            qpu_frames_classified: 0,
+            qpu_batches_processed: 0,
+            qpu_overflow_count: 0,
+            qpu_last_batch_size: 0,
+            qpu_last_batch_duration_us: 0,
             ao_state: "STOPPED".into(),
             ao_pid: 0,
             ao_crash_count: 0,
@@ -901,6 +921,20 @@ pub struct GpuInfo {
     pub flush_threshold: u32,
 }
 
+/// QPU info surfaced through the shared state/web snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QpuInfo {
+    pub enabled: bool,
+    pub available: bool,
+    pub num_cores: u32,
+    pub frames_submitted: u64,
+    pub frames_classified: u64,
+    pub batches_processed: u64,
+    pub overflow_count: u64,
+    pub last_batch_size: u32,
+    pub last_batch_duration_us: u64,
+}
+
 /// Bluetooth visibility toggle request.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BtVisibilityToggle {
@@ -1095,6 +1129,7 @@ pub const API_BATTERY: &str = "/api/battery";
 pub const API_WIFI: &str = "/api/wifi";
 pub const API_BLUETOOTH: &str = "/api/bluetooth";
 pub const API_GPU: &str = "/api/gpu";
+pub const API_QPU: &str = "/api/qpu";
 pub const API_RECOVERY: &str = "/api/recovery";
 pub const API_PERSONALITY: &str = "/api/personality";
 pub const API_SYSTEM: &str = "/api/system";
@@ -1423,6 +1458,22 @@ async fn gpu_handler(State(state): State<SharedState>) -> Json<GpuInfo> {
         submit_seen: s.gpu_submit_seen,
         snapshot_policy: s.gpu_snapshot_policy.clone(),
         flush_threshold: s.gpu_flush_threshold,
+    })
+}
+
+/// GET /api/qpu -> JSON qpu classification stats
+async fn qpu_handler(State(state): State<SharedState>) -> Json<QpuInfo> {
+    let s = state.lock().unwrap();
+    Json(QpuInfo {
+        enabled: s.qpu_enabled,
+        available: s.qpu_available,
+        num_cores: s.qpu_num_cores,
+        frames_submitted: s.qpu_frames_submitted,
+        frames_classified: s.qpu_frames_classified,
+        batches_processed: s.qpu_batches_processed,
+        overflow_count: s.qpu_overflow_count,
+        last_batch_size: s.qpu_last_batch_size,
+        last_batch_duration_us: s.qpu_last_batch_duration_us,
     })
 }
 
@@ -2333,6 +2384,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
             get(bluetooth_handler).post(bluetooth_toggle_handler),
         )
         .route(API_GPU, get(gpu_handler))
+        .route(API_QPU, get(qpu_handler))
         .route(API_PERSONALITY, get(personality_handler))
         .route(API_SYSTEM, get(system_handler))
         .route(
