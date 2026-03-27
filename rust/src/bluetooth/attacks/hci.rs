@@ -165,6 +165,80 @@ mod platform {
 
             Ok(HciResponse { status, data })
         }
+
+        pub fn wait_event(&self, event_code: u8, timeout_ms: i32) -> Result<Vec<u8>, String> {
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_millis(timeout_ms as u64);
+
+            loop {
+                let remaining = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .as_millis() as i32;
+                if remaining <= 0 {
+                    return Err(format!(
+                        "HCI wait_event(0x{:02X}) timeout ({}ms)",
+                        event_code, timeout_ms
+                    ));
+                }
+
+                let mut pfd = libc::pollfd {
+                    fd: self.fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let poll_ret = unsafe { libc::poll(&mut pfd, 1, remaining) };
+                if poll_ret < 0 {
+                    return Err(format!(
+                        "HCI poll failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+                if poll_ret == 0 {
+                    return Err(format!(
+                        "HCI wait_event(0x{:02X}) timeout ({}ms)",
+                        event_code, timeout_ms
+                    ));
+                }
+
+                let mut buf = [0u8; 260];
+                let n = unsafe {
+                    libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                };
+                if n < 0 {
+                    return Err(format!(
+                        "HCI read failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
+                }
+
+                let n = n as usize;
+                if n < 3 {
+                    continue;
+                }
+
+                // buf[0] = 0x04 (HCI event), buf[1] = event_code, buf[2] = param_len
+                if buf[1] == event_code {
+                    let param_len = buf[2] as usize;
+                    let end = (3 + param_len).min(n);
+                    return Ok(buf[3..end].to_vec());
+                }
+                // Not our event — discard and keep polling
+            }
+        }
+
+        pub fn wait_le_event(&self, subevent: u8, timeout_ms: i32) -> Result<Vec<u8>, String> {
+            let params = self.wait_event(0x3E, timeout_ms)?;
+            if params.is_empty() {
+                return Err("LE Meta event: empty params".into());
+            }
+            if params[0] != subevent {
+                return Err(format!(
+                    "LE Meta event: expected subevent 0x{:02X}, got 0x{:02X}",
+                    subevent, params[0]
+                ));
+            }
+            Ok(params[1..].to_vec())
+        }
     }
 
     impl Drop for HciSocket {
@@ -205,6 +279,18 @@ mod platform {
                 status: 0,
                 data: vec![0; 8],
             })
+        }
+
+        pub fn wait_event(&self, event_code: u8, _timeout_ms: i32) -> Result<Vec<u8>, String> {
+            log::info!("HciSocket stub: wait_event(0x{:02X})", event_code);
+            // Mock Connection Complete-like event
+            Ok(vec![0x00, 0x40, 0x00, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01, 0x00])
+        }
+
+        pub fn wait_le_event(&self, subevent: u8, _timeout_ms: i32) -> Result<Vec<u8>, String> {
+            log::info!("HciSocket stub: wait_le_event(0x{:02X})", subevent);
+            // Mock LE Connection Complete
+            Ok(vec![0x00, 0x40, 0x00, 0x00, 0x01, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x18, 0x00, 0x00, 0x00, 0xC8, 0x00, 0x00])
         }
     }
 }
@@ -273,5 +359,21 @@ mod tests {
             assert_eq!(resp.status, 0);
             assert_eq!(resp.data.len(), 8);
         }
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_wait_event_stub() {
+        let hci = HciSocket::open(0).unwrap();
+        let data = hci.wait_event(0x03, 2000).unwrap();
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn test_wait_le_event_stub() {
+        let hci = HciSocket::open(0).unwrap();
+        let data = hci.wait_le_event(0x01, 2000).unwrap();
+        assert!(!data.is_empty());
     }
 }
