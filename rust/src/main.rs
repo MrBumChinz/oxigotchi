@@ -1121,6 +1121,9 @@ impl Daemon {
         // Tick countdowns (milestones, friend, upload, capture face)
         self.epoch_loop.personality.variety.tick_countdowns();
 
+        // Expire mode transition override if countdown reached zero
+        self.epoch_loop.personality.tick_transition_override();
+
         // Wire captures into variety engine for milestones + face cycling
         if result.handshakes_captured > 0 {
             let total = self.epoch_loop.personality.total_handshakes;
@@ -2713,7 +2716,7 @@ impl Daemon {
         }
 
         self.mode = OperatingMode::Safe;
-        self.epoch_loop.personality.set_override(face);
+        self.epoch_loop.personality.set_transition_override(face, 2);
         // Radio transition disrupts SPI bus — force display reinit so next flush doesn't BUSY-timeout
         display::driver::request_reinit();
     }
@@ -2735,7 +2738,7 @@ impl Daemon {
                 info!("radio: transition to BT attack complete");
                 self.mode = OperatingMode::Bt;
                 self.bt_feature.set_mode(bluetooth::model::config::BtMode::Attack);
-                self.epoch_loop.personality.set_override(face);
+                self.epoch_loop.personality.set_transition_override(face, 2);
                 // Open raw HCI socket for attack dispatch
                 match bluetooth::attacks::hci::HciSocket::open(0) {
                     Ok(sock) => {

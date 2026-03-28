@@ -237,6 +237,18 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
             ],
         );
         m.insert(
+            "raging",
+            vec![
+                "FULL ATTACK MODE!",
+                "Deauth everything!",
+                "No AP is safe!",
+                "The bull sees red!",
+                "Snorting fire at every SSID",
+                "Horns down, packets flying!",
+                "This is NOT a drill!",
+            ],
+        );
+        m.insert(
             "look_r",
             vec![
                 "Something over there...",
@@ -291,6 +303,7 @@ mod tests {
             "demotivated",
             "sad",
             "intense",
+            "raging",
         ];
         for face in &faces {
             let msgs = messages_for_face(face);

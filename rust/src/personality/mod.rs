@@ -375,6 +375,10 @@ pub struct Personality {
     pub mood: Mood,
     /// Override face (e.g., for battery warnings, crashes).
     pub override_face: Option<Face>,
+    /// Countdown for mode transition overrides. When >0, the override is temporary.
+    pub transition_epochs_left: u8,
+    /// The face that was set by the mode transition (to avoid clearing unrelated overrides).
+    transition_face: Option<Face>,
     /// Number of consecutive epochs with no handshakes.
     pub blind_epochs: u32,
     /// Total handshakes captured this session.
@@ -407,6 +411,8 @@ impl Personality {
         Self {
             mood: Mood::default(),
             override_face: None,
+            transition_epochs_left: 0,
+            transition_face: None,
             blind_epochs: 0,
             total_handshakes: 0,
             total_aps_seen: 0,
@@ -526,6 +532,29 @@ impl Personality {
     /// Clear any face override.
     pub fn clear_override(&mut self) {
         self.override_face = None;
+    }
+
+    /// Set a temporary override for mode transitions (expires after N epochs).
+    pub fn set_transition_override(&mut self, face: Face, epochs: u8) {
+        self.override_face = Some(face);
+        self.transition_face = Some(face);
+        self.transition_epochs_left = epochs;
+    }
+
+    /// Decrement transition override countdown. Clears when expired,
+    /// but only if the override hasn't been overwritten by something else.
+    pub fn tick_transition_override(&mut self) {
+        if self.transition_epochs_left == 0 {
+            return;
+        }
+        self.transition_epochs_left -= 1;
+        if self.transition_epochs_left == 0 {
+            // Only clear if the override is still the transition face
+            if self.override_face == self.transition_face {
+                self.override_face = None;
+            }
+            self.transition_face = None;
+        }
     }
 
     /// Reset transient context flags (call at start of each epoch).
@@ -2285,5 +2314,31 @@ mod tests {
             }
         }
         panic!("no joke selected in 100 tries — probability too low");
+    }
+
+    #[test]
+    fn test_mode_transition_override_expires() {
+        let mut p = Personality::new();
+        p.set_transition_override(Face::Grateful, 2);
+        assert_eq!(p.override_face, Some(Face::Grateful));
+        assert_eq!(p.transition_epochs_left, 2);
+
+        p.tick_transition_override();
+        assert_eq!(p.override_face, Some(Face::Grateful));
+        assert_eq!(p.transition_epochs_left, 1);
+
+        p.tick_transition_override();
+        assert_eq!(p.override_face, None);
+        assert_eq!(p.transition_epochs_left, 0);
+    }
+
+    #[test]
+    fn test_transition_override_not_cleared_if_overwritten() {
+        let mut p = Personality::new();
+        p.set_transition_override(Face::Grateful, 2);
+        p.set_override(Face::BatteryCritical);
+
+        p.tick_transition_override();
+        assert_eq!(p.override_face, Some(Face::BatteryCritical));
     }
 }
