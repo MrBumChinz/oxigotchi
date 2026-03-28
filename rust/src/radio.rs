@@ -258,7 +258,9 @@ impl RadioManager {
                     "radio: AO PID {} still alive after stop, rolling back to WIFI",
                     stopped_pid
                 );
-                self.rollback_to_wifi(ao, wifi);
+                if !self.rollback_to_wifi(ao, wifi) {
+                    error!("radio: rollback_to_wifi failed after AO still-alive check");
+                }
                 return Err(format!("AO PID {} still alive after stop", stopped_pid));
             }
         }
@@ -282,7 +284,9 @@ impl RadioManager {
             }
             if !verify_interface_gone("wlan0mon") {
                 error!("radio: wlan0mon still exists, rolling back to WIFI");
-                self.rollback_to_wifi(ao, wifi);
+                if !self.rollback_to_wifi(ao, wifi) {
+                    error!("radio: rollback_to_wifi failed after wlan0mon still-exists check");
+                }
                 return Err("failed to remove wlan0mon interface".into());
             }
         }
@@ -304,7 +308,9 @@ impl RadioManager {
         // Step 8: Verify /sys/class/bluetooth/hci0 exists
         if !verify_bt_adapter_exists() {
             error!("radio: hci0 not found after hci_uart reload, rolling back to WIFI");
-            self.rollback_to_wifi(ao, wifi);
+            if !self.rollback_to_wifi(ao, wifi) {
+                error!("radio: rollback_to_wifi failed after hci0 not-found check");
+            }
             return Err("BT adapter hci0 not found after hci_uart reload".into());
         }
         info!("radio: step 8 — hci0 adapter verified");
@@ -508,19 +514,31 @@ impl RadioManager {
     }
 
     /// Rollback helper: restart WiFi after a failed BT transition.
-    fn rollback_to_wifi(&mut self, ao: &mut ao::AoManager, wifi: &mut wifi::WifiManager) {
+    /// Returns true if at least monitor mode was restored.
+    fn rollback_to_wifi(&mut self, ao: &mut ao::AoManager, wifi: &mut wifi::WifiManager) -> bool {
         warn!("radio: rolling back to WIFI");
         // Try to restart WiFi monitor mode
-        match wifi.start_monitor() {
-            Ok(()) => info!("radio: rollback — WiFi monitor restarted"),
-            Err(e) => error!("radio: rollback — WiFi monitor restart failed: {e}"),
+        let monitor_ok = match wifi.start_monitor() {
+            Ok(()) => {
+                info!("radio: rollback — WiFi monitor restarted");
+                true
+            }
+            Err(e) => {
+                error!("radio: rollback — WiFi monitor restart failed: {e}");
+                false
+            }
+        };
+        if monitor_ok {
+            // Try to restart AO
+            match ao.start() {
+                Ok(()) => info!("radio: rollback — AO restarted (PID {})", ao.pid),
+                Err(e) => error!("radio: rollback — AO restart failed: {e}"),
+            }
+            let _ = self.acquire_lock(RadioMode::Wifi);
+        } else {
+            error!("radio: rollback failed — not claiming WIFI lock, remains in Transitioning");
         }
-        // Try to restart AO
-        match ao.start() {
-            Ok(()) => info!("radio: rollback — AO restarted (PID {})", ao.pid),
-            Err(e) => error!("radio: rollback — AO restart failed: {e}"),
-        }
-        let _ = self.acquire_lock(RadioMode::Wifi);
+        monitor_ok
     }
 }
 
