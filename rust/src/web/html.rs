@@ -1756,7 +1756,7 @@ function updateBtCapturesFromWs(btCaptures) {
     document.getElementById('bt-cap-crashes').textContent = btCaptures.crashes != null ? btCaptures.crashes : '-';
     document.getElementById('bt-cap-vendor').textContent = btCaptures.vendor != null ? btCaptures.vendor : '-';
     document.getElementById('bt-cap-total').textContent = btCaptures.total != null ? btCaptures.total : '-';
-    document.getElementById('bt-cap-transcripts').textContent = '-';
+    document.getElementById('bt-cap-transcripts').textContent = btCaptures.transcripts != null ? btCaptures.transcripts : '-';
 }
 
 function refreshBtAttacks() {
@@ -1879,6 +1879,7 @@ setTimeout(refreshAps, 6000);
 setTimeout(refreshWhitelist, 6500);
 setTimeout(refreshWpaSec, 7000);
 setTimeout(refreshDiscord, 7500);
+setTimeout(refreshBtAttacks, 8000);
 
 // Start polling as initial strategy; WS will take over once connected
 startPolling();

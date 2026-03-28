@@ -2250,6 +2250,7 @@ impl Daemon {
         }).collect();
         s.bt_patchram_state = self.patchram.state.as_str().to_string();
         s.bt_capture_keys = self.bt_capture_manager.total_keys;
+        s.bt_capture_transcripts = self.bt_capture_manager.total_transcripts;
         s.bt_capture_crashes = self.bt_capture_manager.total_crashes;
         s.bt_capture_vendor = self.bt_capture_manager.total_vendor;
 

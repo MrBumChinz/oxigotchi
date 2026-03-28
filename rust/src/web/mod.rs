@@ -124,6 +124,7 @@ pub struct DaemonState {
     pub bt_devices_seen: u32,
     pub bt_patchram_state: String,
     pub bt_capture_keys: u32,
+    pub bt_capture_transcripts: u32,
     pub bt_capture_crashes: u32,
     pub bt_capture_vendor: u32,
     pub bt_device_list: Vec<BtDeviceInfo>,
@@ -331,6 +332,7 @@ impl DaemonState {
             bt_devices_seen: 0,
             bt_patchram_state: String::new(),
             bt_capture_keys: 0,
+            bt_capture_transcripts: 0,
             bt_capture_crashes: 0,
             bt_capture_vendor: 0,
             bt_device_list: Vec::new(),
@@ -599,6 +601,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
         },
         bt_captures: BtCapturesResponse {
             keys: s.bt_capture_keys,
+            transcripts: s.bt_capture_transcripts,
             crashes: s.bt_capture_crashes,
             vendor: s.bt_capture_vendor,
             total: s.bt_total_captures,
@@ -917,6 +920,7 @@ pub struct BtDevicesResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct BtCapturesResponse {
     pub keys: u32,
+    pub transcripts: u32,
     pub crashes: u32,
     pub vendor: u32,
     pub total: u64,
@@ -2384,6 +2388,7 @@ async fn bt_captures_handler(State(state): State<SharedState>) -> Json<BtCapture
     let s = state.lock().unwrap();
     Json(BtCapturesResponse {
         keys: s.bt_capture_keys,
+        transcripts: s.bt_capture_transcripts,
         crashes: s.bt_capture_crashes,
         vendor: s.bt_capture_vendor,
         total: s.bt_total_captures,
