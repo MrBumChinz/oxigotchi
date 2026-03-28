@@ -21,6 +21,11 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Chewing cud, waiting for packets",
                 "Standing in the pasture... alone",
                 "Not even a stale beacon out here",
+                "Watching grass grow between scans",
+                "If boredom were a sport, I'd medal",
+                "The air smells like... nothing",
+                "Tumbleweed just rolled by my antenna",
+                "Even the crickets left",
             ],
         );
         m.insert(
@@ -57,6 +62,11 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Mooing into the void...",
                 "Echo... echo... moo...",
                 "One lonely bull in a big field",
+                "Party of one at the trough",
+                "My shadow is my only friend",
+                "Wish there was another bull nearby",
+                "The fence posts don't talk back",
+                "Solo stampede of one",
             ],
         );
         m.insert(
@@ -69,6 +79,11 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Snorting and stamping!",
                 "Who moved my hay bale?!",
                 "This bull has HAD it!",
+                "I will headbutt that router",
+                "Fury levels: maximum bovine",
+                "Steam coming out of my nostrils",
+                "The matador better run",
+                "Rage-scanning every channel",
             ],
         );
         m.insert(
@@ -182,6 +197,12 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "The bull spirit is fading",
                 "Running on empty hay",
                 "Need greener pastures",
+                "Why do I even scan anymore",
+                "The antenna mocks me",
+                "Zero handshakes, infinite sadness",
+                "Maybe I should become a cow",
+                "Lost signal, lost hope",
+                "The void stares back",
             ],
         );
         m.insert(
@@ -193,6 +214,12 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Rainy day at the ranch",
                 "Missing the golden pastures",
                 "Even the barn feels empty",
+                "The hay tastes like tears",
+                "Nobody scans for me either",
+                "Staring at a blank signal meter",
+                "Remember when we had handshakes?",
+                "The silence is deafening",
+                "Just a bull and his thoughts",
             ],
         );
         m.insert(
@@ -271,8 +298,8 @@ mod tests {
     fn test_total_message_count() {
         let total: usize = BULL_MESSAGES.values().map(|v| v.len()).sum();
         assert!(
-            total >= 100,
-            "should have at least 100 messages, got {}",
+            total >= 140,
+            "should have at least 140 messages, got {}",
             total
         );
     }
