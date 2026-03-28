@@ -280,6 +280,26 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 </div>
 
+<!-- RF Classification -->
+<div class="card" id="card-rf">
+<div class="card-title">RF Environment</div>
+<div class="sub">Real-time 802.11 frame classification — CPU classifier, 41&times; faster than GPU.</div>
+<div class="stat-row" style="margin-bottom:10px">
+<div class="stat"><div class="value" id="rf-speed">-</div><div class="label">frames/ms</div></div>
+<div class="stat"><div class="value" id="rf-total">-</div><div class="label">classified</div></div>
+<div class="stat"><div class="value" id="rf-bssids">-</div><div class="label">BSSIDs</div></div>
+<div class="stat"><div class="value" id="rf-dominant">-</div><div class="label">dominant</div></div>
+</div>
+<div class="status-grid">
+<div class="label">Beacons/s</div><div class="value" id="rf-beacon">-</div>
+<div class="label">Probes/s</div><div class="value" id="rf-probe">-</div>
+<div class="label">Deauths/s</div><div class="value" id="rf-deauth">-</div>
+<div class="label">Data/s</div><div class="value" id="rf-data">-</div>
+<div class="label">Batches</div><div class="value" id="rf-batches">-</div>
+<div class="label">Overflows</div><div class="value" id="rf-overflow">-</div>
+</div>
+</div>
+
 <!-- ═══════ LOOT ═══════ -->
 <div class="section-label">Loot</div>
 
@@ -635,6 +655,29 @@ function refreshAttacks() {
         [1,2,3].forEach(function(n) {
             document.getElementById('rate-'+n).classList.toggle('active', n === d.attack_rate);
         });
+    });
+}
+
+function refreshRf() {
+    api('GET', '/api/qpu').then(function(d) {
+        if (!d) return;
+        var speed = (d.last_batch_size && d.last_batch_duration_us > 0)
+            ? (d.last_batch_size / (d.last_batch_duration_us / 1000)).toFixed(0)
+            : '-';
+        document.getElementById('rf-speed').textContent = speed;
+        document.getElementById('rf-total').textContent = d.frames_classified || 0;
+        document.getElementById('rf-bssids').textContent = d.unique_bssids || 0;
+        document.getElementById('rf-dominant').textContent = d.dominant_class || '-';
+        document.getElementById('rf-beacon').textContent = (d.beacon_rate || 0).toFixed(1);
+        document.getElementById('rf-probe').textContent = (d.probe_rate || 0).toFixed(1);
+        var deEl = document.getElementById('rf-deauth');
+        deEl.textContent = (d.deauth_rate || 0).toFixed(1);
+        deEl.style.color = d.deauth_rate > 5 ? '#e94560' : '#e0e0e0';
+        document.getElementById('rf-data').textContent = (d.data_rate || 0).toFixed(1);
+        document.getElementById('rf-batches').textContent = d.batches_processed || 0;
+        var ovEl = document.getElementById('rf-overflow');
+        ovEl.textContent = d.overflow_count || 0;
+        ovEl.style.color = d.overflow_count > 0 ? '#f0c040' : '#e0e0e0';
     });
 }
 
@@ -1477,6 +1520,7 @@ function startPolling() {
     _pollTimers.push(setInterval(refreshBluetooth, 15000));
     _pollTimers.push(setInterval(refreshWifi, 5000));
     _pollTimers.push(setInterval(refreshAttacks, 10000));
+    _pollTimers.push(setInterval(refreshRf, 10000));
     _pollTimers.push(setInterval(refreshCaptures, 30000));
     _pollTimers.push(setInterval(refreshRecovery, 15000));
     _pollTimers.push(setInterval(refreshPersonality, 10000));
@@ -1533,6 +1577,7 @@ setTimeout(refreshBattery, 500);
 setTimeout(refreshBluetooth, 1000);
 setTimeout(refreshWifi, 1500);
 setTimeout(refreshAttacks, 2500);
+setTimeout(refreshRf, 2800);
 setTimeout(refreshCaptures, 3000);
 setTimeout(refreshRecovery, 3500);
 setTimeout(refreshPersonality, 4000);

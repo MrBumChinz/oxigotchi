@@ -2885,7 +2885,7 @@ mod tests {
             "missing battery card"
         );
         assert!(DASHBOARD_HTML.contains("card-bt"), "missing bluetooth card");
-        // GPU card removed — runtime telemetry moved to backend-only
+        assert!(DASHBOARD_HTML.contains("card-rf"), "missing RF card");
         assert!(DASHBOARD_HTML.contains("card-wifi"), "missing wifi card");
         assert!(
             DASHBOARD_HTML.contains("card-attacks"),
@@ -2956,7 +2956,7 @@ mod tests {
             DASHBOARD_HTML.contains("/api/bluetooth"),
             "missing /api/bluetooth"
         );
-        // GPU API removed from dashboard — backend only
+        assert!(DASHBOARD_HTML.contains("/api/qpu"), "missing /api/qpu");
         assert!(DASHBOARD_HTML.contains("/api/wifi"), "missing /api/wifi");
         assert!(
             DASHBOARD_HTML.contains("/api/attacks"),
