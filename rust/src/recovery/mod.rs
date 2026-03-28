@@ -279,6 +279,12 @@ impl RecoveryManager {
     pub fn process_health(&mut self, check: HealthCheck) -> RecoveryAction {
         self.last_check = Some(Instant::now());
 
+        // Don't advance state machine during cooldown — the previous recovery
+        // hasn't had time to take effect yet.
+        if check != HealthCheck::Ok && self.cooldown_active() {
+            return RecoveryAction::None;
+        }
+
         match (self.state, check) {
             (_, HealthCheck::Ok) => {
                 if self.state != RecoveryState::Healthy {
@@ -1622,5 +1628,31 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ======= Cooldown guard =======
+
+    #[test]
+    fn test_process_health_does_not_advance_during_cooldown() {
+        let mut rm = RecoveryManager::new(RecoveryConfig {
+            max_soft_retries: 3,
+            recovery_cooldown_secs: 60,
+            ..Default::default()
+        });
+
+        // First unhealthy check: transitions Healthy -> SoftRecovery, count == 1.
+        let action = rm.process_health(HealthCheck::Unresponsive);
+        assert_eq!(action, RecoveryAction::SoftRecover);
+        assert_eq!(rm.soft_retry_count, 1);
+
+        // Simulate the caller performing recovery and recording it.
+        rm.record_recovery();
+        assert!(rm.cooldown_active(), "cooldown should be active immediately after record_recovery");
+
+        // Second unhealthy check while cooldown is still active.
+        // Must return None and must NOT advance soft_retry_count.
+        let action2 = rm.process_health(HealthCheck::Unresponsive);
+        assert_eq!(action2, RecoveryAction::None, "expected None during cooldown, got {action2:?}");
+        assert_eq!(rm.soft_retry_count, 1, "retry count must not advance during cooldown");
     }
 }
