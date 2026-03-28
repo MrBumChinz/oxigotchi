@@ -6,193 +6,38 @@
 
 ---
 
-## Oxigotchi v3.0 — Rusty Oxigotchi
+## What Is This
 
-**Oxigotchi v3.0** is the current release — a full Rust rewrite that replaces the entire Python + bettercap + pwngrid stack with a single ~5MB static binary. ~10MB RAM, boot to scanning in under 5 seconds. No Python interpreter, no venv, no pip, no Go runtime, no garbage collector. Just a lean, mean, handshake-capturing machine.
-
-Everything that made Oxigotchi great (patched firmware, 6 attack types, bull faces, web dashboard, self-healing) has been rebuilt from scratch as native Rust modules compiled into one binary. Your SD card will last a decade.
-
-Full documentation: [docs/RUSTY_V3.md](docs/RUSTY_V3.md). Source code: `rust/` directory.
+A single ~5MB Rust binary that replaces the entire Python + bettercap + pwngrid stack. Boots to scanning in under 5 seconds, runs in ~10MB RAM. No Python, no venv, no Go runtime. An 8-layer firmware patch eliminates all WiFi crashes on the BCM43436B0 — the chip that stock pwnagotchi crashes on every 2-5 minutes. Six attack types, real-time RF classification, 26 bull faces. The pwnagotchi is a pet. The Oxigotchi is a workbull.
 
 ---
-
-## The Problem with Stock Pwnagotchi
-
-Stock pwnagotchi on a Pi Zero 2W is barely functional. Here's what's actually happening under the hood:
-
-The BCM43436B0 WiFi chip was never designed for packet injection. The nexmon patch that enables monitor mode is essentially duct tape — it forces the firmware into a state Broadcom never intended, and the chip fights back constantly. The PSM (Power Save Mode) watchdog fires every few seconds under injection load, the DPC (Deferred Procedure Call) handler panics when frame queues overflow, and memcpy operations trigger hard faults when the SDIO bus can't keep up. The result: **your WiFi module crashes every 2-5 minutes**. Bettercap tries to send a deauth frame, the firmware panics, the SDIO bus dies, wlan0mon disappears, pwnagotchi restarts, and the cycle repeats.
-
-Most people's pwnagotchis spend more time recovering from crashes than actually capturing handshakes. It looks like a cute hacking toy on the outside, but when you dig into the logs, it's barely working — limping along with constant firmware resets, missing most handshakes because the radio is dead half the time.
-
-And it's not just the WiFi. The crash cascade causes a chain of secondary problems:
-
-- **SSH drops constantly** — You're SSH'd in trying to debug something, the firmware crashes, pwnagotchi restarts, your SSH session dies. Reconnect, wait for boot, crash again. Repeat.
-- **`monstop` reloads the entire driver** — Every time pwnagotchi restarts, it calls `modprobe -r brcmfmac && modprobe brcmfmac`, which re-enumerates the SDIO bus. Do this enough times in quick succession and the SDIO bus dies permanently — only a full power cycle recovers it.
-- **Restart storms kill the SD card** — Pwnagotchi has `Restart=always` in systemd with no rate limit. Crash → restart → crash → restart, over and over, writing logs and thrashing the SD card each time.
-- **Boot takes forever** — On every restart, pwnagotchi re-parses its entire log file backwards using `FileReadBackwards`. With a 10MB log, this takes 30-60 seconds of pure I/O on the slow SD card. Every crash costs you a minute of downtime.
-- **Bettercap eats memory** — Written in Go, bettercap uses ~80MB of RAM on a Pi Zero 2W that only has 512MB total. Combined with pwnagotchi's Python, you're constantly near memory pressure.
-- **Captures are often junk** — Bettercap saves raw pcap files that may contain incomplete handshakes. You think you captured something, upload it to wpa-sec, and get nothing back. Community tools like `hashie-clean` and `pcap-convert-to-hashcat` exist specifically because this is such a common problem.
-- **No real-time control** — Want to whitelist your home WiFi? Edit a TOML file over SSH. Want to see what networks are nearby? Check the tiny e-ink text. Want to download a capture? SCP it manually. The stock web UI shows a PNG of the e-ink display and a config editor. That's it.
-- **The "AI" doesn't work** — The original pwnagotchi used reinforcement learning to optimize attacks. The jayofelony fork disabled it because it consumed too many resources and didn't actually improve capture rates. The mood faces that were supposed to reflect AI state just cycle randomly now.
-
-On top of all that, bettercap only supports 2 attack types (deauth and PMKID), while modern tools like AngryOxide support 6 — including CSA, rogue M2, and anonymous reassociation that capture handshakes bettercap simply cannot get.
-
-## What I Did About It
-
-I reverse-engineered the BCM43436B0 firmware — mapped the ROM, found the crash handlers, traced the SDIO bus failures back to their root causes. I built a 7-layer firmware patch:
-
-1. **PSM watchdog threshold** — raised from 5 to 255, preventing premature power-save panics
-2. **DPC watchdog threshold** — same treatment, stops the deferred procedure handler from killing the radio
-3. **RSSI threshold** — widened to prevent false signal-loss resets
-4. **Fatal error wrapper** — intercepts error codes 5, 6, 7 at the firmware level and suppresses them instead of crashing
-5. **HardFault recovery** — catches memcpy bus faults that previously killed the SDIO connection
-6. **BCOL GTK rekey disable** — prevents a group key rotation that triggers a cascade failure under heavy TX load
-7. **DWT watchpoint on wlc_fatal_error** — uses ARM Cortex-M3 hardware debug watchpoint to intercept ALL callers of the crash function, including 5 in read-only ROM that no software patch can reach. When any code — ROM or RAM — tries to crash the firmware, the watchpoint fires a Debug Monitor exception before the crash function executes, and our handler suppresses non-critical errors
-8. **RSSI use-after-free fix** — patches the RSSI averaging function that caused rate-2 crashes. The original code read from a stale pointer after TX queue pressure freed the buffer. A NULL check prevents the fault entirely
-
-This is the most thoroughly analyzed WiFi firmware patch for the BCM43436B0 in existence — built on a complete reverse engineering effort that mapped **6,965 functions**, reconstructed **313 fields** of the central WiFi controller structure, traced **24,328 cross-references**, and identified every crash path in the 1 MB firmware. The result: **27,982 injected frames in a 5-minute stress test, zero crashes.** The firmware that used to die every 2 minutes now runs indefinitely.
-
-**This firmware patch benefits everyone** — not just Oxigotchi users. If you want to keep using stock bettercap in PWN mode, the patched firmware makes that stable too. No more constant crashes and restarts. I'm contributing these findings back to the nexmon project so the broader community benefits.
-
-Then I integrated [AngryOxide](https://github.com/Ragnt/AngryOxide) — a Rust-based attack engine the community has been asking for. Nobody could get it running on the built-in WiFi because the firmware crashes were even worse under AO's heavier injection load. With the patched firmware, it runs flawlessly.
-
-## How It Works
-
-A single Rust binary (`rusty-oxigotchi`) manages everything: it spawns AngryOxide as a subprocess, drives the e-ink display via SPI, runs the web dashboard on port 8080, manages Bluetooth tethering, executes Lua plugins, and monitors the WiFi firmware for crashes. Only one program touches the WiFi chip at a time — no TX/RX conflicts, no SDIO bus contention.
-
-The daemon operates in two modes: **RAGE** (WiFi monitor mode, AO attacking, BT off) and **SAFE** (WiFi managed mode, BT tethered to phone, no attacks). Toggle between them with the PiSugar3 button or the dashboard. A self-healing stack (PSM counter reset, crash loop detection, modprobe recovery, GPIO power cycle) handles firmware edge cases automatically.
-
-For the full technical deep dive, see **[docs/RUSTY_V3.md](docs/RUSTY_V3.md)** and **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ## The Numbers
 
 | Metric | Stock Pwnagotchi | Oxigotchi v3.0 |
 |--------|-----------------|----------------|
-| **WiFi crashes** | Every 2-5 minutes | Zero (v7 firmware, 8-layer patch, 27,982 frames tested) |
-| **Attack types** | 2 (deauth, PMKID) | 6 (+ CSA, disassoc, anon reassoc, rogue M2) |
-| **Memory usage** | ~80 MB (bettercap + Python) | ~10 MB (single Rust binary) |
-| **Capture quality** | Raw pcaps, often incomplete | Validated .pcapng + .22000 hashcat-ready |
-| **Boot time** | 2-3 min (parses full log) | <5 sec (no Python, no venv) |
-| **Channel strategy** | Fixed hop | Smart autohunt with dwell, live channel on display |
-| **Language** | Python + Go | 100% Rust |
-| **Web dashboard** | Basic status page | 23 live cards, full control panel (axum) |
-| **Faces** | Korean text emoticons | 26 bull face PNGs (SPI direct to e-ink) |
-| **SD card lifespan** | ~1-2 years | 10+ years (tmpfs capture pipeline, near-zero writes) |
-| **Binary size** | 150MB+ (Python venv + Go) | ~5 MB static binary |
-| **Self-healing** | Manual reboot | PSM reset, crash loop detection, modprobe cycle, GPIO recovery |
-| **XP/Leveling** | Basic (level^3/2 curve) | Exponential (level^1.3*5), cap 999, passive + active XP, ~1 year to max |
+| WiFi crashes | Every 2-5 min | Zero (8-layer firmware patch, 27,982 frames tested) |
+| Attack types | 2 | 6 (+ CSA, disassoc, anon reassoc, rogue M2) |
+| Memory | ~80 MB | ~10 MB |
+| Boot time | 2-3 min | <5 sec |
+| RF awareness | None | 10 frame types, 256 frames/ms, live RF stats |
+| Binary size | 150MB+ | ~5 MB |
+| SD card lifespan | ~1-2 years | 10+ years |
+| Language | Python + Go | 100% Rust |
 
-**Key point:** Even if you never use AngryOxide, the firmware patch alone makes stock pwnagotchi dramatically more stable. Switch to PWN mode and enjoy a bettercap that actually works.
+---
 
-## Why an Ox?
+## What We Built
 
-The name started practical: **Angry**Oxide → **Ox**ide → **Ox**. Then it stuck.
+**WiFi Firmware** — We reverse-engineered the BCM43436B0 firmware — mapped 6,965 functions, reconstructed 313 struct fields, traced 24,328 cross-references. Built an 8-layer patch including a DWT hardware watchpoint that intercepts ALL crash paths, even 5 callers in read-only ROM that no software patch can reach. Result: 27,982 injected frames in a 5-minute stress test, zero crashes. The firmware that died every 2 minutes now runs indefinitely. **[Full deep dive →](../../wiki/WiFi-Firmware)**
 
-Pwnagotchi has its cute ghost face. Fancygotchi has dolphins and pikachus. But a hacking tool that brute-forces WiFi handshakes with 6 attack types and a patched firmware that refuses to die? That's not cute. That's a bull.
+**GPU RF Classification Pipeline** — A dedicated pipeline taps raw 802.11 frames from wlan0mon via libpcap and classifies every frame in real time — Beacon, Probe, Deauth, Data, and 6 more types. We built a real VideoCore IV QPU kernel in hand-encoded machine code for the Pi's GPU, discovered through systematic hardware debugging that QPU conditional execution doesn't work via register poke, and ended up with a CPU classifier that's 41x faster (256 frames in ~1ms). The bull's mood now responds to the RF spectrum. **[Full deep dive →](../../wiki/RF-Classification-Pipeline)**
 
-The ox is stubborn — it doesn't stop when the firmware crashes, it recovers. It's strong — 28,000 injected frames without breaking a sweat. And it has horns — when the bull is scanning, the horns point up (peaceful, grazing). When it captures a handshake, the horns come down (charging, triumphant).
+**Bluetooth Pentest Mode** — The BCM43436B0 shares a UART between WiFi and Bluetooth — they can't run simultaneously. Oxigotchi cleanly separates them: RAGE mode for WiFi attacks, SAFE mode for BT tethering to your phone. One button toggles between them. SAFE mode gives you internet for WPA-SEC uploads and Discord notifications. **[Details →](../../wiki/Bluetooth)**
 
-28 hand-drawn bull faces show you exactly what your Oxigotchi is doing. No guessing, no random mood swings. Each face means something specific — from the sleeping bull at shutdown to the raging bull when the firmware crashes and recovers.
+**Self-Healing & Connectivity** — Stock pwnagotchi: SSH drops every time the firmware crashes, days of troubleshooting just to connect. Oxigotchi: USB lifeline at 10.0.0.2 that never goes down. PSM watchdog reset, crash loop detection, modprobe recovery, GPIO power cycle, graceful give-up. The daemon never reboots the Pi — SSH and the web dashboard stay accessible no matter what. **[Architecture →](../../wiki/Architecture)**
 
-The pwnagotchi is a pet. The Oxigotchi is a workbull.
-
-## Features
-
-- **No dongles needed** — Most people give up on the built-in WiFi and buy a $15 Alfa dongle. Oxigotchi patches the Pi Zero 2W's BCM43436B0 chip for full monitor mode and TX injection. No external adapters, no USB hubs, no extra bulk. Plug in a battery, put it in your pocket, done.
-- **6 attack types** — Deauth, PMKID, CSA, disassociation, anonymous reassociation, and rogue M2. Captures handshakes that bettercap simply cannot get.
-- **Stable firmware** — 8-layer patch (v7), built on a 6,965-function reverse engineering effort. DWT hardware watchpoint intercepts ALL crash paths including ROM. RSSI use-after-free fix enables rate-2 operation. Stress-tested with 27,982 injected frames and zero crashes. The most complete BCM43436B0 firmware patch ever created.
-- **Validated captures** — AO validates every capture before saving. No junk pcaps. Every `.pcapng` has a matching `.22000` hashcat-ready file. No need for cleanup tools like `hashie-clean` or `pcap-convert-to-hashcat`.
-- **Web dashboard** — Full control from your phone. 23 live cards: attack toggles, nearby networks, per-file capture downloads, cracked passwords, system health, BT visibility control, channel config with autohunt, whitelist management, WPA-SEC upload, Discord notifications, plugin manager, mode switch, system controls, log viewer.
-- **26 bull faces** — Custom 1-bit e-ink art for every mood and system state. Each face is a diagnostic indicator, not decoration.
-- **Auto-crack integration** — Captures automatically upload to WPA-SEC for cloud cracking. Cracked passwords appear in the dashboard.
-- **Discord notifications** — Optional webhook integration sends a Discord message every time a handshake is captured. Disabled by default.
-- **XP & leveling** — The bull earns XP passively (+1 per epoch just for scanning, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). An exponential curve (`level^1.3 * 5`) makes early levels fast and high levels a serious grind — max level **999** takes about **1 year** of daily use. XP persists across reboots.
-- **Live channel display** — The current AO channel updates on the e-ink screen every 5 seconds, parsed from AO's stdout.
-- **RAGE Slider** — 7-level aggression preset in the dashboard. One slider controls rate, dwell time, and channels simultaneously — from Chill (rate 1, 5s dwell, 3 channels) to YOLO (rate 3, 500ms, all 13). Each level is stress-test-validated. Touch any individual control to break out to Custom mode. Persists across reboots.
-- **Channel hopping** — Default channels are 1, 6, 11 (non-overlapping 2.4GHz). Configurable from the dashboard with 13 toggleable channel buttons and a dwell time slider. Autohunt mode lets AO choose channels intelligently.
-- **Smart Skip** — Toggle in the dashboard (below attack rates) that skips APs you already have handshakes for. ON by default. Focuses AO on new targets instead of re-capturing from the same APs. Persists across reboots.
-- **Fast boot** — Under 5 seconds from power-on to scanning. No Python, no venv, no log parsing.
-- **RAGE/SAFE mode** — PiSugar3 button or dashboard toggles between WiFi attack mode (RAGE) and BT internet tethering mode (SAFE). The BCM43436B0's shared UART prevents both simultaneously.
-- **Self-healing stack** — PSM watchdog counter reset every 15 minutes, crash loop detection (3+ SIGABRT triggers modprobe recovery), exponential AO restart backoff, GPIO power cycle, graceful give-up (daemon stays up, never reboots).
-- **tmpfs capture pipeline** — AO writes to RAM (`/tmp`, 150MB tmpfs). Every 30 seconds the daemon validates captures, converts to hashcat `.22000`, and moves proven handshakes to SD card (`/home/pi/captures/`). Junk is deleted from RAM. Only a reboot within the last 30-second window loses an unprocessed capture. Near-zero SD card wear during attacks.
-- **State persistence** — Attack toggles, whitelist, WPA-SEC key, Discord config, and channel settings survive restarts (saved to `/var/lib/oxigotchi/state.json`).
-- **Reproducible image builds** — `tools/bake_v3.sh` builds a complete SD card image from the repo. Single binary flash, no venv, no pip.
-- **Legacy auto-disable** — Stops and disables pwnagotchi and bettercap services on first boot, freeing ~66 MB of RAM.
-- **GPS auto-detection** — If gpsd is running, captures automatically include GPS coordinates.
-- **Backwards compatible** — All existing plugins work. Switch to PWN mode anytime for stock bettercap (now stable with our firmware patch). Your handshakes, config, and plugins are untouched.
-- **Firmware rollback** — One command to restore original firmware.
-- **Safe updates** — `apt upgrade` works without breaking anything. Kernel and firmware packages are held, apt hooks protect the patched firmware.
-
-## Hardware You Need
-
-> **This project is for the Raspberry Pi Zero 2W ONLY.**
->
-> The firmware patches target the BCM43436B0 WiFi chip, which is specific to the Pi Zero 2W. **Other Pi models (Pi 3, Pi 4, Pi Zero W, Pi 5) have different WiFi chips and WILL NOT WORK.**
-
-| Component | Required? | Notes |
-|---|---|---|
-| **Raspberry Pi Zero 2W** | **YES** | Must be the Zero **2** W (not the original Zero W). |
-| **microSD card (16GB+)** | **YES** | Class 10 or faster. 32GB recommended. |
-| **Micro USB cable** | **YES** | For power and data (USB tethering). |
-| **Waveshare 2.13" V4 e-ink display** | Recommended | Shows the bull faces. The "V4" matters — other versions have different drivers. |
-| **PiSugar 3 battery** | Optional | Makes it portable. Battery level shows on dashboard and triggers low-battery faces. |
-| **3D-printed case** | Optional | Protects the stack. Many designs on Thingiverse. |
-
-## Installation
-
-### Option 1: Flash the Image (Recommended)
-
-1. **Download the Oxigotchi image** from the [Releases](../../releases) section.
-2. **Flash it to your microSD card** using [Raspberry Pi Imager](https://www.raspberrypi.com/software/) or [balenaEtcher](https://etcher.balena.io/).
-3. **Insert the SD card** into your Pi Zero 2W.
-4. **Windows users: install the USB gadget driver** — Download and run [rpi-usb-gadget-driver-setup.exe](https://github.com/jayofelony/pwnagotchi/releases) before connecting. macOS and Linux don't need this.
-5. **Connect the Pi** via the micro USB **data** port (the one closest to the center, not the edge).
-6. **Power on.** Wait about 5 seconds for boot.
-7. **That's it.** The bull appears on the e-ink display and AngryOxide begins scanning automatically in RAGE mode (the default).
-
-> **Default credentials** (change these after first boot):
-> - SSH: `pi` / `raspberry`
-> - Web UI: `changeme` / `changeme`
->
-> To SSH in: `ssh pi@10.0.0.2`
-
-### Option 2: Install on Existing Pwnagotchi (Advanced)
-
-```bash
-git clone https://github.com/CoderFX/oxigotchi.git /home/pi/Oxigotchi
-cd /home/pi/Oxigotchi/tools
-sudo python3 deploy_pwnoxide.py
-```
-
-The deployer is an 18-step automated installer. It backs up your existing firmware before making changes.
-
-## First Boot
-
-1. **0:00** — Power LED lights up.
-2. **~3s** — Kernel loaded, Rust daemon starts. Boot splash shows the bull on e-ink.
-3. **~5s** — AngryOxide launches. Scanning begins in RAGE mode.
-4. **~5s+** — Attacks begin automatically. APs appear in the dashboard.
-
-> First boot after flashing takes a few seconds extra (migration from pwnagotchi config runs once).
-
-## Web Dashboard
-
-```
-http://10.0.0.2:8080
-```
-
-22 live dashboard cards organized by user journey: face display, core stats, live e-ink preview, battery, bluetooth, WiFi, attack type toggles, recent captures, recovery status, personality/XP, system info, cracked passwords, per-file capture downloads, mode switch, system controls (restart AO / shutdown Pi / restart SSH), plugins, nearby networks, whitelist, channel config with autohunt, WPA-SEC upload, Discord notifications, and live logs.
-
-Auto-refreshes every 5-30 seconds. Dark theme, mobile-friendly.
-
-## RAGE / SAFE Mode
-
-The Pi Zero 2W's BCM43436B0 chip shares a UART between WiFi and Bluetooth — they cannot run simultaneously. Oxigotchi cleanly separates them into two modes:
-
-- **RAGE** (default) — WiFi monitor mode, AngryOxide attacking, BT off
-- **SAFE** — WiFi managed mode, BT tethered to phone for internet, no attacks
-
-Switch via the **PiSugar3 button** (single tap) or the **web dashboard** (RAGE/SAFE buttons). The switch happens at the next epoch boundary (~30 seconds).
+---
 
 ## Bull Faces — What They Mean
 
@@ -227,102 +72,57 @@ Every mood has its own bull. Here are 26 faces:
 | ![debug](faces/eink/debug.png) | **Debug** | Debug mode active |
 | ![shutdown](faces/eink/shutdown.png) | **Shutdown** | Clean power off |
 
-## Safety Features
+---
 
-- **Firmware rollback** — `pwnoxide-mode rollback-fw` restores original firmware at any time.
-- **PSM watchdog reset** — Every 15 minutes, the daemon resets the firmware's PSM/DPC/RSSI watchdog counters via SDIO RAMRW, preventing long-running degradation.
-- **Crash loop detection** — If AO crashes 3+ times (SIGABRT from degraded firmware), the daemon triggers a full `modprobe` recovery cycle instead of endlessly restarting.
-- **GiveUp safety** — After all recovery attempts are exhausted, the daemon gives up gracefully. It never reboots the Pi. SSH and the web dashboard stay accessible.
-- **GPIO self-heal** — When the SDIO bus dies (error -22), the daemon power-cycles the BCM43436B0 chip via GPIO 41 (WL_REG_ON), rebinds the MMC controller, reloads the driver, and restarts AO.
-- **AO watchdog** — Restarts crashed AO with exponential backoff (5s, 10s, 20s... up to 5 minutes).
-- **USB lifeline** — SSH always available at `10.0.0.2`, even when WiFi is dead.
-- **Safe apt upgrades** — Kernel and firmware packages held, apt hooks auto-protect the patched firmware binary.
+## Hardware You Need
 
-## Capture Pipeline
+> **This project is for the Raspberry Pi Zero 2W ONLY.**
+>
+> The firmware patches target the BCM43436B0 WiFi chip, which is specific to the Pi Zero 2W. **Other Pi models (Pi 3, Pi 4, Pi Zero W, Pi 5) have different WiFi chips and WILL NOT WORK.**
 
-Captures flow through a RAM-based pipeline that protects the SD card from write wear:
+| Component | Required? | Notes |
+|---|---|---|
+| **Raspberry Pi Zero 2W** | **YES** | Must be the Zero **2** W (not the original Zero W). |
+| **microSD card (16GB+)** | **YES** | Class 10 or faster. 32GB recommended. |
+| **Micro USB cable** | **YES** | For power and data (USB tethering). |
+| **Waveshare 2.13" V4 e-ink display** | Recommended | Shows the bull faces. The "V4" matters — other versions have different drivers. |
+| **PiSugar 3 battery** | Optional | Makes it portable. Battery level shows on dashboard and triggers low-battery faces. |
+| **3D-printed case** | Optional | Protects the stack. Many designs on Thingiverse. |
 
-```
-AO (angryoxide)
- │  writes to /tmp/ao_captures/ (tmpfs, 150MB RAM)
- │  files: capture-TIMESTAMP.pcapng + capture.kismet
- ▼
-Daemon (every 30s epoch)
- │  1. Scans /tmp/ao_captures/ for new .pcapng files
- │  2. Converts to .22000 (hashcat-ready) via hcxpcapngtool
- │  3. Moves validated captures to /home/pi/captures/ (SD card)
- │  4. Deletes junk from tmpfs (failed conversions, empty captures)
- ▼
-SD card: /home/pi/captures/
-   capture-2026-03-24_12-00-00.pcapng  (original)
-   capture-2026-03-24_12-00-00.22000   (hashcat-ready)
-```
+---
 
-**Key details:**
-- `/tmp` is a 150MB tmpfs (RAM). AO's `.kismet` tracking file can grow to 20-60MB during long sessions, plus pcapng files at ~1-5MB each. The 150MB limit gives comfortable headroom.
-- Only the last 30 seconds of captures are at risk on a sudden reboot — everything processed in a prior epoch is safe on SD.
-- The `.22000` companion file is hashcat-ready. Every capture on SD has one.
-- WPA-SEC auto-upload (if configured) queues validated captures for cloud cracking.
-- The dashboard's "Captures" card shows file count, handshake count, pending uploads, and total size. Individual files can be downloaded from the dashboard.
+## Installation
 
-**If `/tmp` fills up**, AO crashes because it can't write. The daemon detects this and restarts AO, but the real fix is to ensure `/tmp` doesn't fill. The 150MB default handles typical sessions (several hours). For marathon sessions (12+ hours), the `.kismet` file may grow large — the buffer-cleaner timer runs every 5 minutes and helps, but extremely long sessions in dense environments may need monitoring.
+### Flash the Image (Recommended)
 
-## Bluetooth Tethering
+1. **Download the Oxigotchi image** from the [Releases](../../releases) section.
+2. **Flash it to your microSD card** using [Raspberry Pi Imager](https://www.raspberrypi.com/software/) or [balenaEtcher](https://etcher.balena.io/).
+3. **Insert the SD card** into your Pi Zero 2W.
+4. **Windows users: install the USB gadget driver** — Download and run [rpi-usb-gadget-driver-setup.exe](https://github.com/jayofelony/pwnagotchi/releases) before connecting. macOS and Linux don't need this.
+5. **Connect the Pi** via the micro USB **data** port (the one closest to the center, not the edge).
+6. **Power on.** Wait about 5 seconds for boot.
+7. **That's it.** The bull appears on the e-ink display and AngryOxide begins scanning automatically in RAGE mode (the default).
 
-Bluetooth tethering is built into the Rust daemon and activates in SAFE mode. Switch to SAFE mode via the PiSugar3 button (single tap) or the web dashboard.
+> **Default credentials** (change these after first boot):
+> - SSH: `pi` / `raspberry`
+> - Web UI: `changeme` / `changeme`
+>
+> To SSH in: `ssh pi@10.0.0.2`
 
-When switching from RAGE to SAFE, the daemon automatically reloads the `hci_uart` kernel module to reset the shared UART, then powers on BT and connects to your configured phone.
+---
 
-Configure your phone's BT MAC in `/etc/oxigotchi/config.toml` under `[bluetooth]`. See [docs/BT_TETHERING.md](docs/BT_TETHERING.md) for setup details.
+## Learn More
 
-## FAQ
+- **[WiFi Firmware Reverse Engineering](../../wiki/WiFi-Firmware)** — The 8-layer BCM43436B0 firmware patch that eliminated all WiFi crashes
+- **[RF Classification Pipeline](../../wiki/RF-Classification-Pipeline)** — Real-time 802.11 frame classification via VideoCore IV GPU and CPU
+- **[Bluetooth Pentest Mode](../../wiki/Bluetooth)** — RAGE/SAFE mode switching, UART multiplexing, BT tethering
+- **[Capture Pipeline](../../wiki/Capture-Pipeline)** — tmpfs-based capture flow, hashcat conversion, SD card protection
+- **[Web Dashboard](../../wiki/Web-Dashboard)** — 23 live cards, REST API, mobile-friendly control panel
+- **[Architecture & Self-Healing](../../wiki/Architecture)** — Daemon design, epoch loop, crash recovery, module overview
+- **[Building & Cross-Compilation](../../wiki/Building)** — Rust cross-compile for aarch64, Pi sysroot, deployment
+- **[Troubleshooting & FAQ](../../wiki/Troubleshooting-and-FAQ)** — Common issues, apt safety, plugin authoring, XP system
 
-**Does this work on Pi 4 / Pi 3 / Pi Zero W / Pi 5?**
-No. The firmware patches are for the BCM43436B0 chip in the Pi Zero 2W only. Other Pi models have different chips. No workaround exists.
-
-**Can I write plugins?**
-Yes. Oxigotchi v3 uses Lua 5.4 plugins. Place `.lua` files in `/etc/oxigotchi/plugins/`. Plugins can register indicators on the e-ink display and react to epoch, handshake, crash, and BT events. See [docs/RUSTY_V3.md](docs/RUSTY_V3.md) for the full plugin API.
-
-**Is `sudo apt update && sudo apt upgrade -y` safe?**
-Yes. The dangerous packages are held and won't upgrade:
-
-| Held Package | Why |
-|-------------|-----|
-| `linux-image-*` | Kernel pinned to 6.12.62 (nexmon compatibility) |
-| `firmware-brcm80211`, `firmware-nexmon` | Protects patched WiFi firmware |
-| `brcmfmac-nexmon-dkms` | Prevents nexmon module rebuild |
-| `libpcap-dev`, `libpcap0.8-dev` | AO dependency version lock |
-
-A dpkg hook (`/etc/apt/apt.conf.d/99-protect-firmware`) backs up the patched firmware before any apt operation. If a package update somehow overwrites it, `verify-oxigotchi` auto-restores from the `.pre-apt` backup.
-
-After any upgrade, run `sudo verify-oxigotchi` to confirm nothing broke. To see what's held: `apt-mark showhold`.
-
-**Can I switch back to stock pwnagotchi?**
-The legacy pwnagotchi and bettercap services are disabled on first boot. You can re-enable them with `systemctl enable pwnagotchi bettercap`, but the Rust daemon is designed to fully replace them. To fully remove the firmware patch: `sudo pwnoxide-mode rollback-fw`.
-
-**Is this legal?**
-These are WiFi security auditing tools for testing your own networks or networks you have explicit permission to test. Use responsibly.
-
-**Are my captures actually crackable?**
-Yes — AO validates every capture before saving. No junk pcaps. Every `.pcapng` has a matching `.22000` hashcat-ready file. No need for `hashie-clean` or `pcap-convert-to-hashcat`.
-
-**How do I set up WPA-SEC auto-cracking?**
-Get a free API key from [wpa-sec.stanev.org](https://wpa-sec.stanev.org), paste it in the WPA-SEC card on the dashboard and hit Save. Captured handshakes upload automatically when internet is available (SAFE mode with BT tethering). Cracked passwords appear in the Cracked Passwords card.
-
-**The e-ink display is blank or garbled.**
-Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use different drivers). Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i spi`
-
-**How does XP and leveling work?**
-Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
-
-**Can I change the attack rate?**
-The dashboard lets you set rate 1 (Quiet), 2 (Normal), or 3 (Aggressive) individually, or use the **RAGE Slider** — a 7-level preset that controls rate, dwell time, and channels with one knob. Levels range from Chill (rate 1, 5s dwell, 3 channels) to YOLO (rate 3, 500ms, all 13 channels). All presets except YOLO (level 7) are stress-test-validated stable. YOLO is the only known crash combo — AO died at 50 seconds in testing, but the daemon auto-recovered. Touching any individual control breaks out of the slider to Custom mode.
-
-**Does scanning more channels help?**
-Yes. With the v6 firmware patches, scanning all 13 channels is fully stable — even at rate 2 with 500ms dwell time. The old advice to "stick to 1, 6, 11" was based on pre-patch firmware behavior. Channels 1, 6, and 11 are still where 95% of 2.4 GHz APs live, so they remain the best default for efficiency, but scanning all 13 no longer risks a crash. Autohunt mode (which scans all channels then locks onto active ones) is now the recommended approach.
-
-**How long does the battery last?**
-With PiSugar 3 (1200mAh): 3-4 hours active. The bull face warns at 20% and 15%.
+---
 
 ## Maintenance & Support
 
