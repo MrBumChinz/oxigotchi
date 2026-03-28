@@ -1142,9 +1142,6 @@ impl Daemon {
             self.epoch_loop.personality.variety.morning_greeted = true;
         }
 
-        // Generate bull-themed status message (handles joke cycling)
-        self.epoch_loop.personality.generate_status();
-
         // Periodic XP save (every 5 epochs)
         self.epoch_loop.personality.xp.tick_epoch(); // +1 passive XP
         self.epoch_loop.personality.xp.award_aps(self.ao.ap_count()); // +1 per AP
@@ -1164,6 +1161,10 @@ impl Daemon {
         {
             self.epoch_loop.personality.clear_override();
         }
+
+        // Generate status AFTER all override changes are finalized —
+        // so the message pool matches the face that will actually display.
+        self.epoch_loop.personality.generate_status();
 
         // Record stable epoch for AO
         if self.ao.state == ao::AoState::Running {
@@ -3660,5 +3661,18 @@ mod tests {
     fn test_daemon_default_autohunt_is_on() {
         let daemon = make_daemon();
         assert!(daemon.autohunt, "daemon should start with autohunt enabled");
+    }
+
+    #[test]
+    fn test_generate_status_runs_after_battery_check() {
+        let source = include_str!("main.rs");
+        let gen_pos = source.find("personality.generate_status()").expect("generate_status not found");
+        let battery_pos = source
+            .find("check_battery_overrides()")
+            .expect("check_battery_overrides not found");
+        assert!(
+            gen_pos > battery_pos,
+            "generate_status() must run AFTER check_battery_overrides()"
+        );
     }
 }
