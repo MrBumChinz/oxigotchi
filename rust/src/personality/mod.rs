@@ -550,15 +550,20 @@ impl Personality {
         let face = self.current_face();
         let face_name = face.face_key().to_string();
 
-        // If face changed, reset ALL status state — don't show stale messages
-        // from a different face (e.g., angry message on sleep face)
+        // If face changed, reset joke state and immediately pick a message
+        // from the new face's pool (don't clear — avoids fallback to static mood msg)
         if self.joke_face != face_name {
             self.joke_phase = 0;
             self.joke_epochs_left = 0;
             self.joke_index = None;
             self.joke_face = face_name.clone();
-            self.status_display_epochs = 3; // force new message pick
-            self.current_status.clear();
+            self.status_display_epochs = 3; // force new message pick below
+            // Pick an immediate message from the new face so status is never empty
+            let msgs = messages::messages_for_face(&face_name);
+            if !msgs.is_empty() {
+                let mut rng = rand::thread_rng();
+                self.current_status = msgs[rng.gen_range(0..msgs.len())].to_string();
+            }
         }
 
         // If a joke is actively being displayed, continue it
@@ -2139,5 +2144,31 @@ mod tests {
         let initial = p.mood.value();
         p.mood.adjust(mood_deltas::JOKE);
         assert!((p.mood.value() - (initial + mood_deltas::JOKE)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_face_transition_picks_new_message() {
+        let mut p = Personality::new();
+        p.mood = Mood { value: 0.5 }; // awake face
+        p.generate_status();
+        assert!(!p.current_status.is_empty(), "should have a message after generate");
+
+        // Change mood to trigger face change (sad)
+        p.mood = Mood { value: 0.15 };
+        p.generate_status();
+        assert!(
+            !p.current_status.is_empty(),
+            "face transition should pick new message, not clear to empty"
+        );
+        // Should be from sad face pool, not the mood fallback
+        let sad_msgs = messages::messages_for_face("sad");
+        let jokes = jokes::jokes_for_face("sad");
+        let is_sad_msg = sad_msgs.iter().any(|m| *m == p.current_status);
+        let is_joke = jokes.iter().any(|j| j.0 == p.current_status || j.1 == p.current_status);
+        assert!(
+            is_sad_msg || is_joke,
+            "message '{}' should be from sad face pool or jokes",
+            p.current_status
+        );
     }
 }
