@@ -103,6 +103,17 @@ pub fn parse_radiotap(raw: &[u8]) -> (u8, i8) {
     let it_present = u32::from_le_bytes([raw[4], raw[5], raw[6], raw[7]]);
 
     let mut offset: usize = 8;
+
+    // Skip extended present bitmask words (bit 31 set = more words follow)
+    let mut present_word = it_present;
+    while present_word & (1 << 31) != 0 {
+        if offset + 4 > rt_len {
+            return (0, 0);
+        }
+        present_word = u32::from_le_bytes([raw[offset], raw[offset + 1], raw[offset + 2], raw[offset + 3]]);
+        offset += 4;
+    }
+
     let mut channel: u8 = 0;
     let mut rssi: i8 = 0;
 
@@ -273,7 +284,8 @@ where
         };
 
         if handle.is_null() {
-            let err = String::from_utf8_lossy(&errbuf);
+            let null_pos = errbuf.iter().position(|&b| b == 0).unwrap_or(errbuf.len());
+            let err = String::from_utf8_lossy(&errbuf[..null_pos]);
             warn!("pcap_open_live({iface}) failed: {err} — retrying in 1s");
             std::thread::sleep(std::time::Duration::from_secs(1));
             continue;
