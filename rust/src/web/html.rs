@@ -98,12 +98,16 @@ input:checked+.slider:before{transform:translateX(22px)}
 @media(max-width:400px){.grid-2{grid-template-columns:1fr}.stat-row{gap:4px}.stat .value{font-size:15px}}
 [data-modes]{display:none}
 .bt-group-header{font-size:11px;color:#00d4aa;font-weight:bold;margin:10px 0 4px;text-transform:uppercase;letter-spacing:1px}
-.bt-badge{font-size:9px;padding:1px 5px;border-radius:4px;margin-left:6px;font-weight:normal}
+.bt-badge{display:inline-block;font-size:9px;padding:1px 5px;border-radius:4px;margin-left:6px;font-weight:normal}
 .bt-badge-pr{background:#5a300033;color:#e67e22}
 .bt-badge-high{background:#e9456033;color:#e94560}
 .bt-device-table{width:100%;border-collapse:collapse;font-size:12px}
 .bt-device-table th{color:#888;font-size:11px;text-align:left;padding:4px 6px;border-bottom:1px solid #0f3460}
 .bt-device-table td{padding:6px;border-bottom:1px solid #0f346033}
+.bt-address{font-size:11px;color:#aaa}
+.bt-type-secondary{display:block;color:#555;font-size:10px;margin-top:2px}
+.bt-row-warning{opacity:.65}
+.bt-row-warning .toggle-label,.bt-row-warning .toggle-desc{color:#f0c040}
 .bt-state-untouched{color:#555}
 .bt-state-targeted{color:#3498db}
 .bt-state-attacking{color:#f0c040}
@@ -113,6 +117,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 .bt-target-btn:hover{background:#00d4aa33}
 .bt-rage-btn{padding:8px 16px;border-radius:8px;border:2px solid #0f3460;background:#16213e;color:#888;font-size:13px;font-weight:bold;cursor:pointer;font-family:inherit;transition:.2s}
 .bt-rage-btn.active{border-color:#00d4aa;color:#00d4aa;background:#0f3460}
+@media(max-width:400px){.bt-hide-mobile{display:none}.bt-type-secondary{display:inline;color:#555;margin-left:6px}}
 </style>
 </head>
 <body>
@@ -339,13 +344,14 @@ input:checked+.slider:before{transform:translateX(22px)}
 <table class="bt-device-table" id="bt-device-table">
 <thead><tr>
 <th>Name</th>
+<th>Address</th>
 <th>RSSI</th>
 <th>Type</th>
 <th>State</th>
-<th>Seen</th>
+<th class="bt-hide-mobile">Seen</th>
 <th></th>
 </tr></thead>
-<tbody id="bt-device-tbody"><tr><td colspan="6" style="color:#555">No devices yet</td></tr></tbody>
+<tbody id="bt-device-tbody"><tr><td colspan="7" style="color:#555">No devices yet</td></tr></tbody>
 </table>
 </div>
 </div>
@@ -370,7 +376,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="toggle-info"><div class="toggle-label">SMP Downgrade</div><div class="toggle-desc">Downgrade pairing security to capture keys</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-smp_downgrade" checked onchange="toggleBtAttack('smp_downgrade',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row">
+<div class="toggle-row" id="bt-row-smp_mitm" title="Requires High rage level">
 <div class="toggle-info"><div class="toggle-label">SMP MITM<span class="bt-badge bt-badge-high">HIGH</span></div><div class="toggle-desc">Man-in-the-middle BLE pairing</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-smp_mitm" onchange="toggleBtAttack('smp_mitm',this.checked)"><span class="slider"></span></label>
 </div>
@@ -378,7 +384,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="toggle-info"><div class="toggle-label">BLE Adv Injection</div><div class="toggle-desc">Inject malicious BLE advertisements</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-ble_adv_injection" onchange="toggleBtAttack('ble_adv_injection',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row">
+<div class="toggle-row" id="bt-row-ble_conn_hijack" title="Requires High rage level">
 <div class="toggle-info"><div class="toggle-label">BLE Conn Hijack<span class="bt-badge bt-badge-high">HIGH</span></div><div class="toggle-desc">Hijack active BLE connections</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-ble_conn_hijack" onchange="toggleBtAttack('ble_conn_hijack',this.checked)"><span class="slider"></span></label>
 </div>
@@ -673,12 +679,42 @@ function fmtBytes(b) {
 function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/'/g, '&#39;'); }
 
 var _currentMode = 'rage';
+var _lastHydratedMode = null;
+var _overviewState = {mode: 'RAGE'};
 function normalizeMode(raw) {
     var m = (raw || '').toUpperCase();
     if (m === 'AO' || m === 'RAGE') return 'rage';
     if (m === 'BT') return 'bt';
     if (m === 'PWN' || m === 'SAFE') return 'safe';
     return 'rage';
+}
+
+function mergeOverviewState(patch) {
+    if (!patch) return;
+    Object.keys(patch).forEach(function(key) {
+        _overviewState[key] = patch[key];
+    });
+}
+
+function updateSectionLabelVisibility() {
+    document.querySelectorAll('.section-label').forEach(function(label) {
+        var node = label.nextElementSibling;
+        var show = false;
+        while (node && !node.classList.contains('section-label')) {
+            var cards = [];
+            if (node.classList.contains('card')) {
+                cards = [node];
+            } else {
+                cards = Array.prototype.slice.call(node.querySelectorAll('.card'));
+            }
+            if (cards.some(function(card) { return card.style.display !== 'none'; })) {
+                show = true;
+                break;
+            }
+            node = node.nextElementSibling;
+        }
+        label.style.display = show ? '' : 'none';
+    });
 }
 
 function applyModeVisibility(rawMode) {
@@ -688,6 +724,7 @@ function applyModeVisibility(rawMode) {
         var modes = el.getAttribute('data-modes').split(' ');
         el.style.display = modes.indexOf(mode) >= 0 ? '' : 'none';
     });
+    updateSectionLabelVisibility();
 }
 
 function setSlot(n, label, value) {
@@ -716,7 +753,7 @@ function updateOverview(state) {
         setSlot(6, 'RAGE', state.bt_attacks ? state.bt_attacks.rage_level : '-');
     } else {
         var bt = state.bluetooth || {};
-        setSlot(1, 'BT', bt.state || '-');
+        setSlot(1, 'BT', bt.connected ? 'Connected' : (bt.state || '-'));
         setSlot(2, 'DEVICE', bt.device_name || '-');
         setSlot(3, 'NET', bt.internet_available ? 'Yes' : 'No');
         setSlot(4, 'NEARBY', bt.nearby_devices != null ? bt.nearby_devices : '-');
@@ -725,19 +762,33 @@ function updateOverview(state) {
     }
 }
 
+function syncModeUi(rawMode) {
+    document.getElementById('mode-rage').classList.toggle('active', rawMode === 'RAGE' || rawMode === 'AO');
+    document.getElementById('mode-bt').classList.toggle('active', rawMode === 'BT');
+    document.getElementById('mode-safe').classList.toggle('active', rawMode === 'SAFE' || rawMode === 'PWN');
+    applyModeVisibility(rawMode);
+}
+
+function refreshModeScopedData(rawMode) {
+    var mode = normalizeMode(rawMode);
+    if (mode === _lastHydratedMode) return;
+    _lastHydratedMode = mode;
+    if (mode === 'bt') refreshBtAttacks();
+    if (mode === 'bt' || mode === 'safe') refreshBluetooth();
+}
+
 // --- Refresh functions ---
 
 function refreshStatus() {
     api('GET', '/api/status').then(function(d) {
         if (!d) return;
-        updateOverview(d);
-        document.getElementById('mode-rage').classList.toggle('active', d.mode === 'RAGE' || d.mode === 'AO');
-        document.getElementById('mode-bt').classList.toggle('active', d.mode === 'BT');
-        document.getElementById('mode-safe').classList.toggle('active', d.mode === 'SAFE' || d.mode === 'PWN');
+        mergeOverviewState(d);
+        updateOverview(_overviewState);
+        syncModeUi(d.mode);
         var nameInput = document.getElementById('setting-name');
         if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
         syncSettingsFromData(d);
-        applyModeVisibility(d.mode);
+        refreshModeScopedData(d.mode);
     });
 }
 
@@ -762,6 +813,8 @@ function refreshBattery() {
 function refreshBluetooth() {
     api('GET', '/api/bluetooth').then(function(d) {
         if (!d) return;
+        mergeOverviewState({bluetooth: d});
+        updateOverview(_overviewState);
         document.getElementById('bt-status').textContent = d.connected ? 'Connected' : d.state;
         document.getElementById('bt-status').style.color = d.connected ? '#00d4aa' : '#888';
         document.getElementById('bt-device').textContent = d.device_name || '-';
@@ -810,7 +863,8 @@ function refreshWifi() {
 function refreshAttacks() {
     api('GET', '/api/attacks').then(function(d) {
         if (!d) return;
-        document.getElementById('s-val-6').textContent = d.attack_rate;
+        mergeOverviewState({attacks: d});
+        updateOverview(_overviewState);
         ['deauth','pmkid','csa','disassoc','anon_reassoc','rogue_m2'].forEach(function(k) {
             var cb = document.getElementById('atk-'+k);
             if (cb) cb.checked = d[k];
@@ -1438,13 +1492,11 @@ var _pollTimers = [];
 var _wsConnected = false;
 
 function updateStatusFromWs(d) {
-    updateOverview(d);
-    document.getElementById('mode-rage').classList.toggle('active', d.mode === 'RAGE' || d.mode === 'AO');
-    document.getElementById('mode-bt').classList.toggle('active', d.mode === 'BT');
-    document.getElementById('mode-safe').classList.toggle('active', d.mode === 'SAFE' || d.mode === 'PWN');
+    mergeOverviewState(d);
+    updateOverview(_overviewState);
+    syncModeUi(d.mode);
     var nameInput = document.getElementById('setting-name');
     if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
-    applyModeVisibility(d.mode);
 }
 
 function syncSettingsFromData(d) {
@@ -1482,6 +1534,8 @@ function updateBatteryFromWs(b) {
 }
 
 function updateBluetoothFromWs(d) {
+    mergeOverviewState({bluetooth: d});
+    updateOverview(_overviewState);
     document.getElementById('bt-status').textContent = d.connected ? 'Connected' : d.state;
     document.getElementById('bt-status').style.color = d.connected ? '#00d4aa' : '#888';
     document.getElementById('bt-device').textContent = d.device_name || '-';
@@ -1521,7 +1575,8 @@ function updateWifiFromWs(d) {
 }
 
 function updateAttacksFromWs(d) {
-    document.getElementById('s-val-6').textContent = d.attack_rate;
+    mergeOverviewState({attacks: d});
+    updateOverview(_overviewState);
     ['deauth','pmkid','csa','disassoc','anon_reassoc','rogue_m2'].forEach(function(k) {
         var cb = document.getElementById('atk-'+k);
         if (cb) cb.checked = d[k];
@@ -1663,6 +1718,8 @@ function updatePluginsFromWs(plugins) {
 
 function updateBtOpsFromWs(btAttacks, btPatchram) {
     if (!btAttacks) return;
+    mergeOverviewState({bt_attacks: btAttacks});
+    updateOverview(_overviewState);
     document.getElementById('bt-ops-engine').textContent = btAttacks.enabled ? 'Active' : 'Disabled';
     document.getElementById('bt-ops-engine').style.color = btAttacks.enabled ? '#00d4aa' : '#888';
     document.getElementById('bt-ops-rage').textContent = btAttacks.rage_level || '-';
@@ -1670,14 +1727,21 @@ function updateBtOpsFromWs(btAttacks, btPatchram) {
     document.getElementById('bt-ops-devices').textContent = st.devices_seen != null ? st.devices_seen : '-';
     document.getElementById('bt-ops-active').textContent = st.active_attacks != null ? st.active_attacks : '-';
     document.getElementById('bt-ops-total').textContent = st.total_attacks != null ? st.total_attacks : '-';
-    document.getElementById('bt-ops-patchram').textContent = btPatchram ? btPatchram.state : '-';
+    if (btPatchram && btPatchram.state != null) {
+        document.getElementById('bt-ops-patchram').textContent = btPatchram.state;
+    }
 }
 
 function updateBtDevicesFromWs(btDevices) {
     if (!btDevices || !btDevices.devices) return;
+    mergeOverviewState({
+        bt_devices: btDevices,
+        bluetooth: Object.assign({}, _overviewState.bluetooth || {}, {nearby_devices: btDevices.count})
+    });
+    updateOverview(_overviewState);
     var tbody = document.getElementById('bt-device-tbody');
     if (btDevices.devices.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" style="color:#555">No devices yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="color:#555">No devices yet</td></tr>';
         return;
     }
     var html = '';
@@ -1685,14 +1749,15 @@ function updateBtDevicesFromWs(btDevices) {
         var name = d.name ? esc(d.name) : '<span style="color:#555">' + esc(d.address) + '</span>';
         var rssi = d.rssi != null ? d.rssi + ' dBm' : '-';
         var rssiColor = d.rssi == null ? '#555' : (d.rssi > -50 ? '#00d4aa' : (d.rssi > -70 ? '#f0c040' : '#e94560'));
-        var type = esc(d.transport) + (d.category ? ' <span style="color:#555;font-size:10px">' + esc(d.category) + '</span>' : '');
+        var type = esc(d.transport) + (d.category ? '<span class="bt-type-secondary">' + esc(d.category) + '</span>' : '');
         var stateClass = 'bt-state-' + (d.attack_state || 'untouched').toLowerCase();
         html += '<tr>' +
             '<td>' + name + '</td>' +
+            '<td class="bt-address">' + esc(d.address) + '</td>' +
             '<td style="color:' + rssiColor + '">' + rssi + '</td>' +
             '<td>' + type + '</td>' +
             '<td class="' + stateClass + '">' + esc(d.attack_state || 'Untouched') + '</td>' +
-            '<td>' + d.seen_count + '</td>' +
+            '<td class="bt-hide-mobile">' + d.seen_count + '</td>' +
             '<td><button class="bt-target-btn" onclick="setBtTarget(\'' + esc(d.address) + '\')">Target</button></td>' +
             '</tr>';
     });
@@ -1715,7 +1780,22 @@ function setBtRage(level) {
     document.getElementById('bt-rage-medium').classList.toggle('active', level === 'Medium');
     document.getElementById('bt-rage-high').classList.toggle('active', level === 'High');
     document.getElementById('bt-rage-desc').textContent = (level + ': ' + (_btRageDescs[level] || ''));
+    updateBtAttackConstraintState(level);
     api('POST', '/api/bt/attacks/rage', {level: level});
+}
+
+function updateBtAttackConstraintState(level) {
+    [
+        {row: 'bt-row-smp_mitm', input: 'bt-atk-smp_mitm'},
+        {row: 'bt-row-ble_conn_hijack', input: 'bt-atk-ble_conn_hijack'}
+    ].forEach(function(entry) {
+        var row = document.getElementById(entry.row);
+        var input = document.getElementById(entry.input);
+        if (!row || !input) return;
+        var warn = input.checked && level !== 'High';
+        row.classList.toggle('bt-row-warning', warn);
+        row.title = warn ? 'Requires High rage level' : '';
+    });
 }
 
 function updateBtRageFromWs(btAttacks) {
@@ -1725,9 +1805,14 @@ function updateBtRageFromWs(btAttacks) {
     document.getElementById('bt-rage-medium').classList.toggle('active', level === 'Medium');
     document.getElementById('bt-rage-high').classList.toggle('active', level === 'High');
     document.getElementById('bt-rage-desc').textContent = (level + ': ' + (_btRageDescs[level] || ''));
+    updateBtAttackConstraintState(level);
 }
 
 function toggleBtAttack(name, enabled) {
+    updateBtAttackConstraintState(
+        document.getElementById('bt-rage-low').classList.contains('active') ? 'Low' :
+        document.getElementById('bt-rage-high').classList.contains('active') ? 'High' : 'Medium'
+    );
     api('POST', '/api/bt/attacks/toggle', {attack: name, enabled: enabled});
 }
 
@@ -1748,6 +1833,7 @@ function updateBtAttacksFromWs(btAttacks) {
         var el = document.getElementById('bt-atk-' + key);
         if (el && !el.matches(':focus')) el.checked = map[key];
     });
+    updateBtAttackConstraintState(btAttacks.rage_level || 'Medium');
 }
 
 function updateBtCapturesFromWs(btCaptures) {
@@ -1763,7 +1849,7 @@ function refreshBtAttacks() {
     if (_currentMode !== 'bt') return;
     api('GET', '/api/bt/attacks').then(function(d) {
         if (!d) return;
-        updateBtOpsFromWs(d, null);
+        updateBtOpsFromWs(d);
         updateBtRageFromWs(d);
         updateBtAttacksFromWs(d);
     });
