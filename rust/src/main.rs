@@ -547,7 +547,11 @@ impl Daemon {
         self.wifi.tracker.prune(ap_ttl);
 
         // ---- Attack + Capture phases ----
-        self.run_attack_phase(&mut result);
+        if self.mode == OperatingMode::Rage {
+            self.run_attack_phase(&mut result);
+        } else {
+            self.epoch_loop.next_phase(); // -> Attack (skip)
+        }
         self.run_capture_phase(&mut result);
 
         } // end else (non-BT mode WiFi phases)
