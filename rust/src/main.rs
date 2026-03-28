@@ -2781,10 +2781,6 @@ impl Daemon {
         match action {
             recovery::RecoveryAction::None => {}
             recovery::RecoveryAction::SoftRecover => {
-                if self.recovery.cooldown_active() {
-                    log::warn!("recovery cooldown active, skipping soft recovery");
-                    return;
-                }
                 info!("attempting soft WiFi recovery (modprobe cycle)");
                 self.epoch_loop
                     .personality
@@ -2838,27 +2834,42 @@ impl Daemon {
                             Ok(()) => info!("soft recovery: AO restarted (PID {})", self.ao.pid),
                             Err(e) => log::error!("soft recovery: AO restart failed: {e}"),
                         }
+                        self.recovery.record_recovery();
                     }
                     Err(e) => log::error!("soft recovery: monitor mode failed: {e}"),
                 }
-                self.recovery.record_recovery();
             }
             recovery::RecoveryAction::HardRecover => {
-                if self.recovery.cooldown_active() {
-                    log::warn!("recovery cooldown active, skipping hard recovery");
-                    return;
-                }
                 info!("attempting hard WiFi recovery (full GPIO power cycle)");
                 self.epoch_loop
                     .personality
                     .set_override(personality::Face::FwCrash);
-                match recovery::execute_gpio_recovery(self.recovery.config.gpio_cycle_delay_ms) {
-                    Ok(true) => info!("GPIO recovery succeeded, wlan0 is back"),
-                    Ok(false) => log::error!("GPIO recovery failed: wlan0 did not return"),
-                    Err(e) => log::error!("GPIO recovery error: {e}"),
+
+                // Stop AO before power-cycling — it's using the interface
+                self.ao.stop();
+
+                let gpio_ok = match recovery::execute_gpio_recovery(self.recovery.config.gpio_cycle_delay_ms) {
+                    Ok(true) => { info!("GPIO recovery succeeded, wlan0 is back"); true }
+                    Ok(false) => { log::error!("GPIO recovery failed: wlan0 did not return"); false }
+                    Err(e) => { log::error!("GPIO recovery error: {e}"); false }
+                };
+
+                if gpio_ok {
+                    match self.wifi.start_monitor() {
+                        Ok(()) => {
+                            info!("hard recovery: monitor mode restored");
+                            // Reset AO crash counter so we don't immediately re-trigger
+                            self.ao.reset();
+                            // Restart AO
+                            match self.ao.start() {
+                                Ok(()) => info!("hard recovery: AO restarted (PID {})", self.ao.pid),
+                                Err(e) => log::error!("hard recovery: AO restart failed: {e}"),
+                            }
+                            self.recovery.record_recovery();
+                        }
+                        Err(e) => log::error!("hard recovery: monitor mode failed: {e}"),
+                    }
                 }
-                self.recovery.record_recovery();
-                let _ = self.wifi.start_monitor();
             }
             recovery::RecoveryAction::Reboot => {
                 log::error!("WiFi recovery exhausted after max retries, rebooting");
