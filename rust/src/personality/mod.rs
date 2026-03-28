@@ -539,7 +539,7 @@ impl Personality {
     /// Generate and cache a bull-themed status message for the current state.
     ///
     /// Call this once per epoch (requires &mut self for joke state tracking).
-    /// Uses slow cycling (3 epochs per message) and 30% chance for two-part jokes.
+    /// Uses slow cycling (3 epochs per message) and mood-dependent chance for two-part jokes.
     pub fn generate_status(&mut self) {
         // If milestone is active, show milestone status
         if let Some(status) = self.variety.milestone_status {

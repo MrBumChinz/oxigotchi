@@ -175,6 +175,8 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Beaming hay to the barn",
                 "Data mooo-ving upstream",
                 "Sharing the spoils with the herd",
+                "Moo-ving data at full gallop",
+                "The cloud barn awaits",
             ],
         );
         m.insert(
@@ -230,6 +232,8 @@ pub static BULL_MESSAGES: LazyLock<HashMap<&'static str, Vec<&'static str>>> =
                 "Horns down, eyes forward",
                 "Full intensity stampede!",
                 "No AP escapes this bull",
+                "Channel-hopping with purpose",
+                "Every frame will be captured",
             ],
         );
         m.insert(
@@ -298,8 +302,8 @@ mod tests {
     fn test_total_message_count() {
         let total: usize = BULL_MESSAGES.values().map(|v| v.len()).sum();
         assert!(
-            total >= 140,
-            "should have at least 140 messages, got {}",
+            total >= 150,
+            "should have at least 150 messages, got {}",
             total
         );
     }
