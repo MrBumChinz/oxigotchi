@@ -363,6 +363,14 @@ impl AoManager {
         info!("AO stopped");
     }
 
+    /// Stop AO process and return the PID that was stopped (0 if wasn't running).
+    /// Callers that need to verify the process is dead should use this variant.
+    pub fn stop_and_get_pid(&mut self) -> u32 {
+        let stopped_pid = self.pid;
+        self.stop();
+        stopped_pid
+    }
+
     /// Restart AO (stop then start).
     pub fn restart(&mut self) -> Result<(), String> {
         self.stop();

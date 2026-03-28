@@ -242,7 +242,7 @@ impl RadioManager {
 
         // Step 2: Stop AO
         info!("radio: step 2 — stopping AO");
-        ao.stop();
+        let stopped_pid = ao.stop_and_get_pid();
 
         // Step 3: Verify AO stopped
         if ao.state != ao::AoState::Stopped {
@@ -251,15 +251,15 @@ impl RadioManager {
                 ao.state
             );
         }
-        if ao.pid != 0 {
+        if stopped_pid != 0 {
             // Check if process is actually dead
-            if !verify_process_dead(ao.pid) {
+            if !verify_process_dead(stopped_pid) {
                 error!(
                     "radio: AO PID {} still alive after stop, rolling back to WIFI",
-                    ao.pid
+                    stopped_pid
                 );
                 self.rollback_to_wifi(ao, wifi);
-                return Err(format!("AO PID {} still alive after stop", ao.pid));
+                return Err(format!("AO PID {} still alive after stop", stopped_pid));
             }
         }
         info!("radio: step 3 — AO stopped verified");
@@ -355,7 +355,7 @@ impl RadioManager {
 
         // Step 2: Stop AO
         info!("radio: step 2 — stopping AO");
-        ao.stop();
+        let stopped_pid = ao.stop_and_get_pid();
 
         // Step 2b: Verify AO actually dead (matches transition_to_bt pattern)
         if ao.state != ao::AoState::Stopped {
@@ -364,16 +364,16 @@ impl RadioManager {
                 ao.state
             );
         }
-        if ao.pid != 0 {
-            if !verify_process_dead(ao.pid) {
+        if stopped_pid != 0 {
+            if !verify_process_dead(stopped_pid) {
                 warn!(
                     "radio: AO PID {} still alive after stop, force-killing",
-                    ao.pid
+                    stopped_pid
                 );
                 #[cfg(unix)]
                 {
                     let _ = std::process::Command::new("kill")
-                        .args(["-9", &ao.pid.to_string()])
+                        .args(["-9", &stopped_pid.to_string()])
                         .output();
                     std::thread::sleep(Duration::from_millis(500));
                 }
