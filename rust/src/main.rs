@@ -1210,7 +1210,10 @@ impl Daemon {
             any_command = true;
             info!("web: rate change to {rate}, restarting AO");
             self.ao.set_rate(rate);
-            let _ = self.ao.restart();
+            if let Err(e) = self.ao.restart() {
+                log::error!("web: AO restart failed after rate change: {e}");
+                self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+            }
             // Manual rate change breaks out of RAGE
             let mut s = self.shared_state.lock().unwrap();
             s.rage_enabled = false;
@@ -1245,7 +1248,10 @@ impl Daemon {
                         s.wifi_dwell_ms = p.dwell_ms;
                         s.attack_rate = p.rate;
                         drop(s);
-                        let _ = self.ao.restart();
+                        if let Err(e) = self.ao.restart() {
+                            log::error!("web: AO restart failed for RAGE preset: {e}");
+                            self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+                        }
                     }
                 }
                 None => {
@@ -1501,7 +1507,10 @@ impl Daemon {
         if whitelist_changed && self.ao.state == ao::AoState::Running {
             self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
             info!("web: whitelist changed, restarting AO");
-            let _ = self.ao.restart();
+            if let Err(e) = self.ao.restart() {
+                log::error!("web: AO restart failed after whitelist change: {e}");
+                self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+            }
         }
 
         // Process pending channel config
@@ -1537,7 +1546,10 @@ impl Daemon {
             self.ao.config.dwell = (self.wifi.channel_config.dwell_ms / 1000).max(1) as u32;
             // Restart AO so new channel/dwell/autohunt settings take effect
             info!("web: restarting AO with new channel config");
-            let _ = self.ao.restart();
+            if let Err(e) = self.ao.restart() {
+                log::error!("web: AO restart failed after channel config change: {e}");
+                self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+            }
             // Manual channel change breaks out of RAGE
             let mut s = self.shared_state.lock().unwrap();
             s.rage_enabled = false;
@@ -1578,7 +1590,10 @@ impl Daemon {
                 self.ao
                     .session_handshakes
                     .store(0, std::sync::atomic::Ordering::Relaxed);
-                let _ = self.ao.restart();
+                if let Err(e) = self.ao.restart() {
+                    log::error!("web: AO restart failed for capture mode change: {e}");
+                    self.epoch_loop.personality.set_override(personality::Face::AoCrashed);
+                }
             } else {
                 info!("web: capture mode updated (SAFE mode — AO restart deferred to RAGE entry)");
             }
