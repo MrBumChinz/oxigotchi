@@ -1,6 +1,6 @@
 //! BT attack configuration, type enums, and rage-level filtering.
 //!
-//! Defines the 6 toggleable attack types, rage levels, and the
+//! Defines the 6 attack types (4 auto, 2 manual-only), rage levels, and the
 //! [`BtAttackConfig`] struct that drives the offensive BT mode.
 
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ pub mod l2cap_socket;
 pub mod vendor;
 
 // ---------------------------------------------------------------------------
-// BtAttackType — the 6 attack variants
+// BtAttackType — the 8 enum variants (6 active in ALL, 2 retired)
 // ---------------------------------------------------------------------------
 
 /// Individual BT attack types that can be toggled on/off.
@@ -33,7 +33,8 @@ pub enum BtAttackType {
 }
 
 impl BtAttackType {
-    /// All 6 variants in canonical order.
+    /// All 6 active variants in canonical order.
+    /// SmpMitm and BleConnHijack are retired — removed from auto scheduling.
     pub const ALL: [BtAttackType; 6] = [
         BtAttackType::SmpDowngrade,
         BtAttackType::Knob,
@@ -75,8 +76,18 @@ impl BtAttackType {
         matches!(self, Self::Knob | Self::L2capFuzz)
     }
 
+    /// Whether this attack runs automatically via TargetSelector each epoch.
+    pub fn is_auto(self) -> bool {
+        matches!(self, Self::SmpDowngrade | Self::Knob | Self::L2capFuzz | Self::AttGattFuzz)
+    }
+
+    /// Whether this attack can be launched manually against a specific device.
+    pub fn is_manual(self) -> bool {
+        matches!(self, Self::Knob | Self::BleAdvInjection | Self::VendorCmdUnlock)
+    }
+
     /// Minimum rage level required to activate this attack.
-    fn min_rage_level(self) -> BtRageLevel {
+    pub fn min_rage_level(self) -> BtRageLevel {
         match self {
             // Low: passive diagnostics only (targets own controller, not external devices)
             Self::VendorCmdUnlock => BtRageLevel::Low,
@@ -138,19 +149,17 @@ pub struct BtAttackConfig {
     #[serde(default)]
     pub rage_level: BtRageLevel,
 
-    // -- 6 attack toggles --------------------------------------------------
+    // -- attack toggles (ble_adv_injection and vendor_cmd_unlock removed — manual-only) --
     #[serde(default = "default_true")]
     pub smp_downgrade: bool,
     #[serde(default = "default_true")]
     pub knob: bool,
     #[serde(default)]
-    pub ble_adv_injection: bool,
+    pub ble_conn_hijack: bool,
     #[serde(default)]
     pub l2cap_fuzz: bool,
     #[serde(default)]
     pub att_gatt_fuzz: bool,
-    #[serde(default = "default_true")]
-    pub vendor_cmd_unlock: bool,
 
     // -- Target selection ---------------------------------------------------
     /// Minimum RSSI (dBm) to consider a target. Default: -80.
@@ -218,10 +227,9 @@ impl Default for BtAttackConfig {
             rage_level: BtRageLevel::default(),
             smp_downgrade: true,
             knob: true,
-            ble_adv_injection: false,
+            ble_conn_hijack: false,
             l2cap_fuzz: false,
             att_gatt_fuzz: false,
-            vendor_cmd_unlock: true,
             min_rssi: default_min_rssi(),
             max_concurrent_attacks: default_max_concurrent(),
             target_ttl_secs: default_target_ttl(),
@@ -236,36 +244,40 @@ impl Default for BtAttackConfig {
 }
 
 impl BtAttackConfig {
-    /// Returns the toggle state for each of the 6 attacks, in
-    /// [`BtAttackType::ALL`] order.
-    pub fn enabled_toggles(&self) -> [bool; 6] {
+    /// Returns the toggle state for each of the 4 auto attacks, in order:
+    /// [smp_downgrade, knob, l2cap_fuzz, att_gatt_fuzz].
+    pub fn enabled_toggles(&self) -> [bool; 4] {
         [
             self.smp_downgrade,
             self.knob,
-            self.ble_adv_injection,
             self.l2cap_fuzz,
             self.att_gatt_fuzz,
-            self.vendor_cmd_unlock,
         ]
     }
 
     /// Set the toggle for a specific attack type.
+    /// Manual-only attacks (BleAdvInjection, VendorCmdUnlock) are no-ops.
     pub fn set_toggle(&mut self, attack: BtAttackType, enabled: bool) {
         match attack {
             BtAttackType::SmpDowngrade => self.smp_downgrade = enabled,
             BtAttackType::Knob => self.knob = enabled,
-            BtAttackType::BleAdvInjection => self.ble_adv_injection = enabled,
             BtAttackType::L2capFuzz => self.l2cap_fuzz = enabled,
             BtAttackType::AttGattFuzz => self.att_gatt_fuzz = enabled,
-            BtAttackType::VendorCmdUnlock => self.vendor_cmd_unlock = enabled,
+            _ => {} // manual-only attacks have no toggle
         }
     }
 
-    /// Returns the list of attack types that are both toggled on **and**
+    /// Returns the list of auto attack types that are both toggled on **and**
     /// permitted at the current [`rage_level`].
     pub fn active_at_rage_level(&self) -> Vec<BtAttackType> {
         let toggles = self.enabled_toggles();
-        BtAttackType::ALL
+        let auto_attacks = [
+            BtAttackType::SmpDowngrade,
+            BtAttackType::Knob,
+            BtAttackType::L2capFuzz,
+            BtAttackType::AttGattFuzz,
+        ];
+        auto_attacks
             .iter()
             .zip(toggles.iter())
             .filter(|&(attack, &on)| on && attack.min_rage_level() <= self.rage_level)
@@ -399,10 +411,9 @@ mod tests {
         assert_eq!(cfg.rage_level, BtRageLevel::Medium);
         assert!(cfg.smp_downgrade);
         assert!(cfg.knob);
-        assert!(!cfg.ble_adv_injection);
+        assert!(!cfg.ble_conn_hijack);
         assert!(!cfg.l2cap_fuzz);
         assert!(!cfg.att_gatt_fuzz);
-        assert!(cfg.vendor_cmd_unlock);
         assert_eq!(cfg.min_rssi, -80);
         assert_eq!(cfg.max_concurrent_attacks, 3);
         assert_eq!(cfg.target_ttl_secs, 300);
@@ -415,17 +426,19 @@ mod tests {
     fn test_enabled_toggles_order() {
         let cfg = BtAttackConfig::default();
         let t = cfg.enabled_toggles();
-        // smp_downgrade=true, knob=true, ...
-        assert_eq!(t, [true, true, false, false, false, true]);
+        assert_eq!(t, [true, true, false, false]); // smp=true, knob=true, l2cap=false, att=false
     }
 
     #[test]
     fn test_set_toggle() {
         let mut cfg = BtAttackConfig::default();
+        cfg.set_toggle(BtAttackType::SmpDowngrade, false);
+        assert!(!cfg.smp_downgrade);
         cfg.set_toggle(BtAttackType::L2capFuzz, true);
         assert!(cfg.l2cap_fuzz);
-        cfg.set_toggle(BtAttackType::Knob, false);
-        assert!(!cfg.knob);
+        // Manual-only attacks are no-ops
+        cfg.set_toggle(BtAttackType::BleAdvInjection, true);
+        // No field to check — it's a no-op
     }
 
     #[test]
@@ -433,20 +446,16 @@ mod tests {
         let mut cfg = BtAttackConfig::default();
         cfg.rage_level = BtRageLevel::Low;
         let active = cfg.active_at_rage_level();
-        // Low: only VendorCmdUnlock (passive diagnostics) is allowed
-        assert!(active.contains(&BtAttackType::VendorCmdUnlock));
-        assert_eq!(active.len(), 1);
+        assert!(active.is_empty(), "No auto attacks at Low rage (all auto attacks require Medium)");
     }
 
     #[test]
     fn test_active_at_rage_medium() {
         let cfg = BtAttackConfig::default(); // rage = Medium (new default)
         let active = cfg.active_at_rage_level();
-        // Medium: VendorCmdUnlock(Low) + SmpDowngrade + Knob (all toggled on by default)
-        assert!(active.contains(&BtAttackType::VendorCmdUnlock));
+        assert_eq!(active.len(), 2);
         assert!(active.contains(&BtAttackType::SmpDowngrade));
         assert!(active.contains(&BtAttackType::Knob));
-        assert_eq!(active.len(), 3);
     }
 
     #[test]
@@ -456,8 +465,7 @@ mod tests {
         cfg.l2cap_fuzz = true;
         cfg.att_gatt_fuzz = true;
         let active = cfg.active_at_rage_level();
-        // High allows all Medium+Low attacks; 3 default + l2cap_fuzz + att_gatt_fuzz
-        assert_eq!(active.len(), 5);
+        assert_eq!(active.len(), 4);
     }
 
     #[test]
@@ -529,10 +537,9 @@ enabled = true
 rage_level = "High"
 smp_downgrade = false
 knob = true
-ble_adv_injection = true
+ble_conn_hijack = true
 l2cap_fuzz = true
 att_gatt_fuzz = true
-vendor_cmd_unlock = false
 min_rssi = -70
 max_concurrent_attacks = 5
 target_ttl_secs = 600
@@ -571,11 +578,10 @@ stock_hcd = "/tmp/stock.hcd"
     fn test_scheduler_active_types_delegates() {
         let sched = BtAttackScheduler::new(BtAttackConfig::default());
         let types = sched.active_attack_types();
-        // Default config: rage=Medium, on=[smp_downgrade, knob, vendor_cmd_unlock]
-        assert_eq!(types.len(), 3);
+        // Default config: rage=Medium, auto attacks on=[smp_downgrade, knob]
+        assert_eq!(types.len(), 2);
         assert!(types.contains(&BtAttackType::SmpDowngrade));
         assert!(types.contains(&BtAttackType::Knob));
-        assert!(types.contains(&BtAttackType::VendorCmdUnlock));
     }
 
     #[test]
@@ -671,5 +677,31 @@ stock_hcd = "/tmp/stock.hcd"
             sched.active_attacks.get("d1"),
             Some(&BtAttackType::SmpDowngrade)
         );
+    }
+
+    #[test]
+    fn test_is_auto() {
+        assert!(BtAttackType::SmpDowngrade.is_auto());
+        assert!(BtAttackType::Knob.is_auto());
+        assert!(BtAttackType::L2capFuzz.is_auto());
+        assert!(BtAttackType::AttGattFuzz.is_auto());
+        assert!(!BtAttackType::BleAdvInjection.is_auto());
+        assert!(!BtAttackType::VendorCmdUnlock.is_auto());
+    }
+
+    #[test]
+    fn test_is_manual() {
+        assert!(BtAttackType::Knob.is_manual());
+        assert!(BtAttackType::BleAdvInjection.is_manual());
+        assert!(BtAttackType::VendorCmdUnlock.is_manual());
+        assert!(!BtAttackType::SmpDowngrade.is_manual());
+        assert!(!BtAttackType::L2capFuzz.is_manual());
+        assert!(!BtAttackType::AttGattFuzz.is_manual());
+    }
+
+    #[test]
+    fn test_min_rage_level_is_pub() {
+        assert_eq!(BtAttackType::VendorCmdUnlock.min_rage_level(), BtRageLevel::Low);
+        assert_eq!(BtAttackType::Knob.min_rage_level(), BtRageLevel::Medium);
     }
 }

@@ -660,8 +660,16 @@ impl Daemon {
         }
 
         // ---- Sync state to web ----
+        // Tick transition override countdown before sync so decremented state
+        // is reflected in the broadcast.
+        self.epoch_loop.personality.tick_transition_override();
         self.sync_to_web();
         web::broadcast_state(&self.shared_state, &self.ws_tx);
+        // Clear manual attack result AFTER it has been broadcast to clients.
+        {
+            let mut s = self.shared_state.lock().unwrap();
+            s.bt_manual_result = None;
+        }
 
         // ---- Sleep + watchdog ----
         self.epoch_loop.next_phase(); // -> Sleep
@@ -1376,14 +1384,113 @@ impl Daemon {
             }
         }
 
-        // Process pending BT target (no-op for now, placeholder for future targeting)
-        let bt_target = {
+        // Check if a manual attack completed — clean up scheduler and prepare for result clearing
+        {
+            let s = self.shared_state.lock().unwrap();
+            if let Some(ref result) = s.bt_manual_result {
+                // Remove device from active attacks so auto-targeting can pick it up again
+                if let Some(ref addr) = result.address {
+                    self.bt_attack_scheduler.remove_active(addr);
+                }
+            }
+        }
+
+        // Process pending manual BT attack
+        let manual_attack = {
             let mut s = self.shared_state.lock().unwrap();
-            s.pending_bt_target.take()
+            s.pending_bt_manual_attack.take()
         };
-        if let Some(addr) = bt_target {
+        if let Some(req) = manual_attack {
             any_command = true;
-            info!("web: BT target set to {} (queued)", addr);
+            let attack_type = match req.attack.as_str() {
+                "knob" => Some(bluetooth::attacks::BtAttackType::Knob),
+                "ble_adv_injection" => Some(bluetooth::attacks::BtAttackType::BleAdvInjection),
+                "vendor_cmd_unlock" => Some(bluetooth::attacks::BtAttackType::VendorCmdUnlock),
+                _ => None,
+            };
+
+            if let Some(attack) = attack_type {
+                if let Some(ref hci) = self.bt_hci_socket {
+                    let address = req.address.clone().unwrap_or_else(|| "local".to_string());
+                    info!("bt: manual attack {} on {}", req.attack, address);
+
+                    // Set face override for manual attack
+                    self.epoch_loop.personality.set_transition_override(
+                        crate::personality::Face::Raging,
+                        3,
+                    );
+
+                    // Mark device active in scheduler to prevent auto-targeting collision
+                    if let Some(ref addr) = req.address {
+                        self.bt_attack_scheduler.mark_active(addr, attack);
+                    }
+
+                    // Spawn background thread for blocking attack
+                    let hci_cloned = hci.try_clone();
+                    let shared = Arc::clone(&self.shared_state);
+                    let attack_addr = req.address.clone();
+                    let attack_name = req.attack.clone();
+                    std::thread::spawn(move || {
+                        let result = match hci_cloned {
+                            Ok(ref h) => {
+                                let addr = attack_addr.as_deref().unwrap_or("local");
+                                match attack {
+                                    bluetooth::attacks::BtAttackType::Knob => {
+                                        bluetooth::attacks::knob::run(h, addr)
+                                    }
+                                    bluetooth::attacks::BtAttackType::BleAdvInjection => {
+                                        bluetooth::attacks::ble_adv::run(h, addr)
+                                    }
+                                    bluetooth::attacks::BtAttackType::VendorCmdUnlock => {
+                                        bluetooth::attacks::vendor::run_diagnostics(h, addr)
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("bt: failed to clone HCI socket: {}", e);
+                                bluetooth::attacks::BtAttackResult {
+                                    attack_type: attack,
+                                    target_address: attack_addr
+                                        .clone()
+                                        .unwrap_or_else(|| "local".into()),
+                                    target_name: None,
+                                    success: false,
+                                    capture: None,
+                                    error: Some(format!("HCI socket clone failed: {}", e)),
+                                    timestamp: std::time::Instant::now(),
+                                }
+                            }
+                        };
+
+                        // Store result for WebSocket delivery
+                        let mut s = shared.lock().unwrap();
+                        s.bt_manual_result = Some(web::BtManualResult {
+                            address: if result.target_address == "local" {
+                                None
+                            } else {
+                                Some(result.target_address.clone())
+                            },
+                            attack: attack_name,
+                            success: result.success,
+                            message: if result.success {
+                                "Attack succeeded".into()
+                            } else {
+                                result.error.unwrap_or_else(|| "Unknown error".into())
+                            },
+                        });
+                    });
+                } else {
+                    // Not in BT mode — store error result
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.bt_manual_result = Some(web::BtManualResult {
+                        address: req.address,
+                        attack: req.attack,
+                        success: false,
+                        message: "Not in BT mode — no HCI socket".into(),
+                    });
+                }
+            }
         }
 
         // Process BT scan request — spawn in background thread to avoid blocking
@@ -2217,10 +2324,9 @@ impl Daemon {
         s.bt_rage_level = self.config.bt_attacks.rage_level.as_str().to_string();
         s.bt_attack_smp_downgrade = self.config.bt_attacks.smp_downgrade;
         s.bt_attack_knob = self.config.bt_attacks.knob;
-        s.bt_attack_ble_adv_injection = self.config.bt_attacks.ble_adv_injection;
+        s.bt_attack_ble_conn_hijack = self.config.bt_attacks.ble_conn_hijack;
         s.bt_attack_l2cap_fuzz = self.config.bt_attacks.l2cap_fuzz;
         s.bt_attack_att_gatt_fuzz = self.config.bt_attacks.att_gatt_fuzz;
-        s.bt_attack_vendor_cmd_unlock = self.config.bt_attacks.vendor_cmd_unlock;
         s.bt_total_attacks = self.bt_attack_scheduler.total_attacks;
         s.bt_total_captures = self.bt_attack_scheduler.total_captures;
         s.bt_active_attacks = self.bt_attack_scheduler.active_count();

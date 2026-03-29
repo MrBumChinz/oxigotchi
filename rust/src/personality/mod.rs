@@ -375,10 +375,10 @@ pub struct Personality {
     pub mood: Mood,
     /// Override face (e.g., for battery warnings, crashes).
     pub override_face: Option<Face>,
-    /// Countdown for mode transition overrides. When >0, the override is temporary.
+    /// Face set by a transition override (e.g., BT attack start).
+    pub transition_face: Option<Face>,
+    /// Epochs remaining for the current transition override countdown.
     pub transition_epochs_left: u8,
-    /// The face that was set by the mode transition (to avoid clearing unrelated overrides).
-    transition_face: Option<Face>,
     /// Number of consecutive epochs with no handshakes.
     pub blind_epochs: u32,
     /// Total handshakes captured this session.
@@ -424,8 +424,8 @@ impl Personality {
         Self {
             mood: Mood::default(),
             override_face: None,
-            transition_epochs_left: 0,
             transition_face: None,
+            transition_epochs_left: 0,
             blind_epochs: 0,
             total_handshakes: 0,
             total_aps_seen: 0,
@@ -549,26 +549,26 @@ impl Personality {
         self.transition_epochs_left = 0;
     }
 
-    /// Set a temporary override for mode transitions (expires after N epochs).
+    /// Set a transition override face for a fixed number of epochs.
+    ///
+    /// Used for events like manual BT attack launch (Face::Raging for 3 epochs).
+    /// The transition is protected from RF environment clearing until the countdown
+    /// reaches zero.
     pub fn set_transition_override(&mut self, face: Face, epochs: u8) {
         self.override_face = Some(face);
         self.transition_face = Some(face);
         self.transition_epochs_left = epochs;
     }
 
-    /// Decrement transition override countdown. Clears when expired,
-    /// but only if the override hasn't been overwritten by something else.
+    /// Decrement the transition countdown.  When it reaches zero the transition
+    /// protection is lifted (but the override_face is NOT cleared here — callers
+    /// can let RF clearing or the next set_override supersede it).
     pub fn tick_transition_override(&mut self) {
-        if self.transition_epochs_left == 0 {
-            return;
-        }
-        self.transition_epochs_left -= 1;
-        if self.transition_epochs_left == 0 {
-            // Only clear if the override is still the transition face
-            if self.override_face == self.transition_face {
-                self.override_face = None;
+        if self.transition_epochs_left > 0 {
+            self.transition_epochs_left -= 1;
+            if self.transition_epochs_left == 0 {
+                self.transition_face = None;
             }
-            self.transition_face = None;
         }
     }
 
@@ -736,8 +736,24 @@ impl Personality {
 
 
         // Lonely: APs exist but nobody's talking
-        if rf.beacon_rate > 0.0 && rf.data_rate == 0.0 && rf.probe_rate == 0.0 && rf.total_frames > 0 {
+        let lonely_condition =
+            rf.beacon_rate > 0.0 && rf.data_rate == 0.0 && rf.probe_rate == 0.0 && rf.total_frames > 0;
+        if lonely_condition {
             self.override_face = Some(Face::Lonely);
+        }
+
+        // Clear a stale Raging/Lonely override from a previous epoch when:
+        //   (a) the RF condition that caused it no longer holds, AND
+        //   (b) it is not a protected transition override (transition_epochs_left > 0).
+        let deauth_storm = rf.deauth_rate > rf::DEAUTH_STORM_RATE;
+        match self.override_face {
+            Some(Face::Raging) if !deauth_storm && self.transition_epochs_left == 0 => {
+                self.override_face = None;
+            }
+            Some(Face::Lonely) if !lonely_condition && self.transition_epochs_left == 0 => {
+                self.override_face = None;
+            }
+            _ => {}
         }
     }
 }
@@ -2406,5 +2422,32 @@ mod tests {
         p.tick_transition_override();
         p.tick_transition_override();
         assert_eq!(p.override_face, None, "transition override should expire after countdown");
+    }
+
+    #[test]
+    fn test_rf_clearing_preserves_transition_raging() {
+        let mut p = Personality::new();
+        // Set a transition override (simulates manual BT attack)
+        p.set_transition_override(Face::Raging, 3);
+        assert_eq!(p.override_face, Some(Face::Raging));
+        assert_eq!(p.transition_epochs_left, 3);
+
+        // Apply RF environment — should NOT clear the transition Raging override
+        let rf = crate::qpu::rf::RfEnvironment::default();
+        p.apply_rf_environment(&rf);
+        assert_eq!(p.override_face, Some(Face::Raging), "transition Raging should survive RF clearing");
+        assert_eq!(p.transition_epochs_left, 3);
+    }
+
+    #[test]
+    fn test_rf_clearing_still_clears_non_transition_raging() {
+        let mut p = Personality::new();
+        // Set a non-transition Raging override (from deauth storm etc.)
+        p.override_face = Some(Face::Raging);
+        assert_eq!(p.transition_epochs_left, 0);
+
+        let rf = crate::qpu::rf::RfEnvironment::default();
+        p.apply_rf_environment(&rf);
+        assert_eq!(p.override_face, None, "non-transition Raging should be cleared");
     }
 }

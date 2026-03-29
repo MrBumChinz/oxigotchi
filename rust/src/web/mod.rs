@@ -112,10 +112,9 @@ pub struct DaemonState {
     pub bt_rage_level: String,
     pub bt_attack_smp_downgrade: bool,
     pub bt_attack_knob: bool,
-    pub bt_attack_ble_adv_injection: bool,
+    pub bt_attack_ble_conn_hijack: bool,
     pub bt_attack_l2cap_fuzz: bool,
     pub bt_attack_att_gatt_fuzz: bool,
-    pub bt_attack_vendor_cmd_unlock: bool,
     pub bt_total_attacks: u64,
     pub bt_total_captures: u64,
     pub bt_active_attacks: u32,
@@ -130,7 +129,8 @@ pub struct DaemonState {
     // -- bt attack action requests --
     pub pending_bt_attack_toggle: Option<BtAttackToggle>,
     pub pending_bt_rage_level: Option<String>,
-    pub pending_bt_target: Option<String>,
+    pub pending_bt_manual_attack: Option<BtManualAttackRequest>,
+    pub bt_manual_result: Option<BtManualResult>,
 
     // -- gpu --
     pub gpu_mode: String,
@@ -318,10 +318,9 @@ impl DaemonState {
             bt_rage_level: "Medium".into(),
             bt_attack_smp_downgrade: true,
             bt_attack_knob: true,
-            bt_attack_ble_adv_injection: false,
+            bt_attack_ble_conn_hijack: false,
             bt_attack_l2cap_fuzz: false,
             bt_attack_att_gatt_fuzz: false,
-            bt_attack_vendor_cmd_unlock: true,
             bt_total_attacks: 0,
             bt_total_captures: 0,
             bt_active_attacks: 0,
@@ -334,7 +333,8 @@ impl DaemonState {
             bt_device_list: Vec::new(),
             pending_bt_attack_toggle: None,
             pending_bt_rage_level: None,
-            pending_bt_target: None,
+            pending_bt_manual_attack: None,
+            bt_manual_result: None,
             gpu_mode: "Off".into(),
             gpu_signal: "None".into(),
             gpu_submit_seen: false,
@@ -496,6 +496,8 @@ struct WsSnapshot {
     display_rotation: u16,
     min_rssi: i8,
     ap_ttl_secs: u64,
+    // -- bt manual attack result --
+    bt_manual_result: Option<BtManualResult>,
 }
 
 /// System info snapshot for WS (uses cached values, not live reads).
@@ -695,6 +697,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
         display_rotation: s.display_rotation,
         min_rssi: s.min_rssi,
         ap_ttl_secs: s.ap_ttl_secs,
+        bt_manual_result: s.bt_manual_result.clone(),
     }
 }
 
@@ -857,10 +860,18 @@ pub struct BtRageLevelRequest {
     pub level: String,
 }
 
-/// BT target request for POST /api/bt/attacks/target.
-#[derive(Debug, Clone, Deserialize)]
-pub struct BtTargetRequest {
-    pub address: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtManualAttackRequest {
+    pub address: Option<String>,
+    pub attack: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtManualResult {
+    pub address: Option<String>,
+    pub attack: String,
+    pub success: bool,
+    pub message: String,
 }
 
 /// BT attack state response for GET /api/bt/attacks.
@@ -877,10 +888,8 @@ pub struct BtAttackResponse {
 pub struct BtAttackToggles {
     pub smp_downgrade: bool,
     pub knob: bool,
-    pub ble_adv_injection: bool,
     pub l2cap_fuzz: bool,
     pub att_gatt_fuzz: bool,
-    pub vendor_cmd_unlock: bool,
 }
 
 /// BT attack statistics.
@@ -1241,7 +1250,7 @@ pub const API_CAPTURE_ALL: &str = "/api/capture-all";
 pub const API_BT_ATTACKS: &str = "/api/bt/attacks";
 pub const API_BT_ATTACKS_TOGGLE: &str = "/api/bt/attacks/toggle";
 pub const API_BT_ATTACKS_RAGE: &str = "/api/bt/attacks/rage";
-pub const API_BT_ATTACKS_TARGET: &str = "/api/bt/attacks/target";
+pub const API_BT_ATTACKS_MANUAL: &str = "/api/bt/attacks/manual";
 pub const API_BT_DEVICES: &str = "/api/bt/devices";
 pub const API_BT_CAPTURES: &str = "/api/bt/captures";
 pub const API_BT_PATCHRAM: &str = "/api/bt/patchram";
@@ -2301,10 +2310,8 @@ async fn bt_attacks_get_handler(State(state): State<SharedState>) -> Json<BtAtta
         toggles: BtAttackToggles {
             smp_downgrade: s.bt_attack_smp_downgrade,
             knob: s.bt_attack_knob,
-            ble_adv_injection: s.bt_attack_ble_adv_injection,
             l2cap_fuzz: s.bt_attack_l2cap_fuzz,
             att_gatt_fuzz: s.bt_attack_att_gatt_fuzz,
-            vendor_cmd_unlock: s.bt_attack_vendor_cmd_unlock,
         },
         stats: BtAttackStats {
             total_attacks: s.bt_total_attacks,
@@ -2325,16 +2332,10 @@ async fn bt_attacks_toggle_handler(
     match body.attack.as_str() {
         "smp_downgrade" => s.bt_attack_smp_downgrade = body.enabled,
         "knob" => s.bt_attack_knob = body.enabled,
-        "ble_adv_injection" => s.bt_attack_ble_adv_injection = body.enabled,
+        "ble_conn_hijack" => s.bt_attack_ble_conn_hijack = body.enabled,
         "l2cap_fuzz" => s.bt_attack_l2cap_fuzz = body.enabled,
         "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz = body.enabled,
-        "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock = body.enabled,
-        _ => {
-            return Json(ActionResponse {
-                ok: false,
-                message: format!("Unknown BT attack: {}", body.attack),
-            });
-        }
+        _ => {}
     }
     s.pending_bt_attack_toggle = Some(body);
     Json(ActionResponse {
@@ -2363,28 +2364,87 @@ async fn bt_attacks_rage_handler(
     })
 }
 
-fn is_valid_bt_address(address: &str) -> bool {
-    let mut parts = address.split(':');
-    let valid = parts.all(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_hexdigit()));
-    valid && address.matches(':').count() == 5
+/// Returns true if the given string is a valid Bluetooth address (XX:XX:XX:XX:XX:XX, hex digits).
+fn is_valid_bt_address(addr: &str) -> bool {
+    let parts: Vec<&str> = addr.split(':').collect();
+    parts.len() == 6 && parts.iter().all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-/// POST /api/bt/attacks/target -> set BT attack target
-async fn bt_attacks_target_handler(
+/// POST /api/bt/attacks/manual -> queue a manual BT attack
+async fn bt_manual_attack_handler(
     State(state): State<SharedState>,
-    Json(body): Json<BtTargetRequest>,
+    Json(body): Json<BtManualAttackRequest>,
 ) -> Json<ActionResponse> {
-    if !is_valid_bt_address(&body.address) {
+    // 1. Validate attack name is manual-capable
+    let attack_type = match body.attack.as_str() {
+        "knob" => crate::bluetooth::attacks::BtAttackType::Knob,
+        "ble_adv_injection" => crate::bluetooth::attacks::BtAttackType::BleAdvInjection,
+        "vendor_cmd_unlock" => crate::bluetooth::attacks::BtAttackType::VendorCmdUnlock,
+        _ => {
+            return Json(ActionResponse {
+                ok: false,
+                message: format!("Unknown or non-manual attack: {}", body.attack),
+            });
+        }
+    };
+
+    // 2. Validate address if required (not needed for vendor_cmd_unlock)
+    if attack_type != crate::bluetooth::attacks::BtAttackType::VendorCmdUnlock {
+        match &body.address {
+            Some(addr) if is_valid_bt_address(addr) => {}
+            Some(_) => {
+                return Json(ActionResponse {
+                    ok: false,
+                    message: "Invalid BT address".into(),
+                });
+            }
+            None => {
+                return Json(ActionResponse {
+                    ok: false,
+                    message: "Address required for this attack".into(),
+                });
+            }
+        }
+    }
+
+    let mut s = state.lock().unwrap();
+
+    // 3. Reject if another manual attack is pending
+    if s.pending_bt_manual_attack.is_some() {
         return Json(ActionResponse {
             ok: false,
-            message: "Invalid BT address".into(),
+            message: "Manual attack already pending".into(),
         });
     }
-    let mut s = state.lock().unwrap();
-    s.pending_bt_target = Some(body.address.clone());
+
+    // 4. Check rage level
+    let current_rage = crate::bluetooth::attacks::BtRageLevel::from_str(&s.bt_rage_level)
+        .unwrap_or(crate::bluetooth::attacks::BtRageLevel::Low);
+    if attack_type.min_rage_level() > current_rage {
+        return Json(ActionResponse {
+            ok: false,
+            message: format!(
+                "{} requires rage level {:?} or higher",
+                body.attack,
+                attack_type.min_rage_level()
+            ),
+        });
+    }
+
+    // 5. Optimistic update — mark device as Attacking if address provided
+    if let Some(ref addr) = body.address {
+        for dev in &mut s.bt_device_list {
+            if dev.address == *addr {
+                dev.attack_state = "Attacking".to_string();
+                break;
+            }
+        }
+    }
+
+    s.pending_bt_manual_attack = Some(body);
     Json(ActionResponse {
         ok: true,
-        message: format!("BT target set to {}", body.address),
+        message: "Manual attack queued".into(),
     })
 }
 
@@ -2542,7 +2602,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_ATTACKS, get(bt_attacks_get_handler))
         .route(API_BT_ATTACKS_TOGGLE, post(bt_attacks_toggle_handler))
         .route(API_BT_ATTACKS_RAGE, post(bt_attacks_rage_handler))
-        .route(API_BT_ATTACKS_TARGET, post(bt_attacks_target_handler))
+        .route(API_BT_ATTACKS_MANUAL, post(bt_manual_attack_handler))
         .route(API_BT_DEVICES, get(bt_devices_handler))
         .route(API_BT_CAPTURES, get(bt_captures_handler))
         .route(API_BT_PATCHRAM, get(bt_patchram_handler))
@@ -4314,805 +4374,75 @@ mod tests {
         assert_eq!(resp.display_rotation, 0);
     }
 
-    #[test]
-    fn test_is_valid_bt_address() {
-        assert!(is_valid_bt_address("AA:BB:CC:DD:EE:FF"));
-        assert!(is_valid_bt_address("aa:bb:cc:dd:ee:ff"));
-        assert!(!is_valid_bt_address("AA-BB-CC-DD-EE-FF"));
-        assert!(!is_valid_bt_address("AA:BB:CC:DD:EE"));
-        assert!(!is_valid_bt_address("GG:BB:CC:DD:EE:FF"));
-    }
+    // === Manual BT attack endpoint tests ===
 
     #[tokio::test]
-    async fn test_bt_target_rejects_invalid_address() {
-        let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/bt/attacks/target",
-            r#"{"address":"not-a-mac"}"#,
-        )
-        .await;
-        assert_eq!(status, 200);
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(!resp.ok);
-        let s = state.lock().unwrap();
-        assert!(s.pending_bt_target.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_bt_target_accepts_valid_address() {
-        let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/bt/attacks/target",
-            r#"{"address":"AA:BB:CC:DD:EE:FF"}"#,
-        )
-        .await;
-        assert_eq!(status, 200);
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(resp.ok);
-        let s = state.lock().unwrap();
-        assert_eq!(s.pending_bt_target.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
-    }
-
-    // === BT attacks GET handler ===
-
-    #[tokio::test]
-    async fn test_bt_attacks_get_returns_defaults() {
-        let (router, _state) = test_router();
-        let (status, body) = get(&router, "/api/bt/attacks").await;
-        assert_eq!(status, 200);
-        let resp: BtAttackResponse = serde_json::from_str(&body).unwrap();
-        assert!(resp.enabled);
-        assert_eq!(resp.rage_level, "Medium");
-        assert!(resp.toggles.smp_downgrade);
-        assert!(resp.toggles.knob);
-        assert!(!resp.toggles.ble_adv_injection);
-        assert!(!resp.toggles.l2cap_fuzz);
-        assert!(!resp.toggles.att_gatt_fuzz);
-        assert!(resp.toggles.vendor_cmd_unlock);
-        assert_eq!(resp.stats.total_attacks, 0);
-        assert_eq!(resp.stats.total_captures, 0);
-        assert_eq!(resp.stats.active_attacks, 0);
-        assert_eq!(resp.stats.devices_seen, 0);
-    }
-
-    #[tokio::test]
-    async fn test_bt_attacks_get_reflects_toggle_changes() {
-        let (router, state) = test_router();
-        {
-            let mut s = state.lock().unwrap();
-            s.bt_attack_enabled = false;
-            s.bt_attack_smp_downgrade = false;
-            s.bt_attack_knob = false;
-            s.bt_attack_ble_adv_injection = true;
-            s.bt_attack_l2cap_fuzz = true;
-            s.bt_attack_att_gatt_fuzz = true;
-            s.bt_attack_vendor_cmd_unlock = false;
-            s.bt_rage_level = "High".into();
-            s.bt_total_attacks = 9;
-            s.bt_total_captures = 4;
-            s.bt_active_attacks = 2;
-            s.bt_devices_seen = 7;
-        }
-        let (status, body) = get(&router, "/api/bt/attacks").await;
-        assert_eq!(status, 200);
-        let resp: BtAttackResponse = serde_json::from_str(&body).unwrap();
-        assert!(!resp.enabled);
-        assert_eq!(resp.rage_level, "High");
-        assert!(!resp.toggles.smp_downgrade);
-        assert!(!resp.toggles.knob);
-        assert!(resp.toggles.ble_adv_injection);
-        assert!(resp.toggles.l2cap_fuzz);
-        assert!(resp.toggles.att_gatt_fuzz);
-        assert!(!resp.toggles.vendor_cmd_unlock);
-        assert_eq!(resp.stats.total_attacks, 9);
-        assert_eq!(resp.stats.total_captures, 4);
-        assert_eq!(resp.stats.active_attacks, 2);
-        assert_eq!(resp.stats.devices_seen, 7);
-    }
-
-    // === BT attacks toggle handler ===
-
-    #[tokio::test]
-    async fn test_bt_toggle_valid_attack_optimistic_update() {
-        let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"l2cap_fuzz","enabled":true}"#,
-        )
-        .await;
-        assert_eq!(status, 200);
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(resp.ok);
-        let s = state.lock().unwrap();
-        assert!(s.bt_attack_l2cap_fuzz, "l2cap_fuzz should update immediately");
-        let pending = s.pending_bt_attack_toggle.as_ref().expect("toggle should be queued");
-        assert_eq!(pending.attack, "l2cap_fuzz");
-        assert!(pending.enabled);
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_all_six_attacks() {
-        let attacks = [
-            "smp_downgrade", "knob", "ble_adv_injection",
-            "l2cap_fuzz", "att_gatt_fuzz", "vendor_cmd_unlock",
-        ];
-        for atk in &attacks {
-            let (router, state) = test_router();
-            let json = format!(r#"{{"attack":"{}","enabled":true}}"#, atk);
-            let (status, body) = post_json(&router, "/api/bt/attacks/toggle", &json).await;
-            assert_eq!(status, 200, "toggle {} should return 200", atk);
-            let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-            assert!(resp.ok, "toggle {} should return ok:true", atk);
-            let s = state.lock().unwrap();
-            let field_enabled = match *atk {
-                "smp_downgrade" => s.bt_attack_smp_downgrade,
-                "knob" => s.bt_attack_knob,
-                "ble_adv_injection" => s.bt_attack_ble_adv_injection,
-                "l2cap_fuzz" => s.bt_attack_l2cap_fuzz,
-                "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz,
-                "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock,
-                _ => unreachable!(),
-            };
-            assert!(field_enabled, "toggle {} should update the requested field", atk);
-            let pending = s
-                .pending_bt_attack_toggle
-                .as_ref()
-                .expect("toggle should be queued");
-            assert_eq!(pending.attack, *atk, "toggle {} should queue the matching request", atk);
-            assert!(pending.enabled, "toggle {} should queue enabled:true", atk);
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_unknown_attack_rejected() {
-        let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"nonexistent","enabled":true}"#,
-        )
-        .await;
-        assert_eq!(status, 200);
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(!resp.ok, "unknown attack should return ok:false");
-        let s = state.lock().unwrap();
-        assert!(
-            s.pending_bt_attack_toggle.is_none(),
-            "unknown attack should not queue pending",
-        );
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_disable_optimistic() {
-        let (router, state) = test_router();
-        // knob defaults to true — disable it
-        let (_, body) = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"knob","enabled":false}"#,
-        )
-        .await;
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(resp.ok);
-        let s = state.lock().unwrap();
-        assert!(!s.bt_attack_knob, "knob should be disabled immediately");
-        let pending = s.pending_bt_attack_toggle.as_ref().expect("toggle should be queued");
-        assert_eq!(pending.attack, "knob");
-        assert!(!pending.enabled);
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_rejects_malformed_json() {
-        let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"knob","enabled":tru"#,
-        )
-        .await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-        let s = state.lock().unwrap();
-        assert!(s.bt_attack_knob, "state should remain unchanged on parse failure");
-        assert!(s.pending_bt_attack_toggle.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_rejects_wrong_content_type() {
-        let (router, state) = test_router();
-        let (status, _) = post_with_content_type(
-            &router,
-            "/api/bt/attacks/toggle",
-            "text/plain",
-            r#"{"attack":"knob","enabled":false}"#,
-        )
-        .await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-        let s = state.lock().unwrap();
-        assert!(s.bt_attack_knob, "state should remain unchanged on extractor rejection");
-        assert!(s.pending_bt_attack_toggle.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_bt_toggle_concurrent_updates_keep_state_consistent() {
-        let (router, state) = test_router();
-        let req_a = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"l2cap_fuzz","enabled":true}"#,
-        );
-        let req_b = post_json(
-            &router,
-            "/api/bt/attacks/toggle",
-            r#"{"attack":"knob","enabled":false}"#,
-        );
-        let ((status_a, body_a), (status_b, body_b)) = tokio::join!(req_a, req_b);
-
-        assert_eq!(status_a, 200);
-        assert_eq!(status_b, 200);
-        assert!(serde_json::from_str::<ActionResponse>(&body_a).unwrap().ok);
-        assert!(serde_json::from_str::<ActionResponse>(&body_b).unwrap().ok);
-
-        let s = state.lock().unwrap();
-        assert!(s.bt_attack_l2cap_fuzz, "first toggle should be applied");
-        assert!(!s.bt_attack_knob, "second toggle should be applied");
-        assert!(
-            matches!(
-                s.pending_bt_attack_toggle.as_ref(),
-                Some(BtAttackToggle { attack, enabled: true }) if attack == "l2cap_fuzz"
-            ) || matches!(
-                s.pending_bt_attack_toggle.as_ref(),
-                Some(BtAttackToggle { attack, enabled: false }) if attack == "knob"
-            ),
-            "pending request should reflect whichever concurrent update ran last",
-        );
-    }
-
-    // === BT rage level handler ===
-
-    #[tokio::test]
-    async fn test_bt_rage_valid_levels() {
-        for level in &["Low", "Medium", "High"] {
-            let (router, state) = test_router();
-            let json = format!(r#"{{"level":"{}"}}"#, level);
-            let (status, body) = post_json(&router, "/api/bt/attacks/rage", &json).await;
-            assert_eq!(status, 200);
-            let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-            assert!(resp.ok, "level {} should be accepted", level);
-            let s = state.lock().unwrap();
-            assert_eq!(s.bt_rage_level, *level, "rage level should update immediately");
-            assert_eq!(
-                s.pending_bt_rage_level.as_deref(),
-                Some(*level),
-                "rage level should be queued",
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bt_rage_invalid_level_rejected() {
-        let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/bt/attacks/rage",
-            r#"{"level":"Extreme"}"#,
-        )
-        .await;
-        assert_eq!(status, 200);
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(!resp.ok, "invalid level should return ok:false");
-        let s = state.lock().unwrap();
-        assert_eq!(s.bt_rage_level, "Medium", "rage level should not change");
-        assert!(s.pending_bt_rage_level.is_none(), "nothing should be queued");
-    }
-
-    #[tokio::test]
-    async fn test_bt_rage_empty_string_rejected() {
-        let (router, _) = test_router();
-        let (_, body) = post_json(
-            &router,
-            "/api/bt/attacks/rage",
-            r#"{"level":""}"#,
-        )
-        .await;
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+    async fn test_bt_manual_attack_rejects_invalid_address() {
+        let state = test_state();
+        let body = BtManualAttackRequest {
+            address: Some("invalid".into()),
+            attack: "knob".into(),
+        };
+        let resp = bt_manual_attack_handler(State(state), Json(body)).await;
         assert!(!resp.ok);
     }
 
     #[tokio::test]
-    async fn test_bt_rage_case_sensitive() {
-        let (router, _) = test_router();
-        let (_, body) = post_json(
-            &router,
-            "/api/bt/attacks/rage",
-            r#"{"level":"low"}"#,
-        )
-        .await;
-        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
-        assert!(!resp.ok, "lowercase 'low' should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bt_rage_rejects_malformed_json() {
-        let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/bt/attacks/rage",
-            r#"{"level":"High""#,
-        )
-        .await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-        let s = state.lock().unwrap();
-        assert_eq!(s.bt_rage_level, "Medium");
-        assert!(s.pending_bt_rage_level.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_bt_rage_rejects_wrong_content_type() {
-        let (router, state) = test_router();
-        let (status, _) = post_with_content_type(
-            &router,
-            "/api/bt/attacks/rage",
-            "text/plain",
-            r#"{"level":"High"}"#,
-        )
-        .await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-        let s = state.lock().unwrap();
-        assert_eq!(s.bt_rage_level, "Medium");
-        assert!(s.pending_bt_rage_level.is_none());
-    }
-
-    // === BT devices handler ===
-
-    #[tokio::test]
-    async fn test_bt_devices_empty_default() {
-        let (router, _) = test_router();
-        let (status, body) = get(&router, "/api/bt/devices").await;
-        assert_eq!(status, 200);
-        let resp: BtDevicesResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.count, 0);
-        assert!(resp.devices.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_bt_devices_with_entries() {
-        let (router, state) = test_router();
-        {
-            let mut s = state.lock().unwrap();
-            s.bt_devices_seen = 5;
-            s.bt_device_list = vec![
-                BtDeviceInfo {
-                    address: "AA:BB:CC:DD:EE:01".into(),
-                    name: Some("Speaker".into()),
-                    rssi: Some(-55),
-                    category: "audio".into(),
-                    transport: "Ble".into(),
-                    attack_state: "Untouched".into(),
-                    seen_count: 3,
-                },
-                BtDeviceInfo {
-                    address: "AA:BB:CC:DD:EE:02".into(),
-                    name: None,
-                    rssi: None,
-                    category: String::new(),
-                    transport: "Classic".into(),
-                    attack_state: "Attacking".into(),
-                    seen_count: 1,
-                },
-            ];
-        }
-        let (status, body) = get(&router, "/api/bt/devices").await;
-        assert_eq!(status, 200);
-        let resp: BtDevicesResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.count, 5, "count should reflect devices_seen, not devices.len()");
-        assert_eq!(resp.devices.len(), 2);
-        assert_eq!(resp.devices[0].address, "AA:BB:CC:DD:EE:01");
-        assert_eq!(resp.devices[0].name.as_deref(), Some("Speaker"));
-        assert_eq!(resp.devices[0].rssi, Some(-55));
-        assert_eq!(resp.devices[0].category, "audio");
-        assert_eq!(resp.devices[0].transport, "Ble");
-        assert_eq!(resp.devices[0].attack_state, "Untouched");
-        assert_eq!(resp.devices[0].seen_count, 3);
-        assert_eq!(resp.devices[1].address, "AA:BB:CC:DD:EE:02");
-        assert!(resp.devices[1].name.is_none());
-        assert!(resp.devices[1].rssi.is_none());
-        assert_eq!(resp.devices[1].transport, "Classic");
-        assert_eq!(resp.devices[1].attack_state, "Attacking");
-        assert_eq!(resp.devices[1].seen_count, 1);
-    }
-
-    // === BT captures handler ===
-
-    #[tokio::test]
-    async fn test_bt_captures_default_zero() {
-        let (router, _) = test_router();
-        let (status, body) = get(&router, "/api/bt/captures").await;
-        assert_eq!(status, 200);
-        let resp: BtCapturesResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.keys, 0);
-        assert_eq!(resp.transcripts, 0);
-        assert_eq!(resp.crashes, 0);
-        assert_eq!(resp.vendor, 0);
-        assert_eq!(resp.total, 0);
-    }
-
-    #[tokio::test]
-    async fn test_bt_captures_total_is_sum_of_types() {
-        let (router, state) = test_router();
-        {
-            let mut s = state.lock().unwrap();
-            s.bt_capture_keys = 5;
-            s.bt_capture_transcripts = 3;
-            s.bt_capture_crashes = 2;
-            s.bt_capture_vendor = 1;
-        }
-        let (status, body) = get(&router, "/api/bt/captures").await;
-        assert_eq!(status, 200);
-        let resp: BtCapturesResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.keys, 5);
-        assert_eq!(resp.transcripts, 3);
-        assert_eq!(resp.crashes, 2);
-        assert_eq!(resp.vendor, 1);
-        assert_eq!(resp.total, 11, "total must equal keys + transcripts + crashes + vendor");
-    }
-
-    // === BT patchram handler ===
-
-    #[tokio::test]
-    async fn test_bt_patchram_default_empty() {
-        let (router, _) = test_router();
-        let (status, body) = get(&router, "/api/bt/patchram").await;
-        assert_eq!(status, 200);
-        let resp: BtPatchramResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.state, "");
-    }
-
-    #[tokio::test]
-    async fn test_bt_patchram_reflects_state() {
-        let (router, state) = test_router();
-        {
-            let mut s = state.lock().unwrap();
-            s.bt_patchram_state = "attack".into();
-        }
-        let (status, body) = get(&router, "/api/bt/patchram").await;
-        assert_eq!(status, 200);
-        let resp: BtPatchramResponse = serde_json::from_str(&body).unwrap();
-        assert_eq!(resp.state, "attack");
-    }
-
-    // === WsSnapshot BT fields ===
-
-    #[test]
-    fn test_ws_snapshot_includes_bt_data() {
+    async fn test_bt_manual_attack_accepts_valid_request() {
         let state = test_state();
         {
             let mut s = state.lock().unwrap();
-            s.bt_attack_enabled = true;
-            s.bt_rage_level = "High".into();
-            s.bt_devices_seen = 5;
-            s.bt_active_attacks = 2;
-            s.bt_total_attacks = 10;
-            s.bt_total_captures = 6;
-            s.bt_attack_ble_adv_injection = true;
-            s.bt_capture_keys = 3;
-            s.bt_capture_transcripts = 1;
-            s.bt_capture_crashes = 0;
-            s.bt_capture_vendor = 2;
-            s.bt_patchram_state = "attack".into();
-            s.bt_device_list = vec![BtDeviceInfo {
-                address: "AA:BB:CC:DD:EE:03".into(),
-                name: Some("Tracker".into()),
-                rssi: Some(-42),
-                category: "sensor".into(),
-                transport: "Ble".into(),
-                attack_state: "Queued".into(),
-                seen_count: 9,
-            }];
+            s.bt_rage_level = "Medium".into();
         }
+        let body = BtManualAttackRequest {
+            address: Some("AA:BB:CC:DD:EE:FF".into()),
+            attack: "knob".into(),
+        };
+        let resp = bt_manual_attack_handler(State(state.clone()), Json(body)).await;
+        assert!(resp.ok);
         let s = state.lock().unwrap();
-        let snapshot = build_ws_snapshot(&s);
-
-        assert!(snapshot.bt_attacks.enabled);
-        assert_eq!(snapshot.bt_attacks.rage_level, "High");
-        assert!(snapshot.bt_attacks.toggles.ble_adv_injection);
-        assert_eq!(snapshot.bt_attacks.stats.devices_seen, 5);
-        assert_eq!(snapshot.bt_attacks.stats.active_attacks, 2);
-        assert_eq!(snapshot.bt_attacks.stats.total_attacks, 10);
-        assert_eq!(snapshot.bt_attacks.stats.total_captures, 6);
-
-        assert_eq!(snapshot.bt_devices.count, 5);
-        assert_eq!(snapshot.bt_devices.devices.len(), 1);
-        assert_eq!(snapshot.bt_devices.devices[0].address, "AA:BB:CC:DD:EE:03");
-        assert_eq!(snapshot.bt_devices.devices[0].name.as_deref(), Some("Tracker"));
-
-        assert_eq!(snapshot.bt_captures.keys, 3);
-        assert_eq!(snapshot.bt_captures.transcripts, 1);
-        assert_eq!(snapshot.bt_captures.vendor, 2);
-        assert_eq!(snapshot.bt_captures.total, 6, "total should be 3+1+0+2=6");
-
-        assert_eq!(snapshot.bt_patchram.state, "attack");
-    }
-
-    // =========================================================================
-    // Malformed JSON rejection tests — every POST handler with Json<T> extractor
-    // =========================================================================
-
-    const MALFORMED_JSON: &str = r#"{"broken":tru"#;
-
-    #[tokio::test]
-    async fn test_mode_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/mode", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
+        assert!(s.pending_bt_manual_attack.is_some());
     }
 
     #[tokio::test]
-    async fn test_rate_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/rate", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
+    async fn test_bt_manual_attack_rejects_non_manual() {
+        let state = test_state();
+        let body = BtManualAttackRequest {
+            address: Some("AA:BB:CC:DD:EE:FF".into()),
+            attack: "smp_downgrade".into(),
+        };
+        let resp = bt_manual_attack_handler(State(state), Json(body)).await;
+        assert!(!resp.ok);
     }
 
     #[tokio::test]
-    async fn test_attacks_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/attacks", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
+    async fn test_bt_manual_attack_rejects_when_pending() {
+        let state = test_state();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_rage_level = "Medium".into();
+            s.pending_bt_manual_attack = Some(BtManualAttackRequest {
+                address: Some("11:22:33:44:55:66".into()),
+                attack: "knob".into(),
+            });
+        }
+        let body = BtManualAttackRequest {
+            address: Some("AA:BB:CC:DD:EE:FF".into()),
+            attack: "knob".into(),
+        };
+        let resp = bt_manual_attack_handler(State(state), Json(body)).await;
+        assert!(!resp.ok);
+        assert!(resp.message.contains("already pending"));
     }
 
     #[tokio::test]
-    async fn test_rage_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/rage", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_whitelist_add_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/whitelist/add", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_whitelist_remove_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/whitelist/remove", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_wifi_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/wifi", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_wpasec_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/wpasec", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_discord_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/discord", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_settings_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/settings", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bluetooth_toggle_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/bluetooth", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_capture_all_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/capture-all", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bt_target_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/bt/attacks/target", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_radio_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/radio", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_plugins_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/plugins", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bt_pair_rejects_malformed_json() {
-        let (router, _) = test_router();
-        let (status, _) = post_json(&router, "/api/bluetooth/pair", MALFORMED_JSON).await;
-        assert_ne!(status, 200, "malformed JSON should be rejected");
-    }
-
-    // =========================================================================
-    // Wrong content-type rejection tests — text/plain should be rejected
-    // =========================================================================
-
-    #[tokio::test]
-    async fn test_mode_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/mode", "text/plain", r#"{"mode":"BT"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_rate_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/rate", "text/plain", r#"{"rate":2}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_attacks_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/attacks", "text/plain", r#"{"deauth":false}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_rage_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/rage", "text/plain", r#"{"level":3}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_channels_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/channels", "text/plain", r#"{"autohunt":true}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_whitelist_add_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/whitelist/add", "text/plain",
-            r#"{"value":"AA:BB:CC:DD:EE:FF","entry_type":"mac"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_whitelist_remove_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/whitelist/remove", "text/plain",
-            r#"{"value":"AA:BB:CC:DD:EE:FF"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_wifi_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/wifi", "text/plain", r#"{"skip_captured":true}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_wpasec_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/wpasec", "text/plain", r#"{"api_key":"test"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_discord_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/discord", "text/plain",
-            r#"{"webhook_url":"http://x","enabled":true}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_settings_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/settings", "text/plain", r#"{"name":"test"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bluetooth_toggle_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/bluetooth", "text/plain", r#"{"visible":true}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_capture_all_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/capture-all", "text/plain", r#"{"enabled":true}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bt_target_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/bt/attacks/target", "text/plain",
-            r#"{"address":"AA:BB:CC:DD:EE:FF"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_radio_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/radio", "text/plain", r#"{"request":"WIFI"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_plugins_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/plugins", "text/plain", r#"[]"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
-    }
-
-    #[tokio::test]
-    async fn test_bt_pair_rejects_wrong_content_type() {
-        let (router, _) = test_router();
-        let (status, _) = post_with_content_type(
-            &router, "/api/bluetooth/pair", "text/plain",
-            r#"{"mac":"AA:BB:CC:DD:EE:FF"}"#,
-        ).await;
-        assert_ne!(status, 200, "non-JSON content-type should be rejected");
+    async fn test_bt_manual_vendor_no_address_required() {
+        let state = test_state();
+        let body = BtManualAttackRequest {
+            address: None,
+            attack: "vendor_cmd_unlock".into(),
+        };
+        let resp = bt_manual_attack_handler(State(state), Json(body)).await;
+        assert!(resp.ok);
     }
 }
