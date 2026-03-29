@@ -386,28 +386,25 @@ pub fn hci_inquiry(hci: &HciSocket, inquiry_length: u8) -> Vec<BtDeviceObservati
             break;
         }
 
-        // Read any HCI event
-        // Try Inquiry Result with RSSI (0x22), Extended (0x2F), or Complete (0x01)
-        // We use a raw read approach: wait_event with the most common code,
-        // but we need to accept multiple event types. Use a short timeout and retry.
-        let result = hci.wait_event(EVT_INQUIRY_RESULT_RSSI, remaining_ms.min(500));
-        match result {
-            Ok(params) => {
-                let devices = parse_inquiry_result(EVT_INQUIRY_RESULT_RSSI, &params);
-                all_devices.extend(devices);
-            }
-            Err(_) => {
-                // Could be timeout or a different event type arrived.
-                // Try Extended Inquiry Result
-                if let Ok(params) = hci.wait_event(EVT_EXTENDED_INQUIRY_RESULT, 100) {
-                    let devices = parse_inquiry_result(EVT_EXTENDED_INQUIRY_RESULT, &params);
-                    all_devices.extend(devices);
+        // Read whatever HCI event arrives next and dispatch by event code.
+        // This avoids dropping EIR or Inquiry Complete events that arrive
+        // while waiting for a specific event type.
+        match hci.read_any_event(remaining_ms.min(1000)) {
+            Ok((code, params)) => match code {
+                EVT_INQUIRY_RESULT_RSSI => {
+                    all_devices.extend(parse_inquiry_result(EVT_INQUIRY_RESULT_RSSI, &params));
                 }
-                // Check for Inquiry Complete
-                if hci.wait_event(EVT_INQUIRY_COMPLETE, 100).is_ok() {
-                    break;
+                EVT_EXTENDED_INQUIRY_RESULT => {
+                    all_devices.extend(parse_inquiry_result(EVT_EXTENDED_INQUIRY_RESULT, &params));
                 }
-            }
+                EVT_INQUIRY_COMPLETE => break,
+                0x02 => {
+                    // Basic Inquiry Result (no RSSI) — rare but possible
+                    all_devices.extend(parse_inquiry_result(0x02, &params));
+                }
+                _ => {} // ignore unrelated events
+            },
+            Err(_) => break, // timeout — inquiry likely done
         }
     }
 

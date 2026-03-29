@@ -226,6 +226,48 @@ mod platform {
             }
         }
 
+        /// Read the next HCI event, returning (event_code, params) without
+        /// filtering. Use this when multiple event types are expected (e.g.,
+        /// during Classic Inquiry which can return RSSI, EIR, or Complete).
+        pub fn read_any_event(&self, timeout_ms: i32) -> Result<(u8, Vec<u8>), String> {
+            let mut pfd = libc::pollfd {
+                fd: self.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let poll_ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
+            if poll_ret < 0 {
+                return Err(format!(
+                    "HCI poll failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if poll_ret == 0 {
+                return Err("HCI read_any_event timeout".to_string());
+            }
+
+            let mut buf = [0u8; 260];
+            let n = unsafe {
+                libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if n < 0 {
+                return Err(format!(
+                    "HCI read failed: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+
+            let n = n as usize;
+            if n < 3 {
+                return Err("HCI event too short".to_string());
+            }
+
+            let event_code = buf[1];
+            let param_len = buf[2] as usize;
+            let end = (3 + param_len).min(n);
+            Ok((event_code, buf[3..end].to_vec()))
+        }
+
         /// Clone the HCI socket for use in a background thread.
         pub fn try_clone(&self) -> Result<Self, String> {
             let new_fd = unsafe { libc::dup(self.fd) };
@@ -402,6 +444,10 @@ mod platform {
         }
 
         pub fn drain_events(&self) {}
+
+        pub fn read_any_event(&self, _timeout_ms: i32) -> Result<(u8, Vec<u8>), String> {
+            Err("HciSocket stub: read_any_event not supported".to_string())
+        }
 
         pub fn write_command_raw(&self, cmd: &HciCommand) -> Result<(), String> {
             log::info!(
