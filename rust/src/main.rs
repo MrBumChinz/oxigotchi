@@ -837,17 +837,11 @@ impl Daemon {
                             let addr_type = self.bt_discovery.get_device_addr_type(&target.device_id);
                             bluetooth::attacks::smp::run_downgrade(hci, &target.device_address, addr_type)
                         }
-                        bluetooth::attacks::BtAttackType::SmpMitm => {
-                            bluetooth::attacks::smp::run_mitm(hci, &target.device_address)
-                        }
                         bluetooth::attacks::BtAttackType::Knob => {
                             bluetooth::attacks::knob::run(hci, &target.device_address)
                         }
                         bluetooth::attacks::BtAttackType::BleAdvInjection => {
                             bluetooth::attacks::ble_adv::run(hci, &target.device_address)
-                        }
-                        bluetooth::attacks::BtAttackType::BleConnHijack => {
-                            bluetooth::attacks::ble_hijack::run(hci, &target.device_address)
                         }
                         bluetooth::attacks::BtAttackType::L2capFuzz => {
                             let addr_type = self.bt_discovery.get_device_addr_type(&target.device_id);
@@ -1339,13 +1333,9 @@ impl Daemon {
                 "smp_downgrade" => {
                     Some(crate::bluetooth::attacks::BtAttackType::SmpDowngrade)
                 }
-                "smp_mitm" => Some(crate::bluetooth::attacks::BtAttackType::SmpMitm),
                 "knob" => Some(crate::bluetooth::attacks::BtAttackType::Knob),
                 "ble_adv_injection" => {
                     Some(crate::bluetooth::attacks::BtAttackType::BleAdvInjection)
-                }
-                "ble_conn_hijack" => {
-                    Some(crate::bluetooth::attacks::BtAttackType::BleConnHijack)
                 }
                 "l2cap_fuzz" => Some(crate::bluetooth::attacks::BtAttackType::L2capFuzz),
                 "att_gatt_fuzz" => {
@@ -2226,10 +2216,8 @@ impl Daemon {
         s.bt_attack_enabled = self.config.bt_attacks.enabled;
         s.bt_rage_level = self.config.bt_attacks.rage_level.as_str().to_string();
         s.bt_attack_smp_downgrade = self.config.bt_attacks.smp_downgrade;
-        s.bt_attack_smp_mitm = self.config.bt_attacks.smp_mitm;
         s.bt_attack_knob = self.config.bt_attacks.knob;
         s.bt_attack_ble_adv_injection = self.config.bt_attacks.ble_adv_injection;
-        s.bt_attack_ble_conn_hijack = self.config.bt_attacks.ble_conn_hijack;
         s.bt_attack_l2cap_fuzz = self.config.bt_attacks.l2cap_fuzz;
         s.bt_attack_att_gatt_fuzz = self.config.bt_attacks.att_gatt_fuzz;
         s.bt_attack_vendor_cmd_unlock = self.config.bt_attacks.vendor_cmd_unlock;

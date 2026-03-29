@@ -1,6 +1,6 @@
 //! BT attack configuration, type enums, and rage-level filtering.
 //!
-//! Defines the 8 toggleable attack types, rage levels, and the
+//! Defines the 6 toggleable attack types, rage levels, and the
 //! [`BtAttackConfig`] struct that drives the offensive BT mode.
 
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,6 @@ use std::time::Instant;
 
 pub mod att_fuzz;
 pub mod ble_adv;
-pub mod ble_hijack;
 pub mod hci;
 pub mod knob;
 pub mod l2cap_fuzz;
@@ -19,30 +18,26 @@ pub mod l2cap_socket;
 pub mod vendor;
 
 // ---------------------------------------------------------------------------
-// BtAttackType — the 8 attack variants
+// BtAttackType — the 6 attack variants
 // ---------------------------------------------------------------------------
 
 /// Individual BT attack types that can be toggled on/off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BtAttackType {
     SmpDowngrade,
-    SmpMitm,
     Knob,
     BleAdvInjection,
-    BleConnHijack,
     L2capFuzz,
     AttGattFuzz,
     VendorCmdUnlock,
 }
 
 impl BtAttackType {
-    /// All 8 variants in canonical order.
-    pub const ALL: [BtAttackType; 8] = [
+    /// All 6 variants in canonical order.
+    pub const ALL: [BtAttackType; 6] = [
         BtAttackType::SmpDowngrade,
-        BtAttackType::SmpMitm,
         BtAttackType::Knob,
         BtAttackType::BleAdvInjection,
-        BtAttackType::BleConnHijack,
         BtAttackType::L2capFuzz,
         BtAttackType::AttGattFuzz,
         BtAttackType::VendorCmdUnlock,
@@ -52,10 +47,8 @@ impl BtAttackType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::SmpDowngrade => "smp_downgrade",
-            Self::SmpMitm => "smp_mitm",
             Self::Knob => "knob",
             Self::BleAdvInjection => "ble_adv_injection",
-            Self::BleConnHijack => "ble_conn_hijack",
             Self::L2capFuzz => "l2cap_fuzz",
             Self::AttGattFuzz => "att_gatt_fuzz",
             Self::VendorCmdUnlock => "vendor_cmd_unlock",
@@ -72,9 +65,7 @@ impl BtAttackType {
         matches!(
             self,
             Self::SmpDowngrade
-                | Self::SmpMitm
                 | Self::BleAdvInjection
-                | Self::BleConnHijack
                 | Self::AttGattFuzz
         )
     }
@@ -91,8 +82,6 @@ impl BtAttackType {
             Self::VendorCmdUnlock => BtRageLevel::Low,
             // Medium: active attacks that target external devices
             Self::SmpDowngrade | Self::Knob | Self::BleAdvInjection | Self::L2capFuzz | Self::AttGattFuzz => BtRageLevel::Medium,
-            // High: aggressive / disruptive (MITM, connection hijack)
-            Self::SmpMitm | Self::BleConnHijack => BtRageLevel::High,
         }
     }
 }
@@ -149,17 +138,13 @@ pub struct BtAttackConfig {
     #[serde(default)]
     pub rage_level: BtRageLevel,
 
-    // -- 8 attack toggles --------------------------------------------------
+    // -- 6 attack toggles --------------------------------------------------
     #[serde(default = "default_true")]
     pub smp_downgrade: bool,
-    #[serde(default)]
-    pub smp_mitm: bool,
     #[serde(default = "default_true")]
     pub knob: bool,
     #[serde(default)]
     pub ble_adv_injection: bool,
-    #[serde(default)]
-    pub ble_conn_hijack: bool,
     #[serde(default)]
     pub l2cap_fuzz: bool,
     #[serde(default)]
@@ -232,10 +217,8 @@ impl Default for BtAttackConfig {
             enabled: true,
             rage_level: BtRageLevel::default(),
             smp_downgrade: true,
-            smp_mitm: false,
             knob: true,
             ble_adv_injection: false,
-            ble_conn_hijack: false,
             l2cap_fuzz: false,
             att_gatt_fuzz: false,
             vendor_cmd_unlock: true,
@@ -253,15 +236,13 @@ impl Default for BtAttackConfig {
 }
 
 impl BtAttackConfig {
-    /// Returns the toggle state for each of the 8 attacks, in
+    /// Returns the toggle state for each of the 6 attacks, in
     /// [`BtAttackType::ALL`] order.
-    pub fn enabled_toggles(&self) -> [bool; 8] {
+    pub fn enabled_toggles(&self) -> [bool; 6] {
         [
             self.smp_downgrade,
-            self.smp_mitm,
             self.knob,
             self.ble_adv_injection,
-            self.ble_conn_hijack,
             self.l2cap_fuzz,
             self.att_gatt_fuzz,
             self.vendor_cmd_unlock,
@@ -272,10 +253,8 @@ impl BtAttackConfig {
     pub fn set_toggle(&mut self, attack: BtAttackType, enabled: bool) {
         match attack {
             BtAttackType::SmpDowngrade => self.smp_downgrade = enabled,
-            BtAttackType::SmpMitm => self.smp_mitm = enabled,
             BtAttackType::Knob => self.knob = enabled,
             BtAttackType::BleAdvInjection => self.ble_adv_injection = enabled,
-            BtAttackType::BleConnHijack => self.ble_conn_hijack = enabled,
             BtAttackType::L2capFuzz => self.l2cap_fuzz = enabled,
             BtAttackType::AttGattFuzz => self.att_gatt_fuzz = enabled,
             BtAttackType::VendorCmdUnlock => self.vendor_cmd_unlock = enabled,
@@ -419,10 +398,8 @@ mod tests {
         assert!(cfg.enabled);
         assert_eq!(cfg.rage_level, BtRageLevel::Medium);
         assert!(cfg.smp_downgrade);
-        assert!(!cfg.smp_mitm);
         assert!(cfg.knob);
         assert!(!cfg.ble_adv_injection);
-        assert!(!cfg.ble_conn_hijack);
         assert!(!cfg.l2cap_fuzz);
         assert!(!cfg.att_gatt_fuzz);
         assert!(cfg.vendor_cmd_unlock);
@@ -438,15 +415,15 @@ mod tests {
     fn test_enabled_toggles_order() {
         let cfg = BtAttackConfig::default();
         let t = cfg.enabled_toggles();
-        // smp_downgrade=true, smp_mitm=false, knob=true, ...
-        assert_eq!(t, [true, false, true, false, false, false, false, true]);
+        // smp_downgrade=true, knob=true, ...
+        assert_eq!(t, [true, true, false, false, false, true]);
     }
 
     #[test]
     fn test_set_toggle() {
         let mut cfg = BtAttackConfig::default();
-        cfg.set_toggle(BtAttackType::SmpMitm, true);
-        assert!(cfg.smp_mitm);
+        cfg.set_toggle(BtAttackType::L2capFuzz, true);
+        assert!(cfg.l2cap_fuzz);
         cfg.set_toggle(BtAttackType::Knob, false);
         assert!(!cfg.knob);
     }
@@ -476,11 +453,11 @@ mod tests {
     fn test_active_at_rage_high() {
         let mut cfg = BtAttackConfig::default();
         cfg.rage_level = BtRageLevel::High;
-        cfg.smp_mitm = true;
-        cfg.ble_conn_hijack = true;
+        cfg.l2cap_fuzz = true;
+        cfg.att_gatt_fuzz = true;
         let active = cfg.active_at_rage_level();
-        // All toggled-on attacks are allowed at High
-        assert_eq!(active.len(), 5); // 3 default + mitm + hijack
+        // High allows all Medium+Low attacks; 3 default + l2cap_fuzz + att_gatt_fuzz
+        assert_eq!(active.len(), 5);
     }
 
     #[test]
@@ -499,10 +476,6 @@ mod tests {
         assert!(BtAttackType::SmpDowngrade.is_ble());
         assert!(!BtAttackType::SmpDowngrade.is_classic());
         assert!(!BtAttackType::SmpDowngrade.requires_patchram());
-
-        assert!(BtAttackType::SmpMitm.is_ble());
-        assert!(!BtAttackType::SmpMitm.is_classic());
-        assert!(!BtAttackType::SmpMitm.requires_patchram());
 
         assert!(BtAttackType::BleAdvInjection.is_ble());
         assert!(!BtAttackType::BleAdvInjection.is_classic());
@@ -536,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_all_variants_count() {
-        assert_eq!(BtAttackType::ALL.len(), 8);
+        assert_eq!(BtAttackType::ALL.len(), 6);
     }
 
     #[test]
@@ -555,10 +528,8 @@ mod tests {
 enabled = true
 rage_level = "High"
 smp_downgrade = false
-smp_mitm = true
 knob = true
 ble_adv_injection = true
-ble_conn_hijack = true
 l2cap_fuzz = true
 att_gatt_fuzz = true
 vendor_cmd_unlock = false
@@ -575,7 +546,7 @@ stock_hcd = "/tmp/stock.hcd"
         assert!(cfg.enabled);
         assert_eq!(cfg.rage_level, BtRageLevel::High);
         assert!(!cfg.smp_downgrade);
-        assert!(cfg.smp_mitm);
+        assert!(cfg.knob);
         assert_eq!(cfg.min_rssi, -70);
         assert_eq!(cfg.max_concurrent_attacks, 5);
         assert_eq!(cfg.whitelist, vec!["AA:BB:CC"]);

@@ -111,10 +111,8 @@ pub struct DaemonState {
     pub bt_attack_enabled: bool,
     pub bt_rage_level: String,
     pub bt_attack_smp_downgrade: bool,
-    pub bt_attack_smp_mitm: bool,
     pub bt_attack_knob: bool,
     pub bt_attack_ble_adv_injection: bool,
-    pub bt_attack_ble_conn_hijack: bool,
     pub bt_attack_l2cap_fuzz: bool,
     pub bt_attack_att_gatt_fuzz: bool,
     pub bt_attack_vendor_cmd_unlock: bool,
@@ -319,10 +317,8 @@ impl DaemonState {
             bt_attack_enabled: true,
             bt_rage_level: "Medium".into(),
             bt_attack_smp_downgrade: true,
-            bt_attack_smp_mitm: false,
             bt_attack_knob: true,
             bt_attack_ble_adv_injection: false,
-            bt_attack_ble_conn_hijack: false,
             bt_attack_l2cap_fuzz: false,
             bt_attack_att_gatt_fuzz: false,
             bt_attack_vendor_cmd_unlock: true,
@@ -580,10 +576,8 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             rage_level: s.bt_rage_level.clone(),
             toggles: BtAttackToggles {
                 smp_downgrade: s.bt_attack_smp_downgrade,
-                smp_mitm: s.bt_attack_smp_mitm,
                 knob: s.bt_attack_knob,
                 ble_adv_injection: s.bt_attack_ble_adv_injection,
-                ble_conn_hijack: s.bt_attack_ble_conn_hijack,
                 l2cap_fuzz: s.bt_attack_l2cap_fuzz,
                 att_gatt_fuzz: s.bt_attack_att_gatt_fuzz,
                 vendor_cmd_unlock: s.bt_attack_vendor_cmd_unlock,
@@ -882,10 +876,8 @@ pub struct BtAttackResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtAttackToggles {
     pub smp_downgrade: bool,
-    pub smp_mitm: bool,
     pub knob: bool,
     pub ble_adv_injection: bool,
-    pub ble_conn_hijack: bool,
     pub l2cap_fuzz: bool,
     pub att_gatt_fuzz: bool,
     pub vendor_cmd_unlock: bool,
@@ -2308,10 +2300,8 @@ async fn bt_attacks_get_handler(State(state): State<SharedState>) -> Json<BtAtta
         rage_level: s.bt_rage_level.clone(),
         toggles: BtAttackToggles {
             smp_downgrade: s.bt_attack_smp_downgrade,
-            smp_mitm: s.bt_attack_smp_mitm,
             knob: s.bt_attack_knob,
             ble_adv_injection: s.bt_attack_ble_adv_injection,
-            ble_conn_hijack: s.bt_attack_ble_conn_hijack,
             l2cap_fuzz: s.bt_attack_l2cap_fuzz,
             att_gatt_fuzz: s.bt_attack_att_gatt_fuzz,
             vendor_cmd_unlock: s.bt_attack_vendor_cmd_unlock,
@@ -2334,10 +2324,8 @@ async fn bt_attacks_toggle_handler(
     // Optimistic update: immediately set the matching field
     match body.attack.as_str() {
         "smp_downgrade" => s.bt_attack_smp_downgrade = body.enabled,
-        "smp_mitm" => s.bt_attack_smp_mitm = body.enabled,
         "knob" => s.bt_attack_knob = body.enabled,
         "ble_adv_injection" => s.bt_attack_ble_adv_injection = body.enabled,
-        "ble_conn_hijack" => s.bt_attack_ble_conn_hijack = body.enabled,
         "l2cap_fuzz" => s.bt_attack_l2cap_fuzz = body.enabled,
         "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz = body.enabled,
         "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock = body.enabled,
@@ -4378,10 +4366,8 @@ mod tests {
         assert!(resp.enabled);
         assert_eq!(resp.rage_level, "Medium");
         assert!(resp.toggles.smp_downgrade);
-        assert!(!resp.toggles.smp_mitm);
         assert!(resp.toggles.knob);
         assert!(!resp.toggles.ble_adv_injection);
-        assert!(!resp.toggles.ble_conn_hijack);
         assert!(!resp.toggles.l2cap_fuzz);
         assert!(!resp.toggles.att_gatt_fuzz);
         assert!(resp.toggles.vendor_cmd_unlock);
@@ -4398,10 +4384,8 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.bt_attack_enabled = false;
             s.bt_attack_smp_downgrade = false;
-            s.bt_attack_smp_mitm = true;
             s.bt_attack_knob = false;
             s.bt_attack_ble_adv_injection = true;
-            s.bt_attack_ble_conn_hijack = true;
             s.bt_attack_l2cap_fuzz = true;
             s.bt_attack_att_gatt_fuzz = true;
             s.bt_attack_vendor_cmd_unlock = false;
@@ -4417,10 +4401,8 @@ mod tests {
         assert!(!resp.enabled);
         assert_eq!(resp.rage_level, "High");
         assert!(!resp.toggles.smp_downgrade);
-        assert!(resp.toggles.smp_mitm);
         assert!(!resp.toggles.knob);
         assert!(resp.toggles.ble_adv_injection);
-        assert!(resp.toggles.ble_conn_hijack);
         assert!(resp.toggles.l2cap_fuzz);
         assert!(resp.toggles.att_gatt_fuzz);
         assert!(!resp.toggles.vendor_cmd_unlock);
@@ -4438,24 +4420,24 @@ mod tests {
         let (status, body) = post_json(
             &router,
             "/api/bt/attacks/toggle",
-            r#"{"attack":"smp_mitm","enabled":true}"#,
+            r#"{"attack":"l2cap_fuzz","enabled":true}"#,
         )
         .await;
         assert_eq!(status, 200);
         let resp: ActionResponse = serde_json::from_str(&body).unwrap();
         assert!(resp.ok);
         let s = state.lock().unwrap();
-        assert!(s.bt_attack_smp_mitm, "smp_mitm should update immediately");
+        assert!(s.bt_attack_l2cap_fuzz, "l2cap_fuzz should update immediately");
         let pending = s.pending_bt_attack_toggle.as_ref().expect("toggle should be queued");
-        assert_eq!(pending.attack, "smp_mitm");
+        assert_eq!(pending.attack, "l2cap_fuzz");
         assert!(pending.enabled);
     }
 
     #[tokio::test]
-    async fn test_bt_toggle_all_eight_attacks() {
+    async fn test_bt_toggle_all_six_attacks() {
         let attacks = [
-            "smp_downgrade", "smp_mitm", "knob", "ble_adv_injection",
-            "ble_conn_hijack", "l2cap_fuzz", "att_gatt_fuzz", "vendor_cmd_unlock",
+            "smp_downgrade", "knob", "ble_adv_injection",
+            "l2cap_fuzz", "att_gatt_fuzz", "vendor_cmd_unlock",
         ];
         for atk in &attacks {
             let (router, state) = test_router();
@@ -4467,10 +4449,8 @@ mod tests {
             let s = state.lock().unwrap();
             let field_enabled = match *atk {
                 "smp_downgrade" => s.bt_attack_smp_downgrade,
-                "smp_mitm" => s.bt_attack_smp_mitm,
                 "knob" => s.bt_attack_knob,
                 "ble_adv_injection" => s.bt_attack_ble_adv_injection,
-                "ble_conn_hijack" => s.bt_attack_ble_conn_hijack,
                 "l2cap_fuzz" => s.bt_attack_l2cap_fuzz,
                 "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz,
                 "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock,
@@ -4561,7 +4541,7 @@ mod tests {
         let req_a = post_json(
             &router,
             "/api/bt/attacks/toggle",
-            r#"{"attack":"smp_mitm","enabled":true}"#,
+            r#"{"attack":"l2cap_fuzz","enabled":true}"#,
         );
         let req_b = post_json(
             &router,
@@ -4576,12 +4556,12 @@ mod tests {
         assert!(serde_json::from_str::<ActionResponse>(&body_b).unwrap().ok);
 
         let s = state.lock().unwrap();
-        assert!(s.bt_attack_smp_mitm, "first toggle should be applied");
+        assert!(s.bt_attack_l2cap_fuzz, "first toggle should be applied");
         assert!(!s.bt_attack_knob, "second toggle should be applied");
         assert!(
             matches!(
                 s.pending_bt_attack_toggle.as_ref(),
-                Some(BtAttackToggle { attack, enabled: true }) if attack == "smp_mitm"
+                Some(BtAttackToggle { attack, enabled: true }) if attack == "l2cap_fuzz"
             ) || matches!(
                 s.pending_bt_attack_toggle.as_ref(),
                 Some(BtAttackToggle { attack, enabled: false }) if attack == "knob"

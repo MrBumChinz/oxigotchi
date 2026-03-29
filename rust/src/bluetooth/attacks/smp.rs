@@ -1,7 +1,6 @@
 //! SMP (Security Manager Protocol) attack workers.
 //!
 //! - `run_downgrade`: forces Just Works pairing via NoInputNoOutput IO capability
-//! - `run_mitm`: MITM relay framework stub
 
 use std::time::Instant;
 
@@ -178,30 +177,6 @@ pub fn run_downgrade(hci: &HciSocket, target_addr: &str, addr_type: u8) -> BtAtt
     }
 }
 
-/// SMP MITM relay — framework stub.
-///
-/// A real MITM relay requires two BT adapters and real-time forwarding
-/// of SMP messages. This returns an error indicating it is a framework only.
-pub fn run_mitm(hci: &HciSocket, target_addr: &str) -> BtAttackResult {
-    let start = Instant::now();
-    let _ = hci; // acknowledge parameter
-    log::info!("smp_mitm: framework stub for {}", target_addr);
-
-    BtAttackResult {
-        attack_type: BtAttackType::SmpMitm,
-        target_address: target_addr.to_string(),
-        target_name: None,
-        success: false,
-        capture: None,
-        error: Some(
-            "SMP MITM requires two BT adapters for relay. Pi Zero 2W has one BCM43430B0. \
-             Hardware-limited — not achievable with current setup."
-                .into(),
-        ),
-        timestamp: start,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,15 +209,5 @@ mod tests {
             }
             _ => panic!("Expected PairingTranscript capture"),
         }
-    }
-
-    #[test]
-    #[cfg(not(target_os = "linux"))]
-    fn test_run_mitm_stub() {
-        let hci = HciSocket::open(0).unwrap();
-        let result = run_mitm(&hci, "AA:BB:CC:DD:EE:FF");
-        assert_eq!(result.attack_type, BtAttackType::SmpMitm);
-        assert!(!result.success);
-        assert!(result.error.as_deref().unwrap().contains("Hardware-limited"));
     }
 }

@@ -2,7 +2,7 @@
 
 **Status: Experimental**
 
-BT offensive mode is functional but limited by the BCM43436B0 hardware on the Pi Zero 2W. 6 of 8 attack types work. Manual device targeting is not yet implemented. Unlike WiFi (where deauth frames are unauthenticated and trivially spoofed), Bluetooth connections are authenticated at the link layer — there is no equivalent of WiFi deauth in BT.
+BT offensive mode is functional but limited by the BCM43436B0 hardware on the Pi Zero 2W. All 6 implemented attack types work. Manual device targeting is not yet implemented. Unlike WiFi (where deauth frames are unauthenticated and trivially spoofed), Bluetooth connections are authenticated at the link layer — there is no equivalent of WiFi deauth in BT.
 
 ## Hardware Constraints
 
@@ -14,7 +14,7 @@ The Pi Zero 2W uses a BCM43436B0 (also identified as BCM43430B0) combo chip shar
 
 ## Attack Status
 
-### Working (6/8)
+### Implemented (6/6)
 
 | Attack | Type | Rage Level | What It Does |
 |--------|------|-----------|--------------|
@@ -25,24 +25,21 @@ The Pi Zero 2W uses a BCM43436B0 (also identified as BCM43430B0) combo chip shar
 | **Vendor Cmd Unlock** | Local | Low+ | Reads the LOCAL controller's firmware state — sends READ_LOCAL_VERSION, READ_VERBOSE_CONFIG, and reads patchram base (0x211700). Diagnostics tool, not an attack on external devices. Requires attack patchram loaded. |
 | **KNOB** | Classic | Low+ | Key Negotiation of Bluetooth attack. Patches the BCM43430B0 firmware's key-size validation global at RAM 0x205F7C via BCM vendor Write_RAM (0xFC4C) to force `key_size=1`, then initiates a BR/EDR connection. The target negotiates minimum encryption key entropy via LMP, making the session key trivially crackable. Original global value is always restored after the attack completes. Also scans ROM for the LMP dispatch table as a diagnostic fallback. |
 
-### Hardware-Impossible on BCM43436B0 (2/8)
+### Not Implemented — Hardware Limitations
 
-| Attack | Type | Problem |
-|--------|------|---------|
-| **SMP MITM** | BLE | Man-in-the-middle of BLE pairing requires two BT adapters — one to impersonate each endpoint of the pairing. The Pi Zero 2W has a single BCM43436B0 adapter. Cannot be implemented without external USB BT dongle. |
-| **BLE Conn Hijack** | BLE | Hijacking an active BLE connection requires Link Layer hooks in firmware, needing >5KB of patchram space. The BCM43436B0 has only 1,393 bytes of contiguous free space. Cannot fit the required patches. |
+Two attack types were considered but cannot work on the BCM43436B0 and have been removed from the UI and codebase:
+
+- **SMP MITM**: Man-in-the-middle of BLE pairing requires two BT adapters — one to impersonate each endpoint. The Pi Zero 2W has a single adapter. Would need an external USB BT dongle (CSR8510 or similar).
+- **BLE Conn Hijack**: Hijacking an active BLE connection requires Link Layer hooks in firmware, needing >5KB of patchram space. The BCM43436B0 has only 1,393 bytes of contiguous free space. No path forward on this hardware.
 
 ## Rage Levels
 
-Three discrete levels filter which attacks are permitted:
+Two discrete levels filter which attacks are permitted:
 
 | Level | Permitted | Description |
 |-------|-----------|-------------|
 | **Low** | SMP Downgrade, KNOB, Vendor Cmd Unlock | Passive diagnostics, key-size downgrade, and self-targeted. Minimal risk. |
 | **Medium** | All Low + BLE Adv Injection, L2CAP Fuzz, ATT/GATT Fuzz | Active attacks on external devices. |
-| **High** | All Medium + SMP MITM*, BLE Conn Hijack* | Full aggression including MITM and hijack. |
-
-*These attacks are toggled on at the rage level but fail due to hardware limitations (see above).
 
 ## Target Selection
 
@@ -80,5 +77,3 @@ The WiFi attack surface is fundamentally larger because the 802.11 standard was 
 
 - **Manual targeting**: Wire `pending_bt_target` through to `TargetSelector` so the dashboard "Target" button actually works
 - **KNOB LMP dispatch patch**: The current KNOB approach patches a RAM global. A more targeted approach would patch the LMP dispatch table entry for opcode 0x10 directly — ROM scan infrastructure is in place but the dispatch table hook is not yet implemented
-- **SMP MITM**: Would need an external USB BT adapter (CSR8510 or similar) as a second radio
-- **BLE Conn Hijack**: No path forward on BCM43436B0 — patchram space is a hard physical limit

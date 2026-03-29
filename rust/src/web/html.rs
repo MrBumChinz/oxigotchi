@@ -379,17 +379,9 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="toggle-info"><div class="toggle-label">SMP Downgrade</div><div class="toggle-desc">Downgrade pairing security to capture keys</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-smp_downgrade" checked onchange="toggleBtAttack('smp_downgrade',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row" id="bt-row-smp_mitm" title="Requires High rage level">
-<div class="toggle-info"><div class="toggle-label">SMP MITM<span class="bt-badge bt-badge-high">HIGH</span></div><div class="toggle-desc">Man-in-the-middle BLE pairing</div></div>
-<label class="switch"><input type="checkbox" id="bt-atk-smp_mitm" onchange="toggleBtAttack('smp_mitm',this.checked)"><span class="slider"></span></label>
-</div>
 <div class="toggle-row">
 <div class="toggle-info"><div class="toggle-label">BLE Adv Injection</div><div class="toggle-desc">Inject malicious BLE advertisements</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-ble_adv_injection" onchange="toggleBtAttack('ble_adv_injection',this.checked)"><span class="slider"></span></label>
-</div>
-<div class="toggle-row" id="bt-row-ble_conn_hijack" title="Requires High rage level">
-<div class="toggle-info"><div class="toggle-label">BLE Conn Hijack<span class="bt-badge bt-badge-high">HIGH</span></div><div class="toggle-desc">Hijack active BLE connections</div></div>
-<label class="switch"><input type="checkbox" id="bt-atk-ble_conn_hijack" onchange="toggleBtAttack('ble_conn_hijack',this.checked)"><span class="slider"></span></label>
 </div>
 <div class="toggle-row">
 <div class="toggle-info"><div class="toggle-label">ATT/GATT Fuzz</div><div class="toggle-desc">Fuzz BLE attribute protocol</div></div>
@@ -1825,17 +1817,8 @@ function setBtRage(level) {
 }
 
 function updateBtAttackConstraintState(level) {
-    [
-        {row: 'bt-row-smp_mitm', input: 'bt-atk-smp_mitm'},
-        {row: 'bt-row-ble_conn_hijack', input: 'bt-atk-ble_conn_hijack'}
-    ].forEach(function(entry) {
-        var row = document.getElementById(entry.row);
-        var input = document.getElementById(entry.input);
-        if (!row || !input) return;
-        var warn = input.checked && level !== 'High';
-        row.classList.toggle('bt-row-warning', warn);
-        row.title = warn ? 'Requires High rage level' : (row.classList.contains('bt-row-disabled') ? 'Requires patchram attack firmware' : '');
-    });
+    // No attacks currently require High rage level (hardware-impossible ones removed).
+    // Kept as a hook for future rage-level-gated attacks.
 }
 
 function updateBtRageFromWs(btAttacks) {
@@ -1859,10 +1842,8 @@ function updateBtAttacksFromWs(btAttacks) {
     var t = btAttacks.toggles;
     var map = {
         smp_downgrade: t.smp_downgrade,
-        smp_mitm: t.smp_mitm,
         knob: t.knob,
         ble_adv_injection: t.ble_adv_injection,
-        ble_conn_hijack: t.ble_conn_hijack,
         l2cap_fuzz: t.l2cap_fuzz,
         att_gatt_fuzz: t.att_gatt_fuzz,
         vendor_cmd_unlock: t.vendor_cmd_unlock
