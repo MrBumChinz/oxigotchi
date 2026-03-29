@@ -399,6 +399,9 @@ pub struct Personality {
     joke_index: Option<usize>,
     /// Which face's joke pool is active.
     joke_face: String,
+    /// Locked face during joke display — prevents face churn from
+    /// rare-face rolls and capture variety from killing jokes mid-display.
+    joke_face_lock: Option<Face>,
     /// Status text cycling: epochs the current status has been shown.
     status_display_epochs: u32,
     /// The currently displayed status text.
@@ -436,6 +439,7 @@ impl Personality {
             joke_epochs_left: 0,
             joke_index: None,
             joke_face: boot_key.to_string(),
+            joke_face_lock: None,
             status_display_epochs: 1,
             current_status: boot_status,
         }
@@ -446,6 +450,12 @@ impl Personality {
     pub fn current_face(&self) -> Face {
         // Hardware overrides (battery, crash, wifi) take highest priority
         if let Some(f) = self.override_face {
+            return f;
+        }
+        // Joke face lock — keeps face stable while a joke is displaying.
+        // Without this, rare-face rolls and capture variety constantly change
+        // the face, resetting joke state and preventing jokes from finishing.
+        if let Some(f) = self.joke_face_lock {
             return f;
         }
         // Face variety engine (milestones, idle rotation, capture cycling, etc.)
@@ -603,6 +613,7 @@ impl Personality {
             self.joke_phase = 0;
             self.joke_epochs_left = 0;
             self.joke_index = None;
+            self.joke_face_lock = None; // release stale lock
             self.joke_face = face_name.clone();
             self.status_display_epochs = 3; // force new message pick below
             let msgs = messages::messages_for_face(&face_name);
@@ -647,6 +658,7 @@ impl Personality {
         if self.joke_phase == 1 && self.joke_epochs_left == 0 {
             self.joke_index = None;
             self.joke_phase = 0;
+            self.joke_face_lock = None; // release face lock
             self.status_display_epochs = 3; // prevent slow cycling from holding stale punchline
         }
 
@@ -668,6 +680,7 @@ impl Personality {
                 self.joke_index = Some(idx);
                 self.joke_phase = 0;
                 self.joke_epochs_left = 2; // question held by countdown for 2 more epochs (3 total)
+                self.joke_face_lock = Some(face); // lock face for joke duration
                 self.joke_face = face_name;
                 self.current_status = question;
                 self.status_display_epochs = 1;
@@ -2322,6 +2335,46 @@ mod tests {
             }
         }
         panic!("no joke selected in 100 tries — probability too low");
+    }
+
+    #[test]
+    fn test_joke_face_lock_prevents_churn() {
+        // Simulate: joke starts on "bored" face, then variety engine changes
+        let mut p = Personality::new();
+        p.mood = Mood { value: 0.35 }; // bored face
+        p.joke_face = "bored".to_string();
+        p.status_display_epochs = 3; // force new pick
+
+        // Try until we get a joke
+        for _ in 0..200 {
+            p.joke_index = None;
+            p.joke_face_lock = None;
+            p.joke_face = "bored".to_string();
+            p.status_display_epochs = 3;
+            p.generate_status();
+            if p.joke_index.is_some() {
+                break;
+            }
+        }
+        assert!(p.joke_index.is_some(), "should have started a joke");
+        assert_eq!(p.joke_face_lock, Some(Face::Bored), "face lock should be set");
+        assert_eq!(p.current_face(), Face::Bored, "locked face should be returned");
+
+        // Simulate variety engine wanting to change face (e.g., rare face roll)
+        p.variety.rare_face = Some("cool");
+        // Face should stay locked to bored during joke
+        assert_eq!(p.current_face(), Face::Bored, "face lock should override variety");
+
+        // After joke ends, lock releases (unless a new joke starts immediately)
+        p.joke_phase = 1;
+        p.joke_epochs_left = 0;
+        p.generate_status(); // punchline-done path clears lock
+        // If no new joke started, lock should be cleared
+        if p.joke_index.is_none() {
+            assert_eq!(p.joke_face_lock, None, "lock should be cleared when no new joke");
+        }
+        // Either way, the punchline-done block ran (joke_phase reset to 0)
+        assert_eq!(p.joke_phase, 0, "joke phase should reset after punchline");
     }
 
     #[test]

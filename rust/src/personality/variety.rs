@@ -17,7 +17,7 @@ use rand::Rng;
 /// Milestone capture counts → (count, face, status_text).
 /// Each milestone has its own face — matches Python exactly.
 const MILESTONES: &[(u32, &str, &str)] = &[
-    (1, "excited", "First capture! The bull charges!"),
+    (1, "cool", "First capture! The bull charges!"),
     (10, "cool", "10 captures! Stampede!"),
     (25, "intense", "25 captures! Herd leader!"),
     (50, "smart", "50 captures! Legendary bull!"),
@@ -25,10 +25,11 @@ const MILESTONES: &[(u32, &str, &str)] = &[
 ];
 
 /// Capture face variety pool — random choice on capture.
-const CAPTURE_FACES: &[&str] = &["happy", "cool", "grateful", "excited"];
+/// Weighted toward cool (2 slots) for more variety; no excited (user finds it too frequent).
+const CAPTURE_FACES: &[&str] = &["happy", "cool", "grateful", "cool"];
 
-/// Rare face pool — 5% chance per epoch.
-const RARE_FACES: &[&str] = &["cool", "intense", "smart", "grateful", "motivated"];
+/// Rare face pool — 12% chance per epoch. Cool has 2 slots for higher weight.
+const RARE_FACES: &[&str] = &["cool", "intense", "smart", "grateful", "motivated", "cool"];
 
 /// Face variety state machine.
 #[derive(Debug)]
@@ -142,19 +143,20 @@ impl FaceVariety {
     }
 
     /// Get the idle face based on epochs since last capture.
-    /// Uses modulo 25 cycle: 1-5=bored, 6-10=lonely,
-    /// 11-15=demotivated, 16-20=angry, 21-25=sad.
-    /// Faster cycling keeps the face feeling alive.
+    /// Uses modulo 30 cycle: 1-5=bored, 6-10=cool, 11-15=lonely,
+    /// 16-20=demotivated, 21-25=angry, 26-30=sad.
+    /// Cool slot breaks up the all-negative idle loop.
     pub fn idle_face(&self) -> Option<&'static str> {
         if self.idle_epochs == 0 {
             return None;
         }
-        let cycle = self.idle_epochs % 25;
+        let cycle = self.idle_epochs % 30;
         match cycle {
             0..=5 => Some("bored"),
-            6..=10 => Some("lonely"),
-            11..=15 => Some("demotivated"),
-            16..=20 => Some("angry"),
+            6..=10 => Some("cool"),
+            11..=15 => Some("lonely"),
+            16..=20 => Some("demotivated"),
+            21..=25 => Some("angry"),
             _ => Some("sad"),
         }
     }
@@ -296,7 +298,7 @@ mod tests {
         let result = fv.on_capture(1);
         assert!(result.is_some(), "1st capture should trigger milestone");
         let (face, _) = result.unwrap();
-        assert_eq!(face, "excited", "1st capture = excited face");
+        assert_eq!(face, "cool", "1st capture = cool face");
     }
 
     #[test]
@@ -367,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_idle_rotation_modulo_25() {
+    fn test_idle_rotation_modulo_30() {
         let mut fv = FaceVariety::new();
 
         // No idle face at 0
@@ -377,29 +379,33 @@ mod tests {
         fv.idle_epochs = 3;
         assert_eq!(fv.idle_face(), Some("bored"));
 
-        // 6-10 = lonely
+        // 6-10 = cool (breaks up negative loop)
         fv.idle_epochs = 8;
+        assert_eq!(fv.idle_face(), Some("cool"));
+
+        // 11-15 = lonely
+        fv.idle_epochs = 13;
         assert_eq!(fv.idle_face(), Some("lonely"));
 
-        // 11-15 = demotivated
-        fv.idle_epochs = 13;
+        // 16-20 = demotivated
+        fv.idle_epochs = 18;
         assert_eq!(fv.idle_face(), Some("demotivated"));
 
-        // 16-20 = angry
-        fv.idle_epochs = 18;
+        // 21-25 = angry
+        fv.idle_epochs = 23;
         assert_eq!(fv.idle_face(), Some("angry"));
 
-        // 21-24 = sad
-        fv.idle_epochs = 23;
+        // 26-29 = sad
+        fv.idle_epochs = 28;
         assert_eq!(fv.idle_face(), Some("sad"));
 
-        // 25 = wraps to 0 = bored (modulo cycle)
-        fv.idle_epochs = 25;
+        // 30 = wraps to 0 = bored (modulo cycle)
+        fv.idle_epochs = 30;
         assert_eq!(fv.idle_face(), Some("bored"));
 
-        // 33 = 33%25=8 = lonely
-        fv.idle_epochs = 33;
-        assert_eq!(fv.idle_face(), Some("lonely"));
+        // 38 = 38%30=8 = cool
+        fv.idle_epochs = 38;
+        assert_eq!(fv.idle_face(), Some("cool"));
     }
 
     #[test]

@@ -660,9 +660,8 @@ impl Daemon {
         }
 
         // ---- Sync state to web ----
-        // Tick transition override countdown before sync so decremented state
-        // is reflected in the broadcast.
-        self.epoch_loop.personality.tick_transition_override();
+        // tick_transition_override() already called in update_face_and_personality()
+        // before generate_status(), so face state is consistent across display + web.
         self.sync_to_web();
         web::broadcast_state(&self.shared_state, &self.ws_tx);
         // Clear manual attack result AFTER it has been broadcast to clients.
