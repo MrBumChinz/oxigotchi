@@ -579,10 +579,8 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             toggles: BtAttackToggles {
                 smp_downgrade: s.bt_attack_smp_downgrade,
                 knob: s.bt_attack_knob,
-                ble_adv_injection: s.bt_attack_ble_adv_injection,
                 l2cap_fuzz: s.bt_attack_l2cap_fuzz,
                 att_gatt_fuzz: s.bt_attack_att_gatt_fuzz,
-                vendor_cmd_unlock: s.bt_attack_vendor_cmd_unlock,
             },
             stats: BtAttackStats {
                 total_attacks: s.bt_total_attacks,

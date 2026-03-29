@@ -560,14 +560,14 @@ impl Personality {
         self.transition_epochs_left = epochs;
     }
 
-    /// Decrement the transition countdown.  When it reaches zero the transition
-    /// protection is lifted (but the override_face is NOT cleared here — callers
-    /// can let RF clearing or the next set_override supersede it).
+    /// Decrement the transition countdown. When it reaches zero, clear both the
+    /// transition face and the override face so the temporary face expires.
     pub fn tick_transition_override(&mut self) {
         if self.transition_epochs_left > 0 {
             self.transition_epochs_left -= 1;
             if self.transition_epochs_left == 0 {
                 self.transition_face = None;
+                self.override_face = None;
             }
         }
     }
@@ -709,15 +709,6 @@ impl Personality {
     /// Called once per epoch after QPU classification.
     pub fn apply_rf_environment(&mut self, rf: &crate::qpu::rf::RfEnvironment) {
         use crate::qpu::rf;
-
-        // Clear RF-based face override each epoch — only re-set if conditions still hold.
-        // Without this, a transient condition (e.g., 20+ BSSIDs once) sticks forever.
-        match self.override_face {
-            Some(Face::Raging | Face::Lonely) => {
-                self.override_face = None;
-            }
-            _ => {} // preserve non-RF overrides (battery, crash, etc.)
-        }
 
         if rf.total_frames > rf::BUSY_THRESHOLD {
             self.mood.adjust(mood_deltas::RF_BUSY);
