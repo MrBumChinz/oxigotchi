@@ -1382,14 +1382,14 @@ impl Daemon {
             }
         }
 
-        // Process pending BT target (no-op for now, placeholder for future targeting)
-        let bt_target = {
+        // Process pending BT manual attack (no-op for now, placeholder for Task 5)
+        let bt_manual = {
             let mut s = self.shared_state.lock().unwrap();
-            s.pending_bt_target.take()
+            s.pending_bt_manual_attack.take()
         };
-        if let Some(addr) = bt_target {
+        if let Some(req) = bt_manual {
             any_command = true;
-            info!("web: BT target set to {} (queued)", addr);
+            info!("web: BT manual attack queued: {} on {:?}", req.attack, req.address);
         }
 
         // Process BT scan request — spawn in background thread to avoid blocking
@@ -2224,11 +2224,9 @@ impl Daemon {
         s.bt_attack_smp_downgrade = self.config.bt_attacks.smp_downgrade;
         s.bt_attack_smp_mitm = self.config.bt_attacks.smp_mitm;
         s.bt_attack_knob = self.config.bt_attacks.knob;
-        s.bt_attack_ble_adv_injection = false; // manual-only: no config toggle (Task 4 cleanup)
         s.bt_attack_ble_conn_hijack = self.config.bt_attacks.ble_conn_hijack;
         s.bt_attack_l2cap_fuzz = self.config.bt_attacks.l2cap_fuzz;
         s.bt_attack_att_gatt_fuzz = self.config.bt_attacks.att_gatt_fuzz;
-        s.bt_attack_vendor_cmd_unlock = false; // manual-only: no config toggle (Task 4 cleanup)
         s.bt_total_attacks = self.bt_attack_scheduler.total_attacks;
         s.bt_total_captures = self.bt_attack_scheduler.total_captures;
         s.bt_active_attacks = self.bt_attack_scheduler.active_count();

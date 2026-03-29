@@ -113,11 +113,9 @@ pub struct DaemonState {
     pub bt_attack_smp_downgrade: bool,
     pub bt_attack_smp_mitm: bool,
     pub bt_attack_knob: bool,
-    pub bt_attack_ble_adv_injection: bool,
     pub bt_attack_ble_conn_hijack: bool,
     pub bt_attack_l2cap_fuzz: bool,
     pub bt_attack_att_gatt_fuzz: bool,
-    pub bt_attack_vendor_cmd_unlock: bool,
     pub bt_total_attacks: u64,
     pub bt_total_captures: u64,
     pub bt_active_attacks: u32,
@@ -131,7 +129,8 @@ pub struct DaemonState {
     // -- bt attack action requests --
     pub pending_bt_attack_toggle: Option<BtAttackToggle>,
     pub pending_bt_rage_level: Option<String>,
-    pub pending_bt_target: Option<String>,
+    pub pending_bt_manual_attack: Option<BtManualAttackRequest>,
+    pub bt_manual_result: Option<BtManualResult>,
 
     // -- gpu --
     pub gpu_mode: String,
@@ -320,11 +319,9 @@ impl DaemonState {
             bt_attack_smp_downgrade: true,
             bt_attack_smp_mitm: false,
             bt_attack_knob: true,
-            bt_attack_ble_adv_injection: false,
             bt_attack_ble_conn_hijack: false,
             bt_attack_l2cap_fuzz: false,
             bt_attack_att_gatt_fuzz: false,
-            bt_attack_vendor_cmd_unlock: true,
             bt_total_attacks: 0,
             bt_total_captures: 0,
             bt_active_attacks: 0,
@@ -336,7 +333,8 @@ impl DaemonState {
             bt_device_list: Vec::new(),
             pending_bt_attack_toggle: None,
             pending_bt_rage_level: None,
-            pending_bt_target: None,
+            pending_bt_manual_attack: None,
+            bt_manual_result: None,
             gpu_mode: "Off".into(),
             gpu_signal: "None".into(),
             gpu_submit_seen: false,
@@ -493,6 +491,8 @@ struct WsSnapshot {
     display_rotation: u16,
     min_rssi: i8,
     ap_ttl_secs: u64,
+    // -- bt manual attack result --
+    bt_manual_result: Option<BtManualResult>,
 }
 
 /// System info snapshot for WS (uses cached values, not live reads).
@@ -657,6 +657,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
         display_rotation: s.display_rotation,
         min_rssi: s.min_rssi,
         ap_ttl_secs: s.ap_ttl_secs,
+        bt_manual_result: s.bt_manual_result.clone(),
     }
 }
 
@@ -825,6 +826,20 @@ pub struct BtTargetRequest {
     pub address: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtManualAttackRequest {
+    pub address: Option<String>,
+    pub attack: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BtManualResult {
+    pub address: Option<String>,
+    pub attack: String,
+    pub success: bool,
+    pub message: String,
+}
+
 /// BT attack state response for GET /api/bt/attacks.
 #[derive(Debug, Clone, Serialize)]
 pub struct BtAttackResponse {
@@ -838,13 +853,9 @@ pub struct BtAttackResponse {
 #[derive(Debug, Clone, Serialize)]
 pub struct BtAttackToggles {
     pub smp_downgrade: bool,
-    pub smp_mitm: bool,
     pub knob: bool,
-    pub ble_adv_injection: bool,
-    pub ble_conn_hijack: bool,
     pub l2cap_fuzz: bool,
     pub att_gatt_fuzz: bool,
-    pub vendor_cmd_unlock: bool,
 }
 
 /// BT attack statistics.
@@ -2263,13 +2274,9 @@ async fn bt_attacks_get_handler(State(state): State<SharedState>) -> Json<BtAtta
         rage_level: s.bt_rage_level.clone(),
         toggles: BtAttackToggles {
             smp_downgrade: s.bt_attack_smp_downgrade,
-            smp_mitm: s.bt_attack_smp_mitm,
             knob: s.bt_attack_knob,
-            ble_adv_injection: s.bt_attack_ble_adv_injection,
-            ble_conn_hijack: s.bt_attack_ble_conn_hijack,
             l2cap_fuzz: s.bt_attack_l2cap_fuzz,
             att_gatt_fuzz: s.bt_attack_att_gatt_fuzz,
-            vendor_cmd_unlock: s.bt_attack_vendor_cmd_unlock,
         },
         stats: BtAttackStats {
             total_attacks: s.bt_total_attacks,
@@ -2291,11 +2298,9 @@ async fn bt_attacks_toggle_handler(
         "smp_downgrade" => s.bt_attack_smp_downgrade = body.enabled,
         "smp_mitm" => s.bt_attack_smp_mitm = body.enabled,
         "knob" => s.bt_attack_knob = body.enabled,
-        "ble_adv_injection" => s.bt_attack_ble_adv_injection = body.enabled,
         "ble_conn_hijack" => s.bt_attack_ble_conn_hijack = body.enabled,
         "l2cap_fuzz" => s.bt_attack_l2cap_fuzz = body.enabled,
         "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz = body.enabled,
-        "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock = body.enabled,
         _ => {}
     }
     s.pending_bt_attack_toggle = Some(body);
@@ -2319,13 +2324,16 @@ async fn bt_attacks_rage_handler(
     })
 }
 
-/// POST /api/bt/attacks/target -> set BT attack target
+/// POST /api/bt/attacks/target -> set BT attack target (legacy stub, replaced by manual attack in Task 5)
 async fn bt_attacks_target_handler(
     State(state): State<SharedState>,
     Json(body): Json<BtTargetRequest>,
 ) -> Json<ActionResponse> {
     let mut s = state.lock().unwrap();
-    s.pending_bt_target = Some(body.address.clone());
+    s.pending_bt_manual_attack = Some(BtManualAttackRequest {
+        address: Some(body.address.clone()),
+        attack: "auto".to_string(),
+    });
     Json(ActionResponse {
         ok: true,
         message: format!("BT target set to {}", body.address),
