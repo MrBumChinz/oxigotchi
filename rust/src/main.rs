@@ -1434,6 +1434,19 @@ impl Daemon {
             }
         }
 
+        // Process pending BT scan mode change
+        let bt_scan_mode = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_bt_scan_mode.take()
+        };
+        if let Some(mode_str) = bt_scan_mode {
+            any_command = true;
+            if let Some(mode) = crate::bluetooth::attacks::BtScanMode::from_str(&mode_str) {
+                self.config.bt_attacks.scan_mode = mode;
+                info!("web: BT scan mode set to {}", mode_str);
+            }
+        }
+
         // Check if a manual attack completed — clean up scheduler and prepare for result clearing
         {
             let s = self.shared_state.lock().unwrap();
@@ -2003,6 +2016,7 @@ impl Daemon {
             "min_rssi": s.min_rssi,
             "ap_ttl_secs": s.ap_ttl_secs,
             "operating_mode": self.mode.as_str(),
+            "bt_scan_mode": self.config.bt_attacks.scan_mode.as_str(),
         });
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
@@ -2202,6 +2216,14 @@ impl Daemon {
             if mode_str != "RAGE" {
                 self.boot_target_mode = Some(mode_str.to_string());
                 info!("state: will restore operating mode {mode_str} after boot");
+            }
+        }
+
+        if let Some(mode_str) = state.get("bt_scan_mode").and_then(|v| v.as_str()) {
+            if let Some(mode) = crate::bluetooth::attacks::BtScanMode::from_str(mode_str) {
+                self.config.bt_attacks.scan_mode = mode;
+                let mut s = self.shared_state.lock().unwrap();
+                s.bt_scan_mode = mode_str.to_string();
             }
         }
 

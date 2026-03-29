@@ -110,6 +110,7 @@ pub struct DaemonState {
     // -- bt attacks --
     pub bt_attack_enabled: bool,
     pub bt_rage_level: String,
+    pub bt_scan_mode: String,
     pub bt_attack_smp_downgrade: bool,
     pub bt_attack_knob: bool,
     pub bt_attack_ble_conn_hijack: bool,
@@ -129,6 +130,7 @@ pub struct DaemonState {
     // -- bt attack action requests --
     pub pending_bt_attack_toggle: Option<BtAttackToggle>,
     pub pending_bt_rage_level: Option<String>,
+    pub pending_bt_scan_mode: Option<String>,
     pub pending_bt_manual_attack: Option<BtManualAttackRequest>,
     pub bt_manual_result: Option<BtManualResult>,
 
@@ -316,6 +318,7 @@ impl DaemonState {
             bt_feature_contention_score: 0,
             bt_attack_enabled: true,
             bt_rage_level: "Medium".into(),
+            bt_scan_mode: "both".into(),
             bt_attack_smp_downgrade: true,
             bt_attack_knob: true,
             bt_attack_ble_conn_hijack: false,
@@ -333,6 +336,7 @@ impl DaemonState {
             bt_device_list: Vec::new(),
             pending_bt_attack_toggle: None,
             pending_bt_rage_level: None,
+            pending_bt_scan_mode: None,
             pending_bt_manual_attack: None,
             bt_manual_result: None,
             gpu_mode: "Off".into(),
@@ -576,6 +580,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
         bt_attacks: BtAttackResponse {
             enabled: s.bt_attack_enabled,
             rage_level: s.bt_rage_level.clone(),
+            scan_mode: s.bt_scan_mode.clone(),
             toggles: BtAttackToggles {
                 smp_downgrade: s.bt_attack_smp_downgrade,
                 knob: s.bt_attack_knob,
@@ -858,6 +863,12 @@ pub struct BtRageLevelRequest {
     pub level: String,
 }
 
+/// BT scan mode change request for POST /api/bt/scan-mode.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BtScanModeRequest {
+    pub mode: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtManualAttackRequest {
     pub address: Option<String>,
@@ -877,6 +888,7 @@ pub struct BtManualResult {
 pub struct BtAttackResponse {
     pub enabled: bool,
     pub rage_level: String,
+    pub scan_mode: String,
     pub toggles: BtAttackToggles,
     pub stats: BtAttackStats,
 }
@@ -1252,6 +1264,7 @@ pub const API_BT_ATTACKS_MANUAL: &str = "/api/bt/attacks/manual";
 pub const API_BT_DEVICES: &str = "/api/bt/devices";
 pub const API_BT_CAPTURES: &str = "/api/bt/captures";
 pub const API_BT_PATCHRAM: &str = "/api/bt/patchram";
+pub const API_BT_SCAN_MODE: &str = "/api/bt/scan-mode";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -2305,6 +2318,7 @@ async fn bt_attacks_get_handler(State(state): State<SharedState>) -> Json<BtAtta
     Json(BtAttackResponse {
         enabled: s.bt_attack_enabled,
         rage_level: s.bt_rage_level.clone(),
+        scan_mode: s.bt_scan_mode.clone(),
         toggles: BtAttackToggles {
             smp_downgrade: s.bt_attack_smp_downgrade,
             knob: s.bt_attack_knob,
@@ -2359,6 +2373,26 @@ async fn bt_attacks_rage_handler(
     Json(ActionResponse {
         ok: true,
         message: format!("BT rage level set to {}", body.level),
+    })
+}
+
+/// POST /api/bt/scan-mode -> set BT scan mode
+async fn bt_scan_mode_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<BtScanModeRequest>,
+) -> Json<ActionResponse> {
+    if crate::bluetooth::attacks::BtScanMode::from_str(&body.mode).is_none() {
+        return Json(ActionResponse {
+            ok: false,
+            message: "Invalid scan mode (ble, classic, both)".into(),
+        });
+    }
+    let mut s = state.lock().unwrap();
+    s.bt_scan_mode = body.mode.clone(); // optimistic
+    s.pending_bt_scan_mode = Some(body.mode.clone());
+    Json(ActionResponse {
+        ok: true,
+        message: format!("BT scan mode set to {}", body.mode),
     })
 }
 
@@ -2600,6 +2634,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_ATTACKS, get(bt_attacks_get_handler))
         .route(API_BT_ATTACKS_TOGGLE, post(bt_attacks_toggle_handler))
         .route(API_BT_ATTACKS_RAGE, post(bt_attacks_rage_handler))
+        .route(API_BT_SCAN_MODE, post(bt_scan_mode_handler))
         .route(API_BT_ATTACKS_MANUAL, post(bt_manual_attack_handler))
         .route(API_BT_DEVICES, get(bt_devices_handler))
         .route(API_BT_CAPTURES, get(bt_captures_handler))
