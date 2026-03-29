@@ -366,31 +366,31 @@ input:checked+.slider:before{transform:translateX(22px)}
 <!-- BT Attack Types -->
 <div class="card" id="card-bt-attacks" data-modes="bt">
 <div class="card-title">BT Attack Types</div>
-<div class="bt-group-header">BLE</div>
-<div class="toggle-row">
-<div class="toggle-info"><div class="toggle-label">SMP Downgrade</div><div class="toggle-desc">Downgrade pairing security to capture keys</div></div>
+<div class="bt-group-header bt-scan-ble">BLE</div>
+<div class="toggle-row bt-scan-ble">
+<div class="toggle-info"><div class="toggle-label">SMP Downgrade</div><div class="toggle-desc">Trick devices into weak pairing to steal encryption keys</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-smp_downgrade" checked onchange="toggleBtAttack('smp_downgrade',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row">
-<div class="toggle-info"><div class="toggle-label">BLE Adv Injection</div><div class="toggle-desc">Inject malicious BLE advertisements</div></div>
+<div class="toggle-row bt-scan-ble">
+<div class="toggle-info"><div class="toggle-label">BLE Adv Injection</div><div class="toggle-desc">Broadcast fake BLE signals to lure nearby devices</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-ble_adv_injection" onchange="toggleBtAttack('ble_adv_injection',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row">
-<div class="toggle-info"><div class="toggle-label">ATT/GATT Fuzz</div><div class="toggle-desc">Fuzz BLE attribute protocol</div></div>
+<div class="toggle-row bt-scan-ble">
+<div class="toggle-info"><div class="toggle-label">ATT/GATT Fuzz</div><div class="toggle-desc">Send garbage BLE commands to crash devices</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-att_gatt_fuzz" onchange="toggleBtAttack('att_gatt_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="bt-group-header">Classic</div>
-<div class="toggle-row" id="bt-row-knob">
-<div class="toggle-info"><div class="toggle-label">KNOB<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Key negotiation downgrade (requires patchram)</div></div>
+<div class="bt-group-header bt-scan-classic">Classic</div>
+<div class="toggle-row bt-scan-classic" id="bt-row-knob">
+<div class="toggle-info"><div class="toggle-label">KNOB<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Shrink the encryption key so it's easy to crack</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-knob" checked onchange="toggleBtAttack('knob',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row">
-<div class="toggle-info"><div class="toggle-label">L2CAP Fuzz</div><div class="toggle-desc">Fuzz classic BT L2CAP layer</div></div>
+<div class="toggle-row bt-scan-classic">
+<div class="toggle-info"><div class="toggle-label">L2CAP Fuzz</div><div class="toggle-desc">Send garbage data to crash Bluetooth connections</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-l2cap_fuzz" onchange="toggleBtAttack('l2cap_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
 <div class="bt-group-header">Vendor</div>
 <div class="toggle-row" id="bt-row-vendor_cmd_unlock">
-<div class="toggle-info"><div class="toggle-label">Vendor Cmd Unlock<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Unlock vendor HCI commands (requires patchram)</div></div>
+<div class="toggle-info"><div class="toggle-label">Vendor Cmd Unlock<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Unlock hidden firmware commands on our chip</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-vendor_cmd_unlock" checked onchange="toggleBtAttack('vendor_cmd_unlock',this.checked)"><span class="slider"></span></label>
 </div>
 </div>
@@ -508,25 +508,32 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <!-- 14b. BT Attacks -->
 <div class="card" id="card-bt-attacks">
 <div class="card-title">BT Attacks</div>
-<div style="color:#00d4aa;font-size:11px;margin-bottom:10px;padding:8px;background:#0f346033;border-radius:6px">Auto-attack toggles. KNOB and Clone can also be launched per-device above.</div>
-<div class="toggle-row" id="bt-row-smp_downgrade">
-<div class="toggle-info"><div class="toggle-label">SMP Downgrade<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Downgrade pairing to legacy mode for key extraction</div></div>
+<div style="margin-bottom:12px">
+<div style="font-size:12px;color:#888;margin-bottom:6px">Scan Mode</div>
+<div style="display:flex;gap:8px">
+<button class="bt-rage-btn" id="scan-mode-ble" onclick="setBtScanMode('ble')">BLE</button>
+<button class="bt-rage-btn" id="scan-mode-classic" onclick="setBtScanMode('classic')">Classic</button>
+<button class="bt-rage-btn active" id="scan-mode-both" onclick="setBtScanMode('both')">Both</button>
+</div>
+</div>
+<div class="toggle-row bt-scan-ble" id="bt-row-smp_downgrade">
+<div class="toggle-info"><div class="toggle-label">SMP Downgrade<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Trick devices into weak pairing to steal encryption keys</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-smp_downgrade" onchange="toggleBtAttack('smp_downgrade',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row" id="bt-row-knob">
-<div class="toggle-info"><div class="toggle-label">KNOB<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Force minimum encryption key length (requires patchram)</div></div>
+<div class="toggle-row bt-scan-classic" id="bt-row-knob">
+<div class="toggle-info"><div class="toggle-label">KNOB<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Shrink the encryption key so it's easy to crack</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-knob" onchange="toggleBtAttack('knob',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row" id="bt-row-l2cap_fuzz">
-<div class="toggle-info"><div class="toggle-label">L2CAP Fuzz<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Fuzz L2CAP signaling for crash discovery</div></div>
+<div class="toggle-row bt-scan-classic" id="bt-row-l2cap_fuzz">
+<div class="toggle-info"><div class="toggle-label">L2CAP Fuzz<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Send garbage data to crash Bluetooth connections</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-l2cap_fuzz" onchange="toggleBtAttack('l2cap_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
-<div class="toggle-row" id="bt-row-att_gatt_fuzz">
-<div class="toggle-info"><div class="toggle-label">ATT/GATT Fuzz<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Fuzz BLE attribute protocol for crash discovery</div></div>
+<div class="toggle-row bt-scan-ble" id="bt-row-att_gatt_fuzz">
+<div class="toggle-info"><div class="toggle-label">ATT/GATT Fuzz<span class="bt-badge bt-badge-auto">auto</span></div><div class="toggle-desc">Send garbage BLE commands to crash devices</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-att_gatt_fuzz" onchange="toggleBtAttack('att_gatt_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
 <div class="toggle-row" id="bt-row-vendor_diag">
-<div class="toggle-info"><div class="toggle-label">Controller Diagnostics<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Read local firmware state (requires patchram)</div></div>
+<div class="toggle-info"><div class="toggle-label">Controller Diagnostics<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Read what's happening inside our Bluetooth chip</div></div>
 <button class="bt-action-btn" onclick="launchVendorDiagnostics()" id="btn-vendor-diag">Run</button>
 </div>
 <div style="margin-top:10px;padding-top:10px;border-top:1px solid #0f3460">
@@ -2028,6 +2035,39 @@ function toggleBtAttack(name, enabled) {
     api('POST', '/api/bt/attacks/toggle', {attack: name, enabled: enabled});
 }
 
+var _btScanMode = 'both';
+
+function setBtScanMode(mode) {
+    _btScanMode = mode;
+    document.getElementById('scan-mode-ble').classList.toggle('active', mode === 'ble' || mode === 'both');
+    document.getElementById('scan-mode-classic').classList.toggle('active', mode === 'classic' || mode === 'both');
+    document.getElementById('scan-mode-both').classList.toggle('active', mode === 'both');
+
+    // Show/hide attack groups based on scan mode
+    document.querySelectorAll('.bt-scan-ble').forEach(function(el) {
+        el.style.display = (mode === 'ble' || mode === 'both') ? '' : 'none';
+    });
+    document.querySelectorAll('.bt-scan-classic').forEach(function(el) {
+        el.style.display = (mode === 'classic' || mode === 'both') ? '' : 'none';
+    });
+
+    api('POST', '/api/bt/scan-mode', {mode: mode});
+}
+
+function updateBtScanModeFromWs(scanMode) {
+    if (!scanMode) return;
+    _btScanMode = scanMode;
+    document.getElementById('scan-mode-ble').classList.toggle('active', scanMode === 'ble' || scanMode === 'both');
+    document.getElementById('scan-mode-classic').classList.toggle('active', scanMode === 'classic' || scanMode === 'both');
+    document.getElementById('scan-mode-both').classList.toggle('active', scanMode === 'both');
+    document.querySelectorAll('.bt-scan-ble').forEach(function(el) {
+        el.style.display = (scanMode === 'ble' || scanMode === 'both') ? '' : 'none';
+    });
+    document.querySelectorAll('.bt-scan-classic').forEach(function(el) {
+        el.style.display = (scanMode === 'classic' || scanMode === 'both') ? '' : 'none';
+    });
+}
+
 function updateBtAttacksFromWs(btAttacks) {
     if (!btAttacks || !btAttacks.toggles) return;
     var t = btAttacks.toggles;
@@ -2045,6 +2085,7 @@ function updateBtAttacksFromWs(btAttacks) {
     });
     updateBtAttackConstraintState(btAttacks.rage_level || 'Medium');
     updateBtPatchramConstraintState();
+    if (btAttacks.scan_mode) updateBtScanModeFromWs(btAttacks.scan_mode);
 }
 
 function updateBtCapturesFromWs(btCaptures) {
