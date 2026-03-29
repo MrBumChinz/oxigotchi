@@ -725,7 +725,6 @@ impl Personality {
             self.mood.adjust(mood_deltas::RF_PROBE_FLOOD);
         }
 
-
         // Lonely: APs exist but nobody's talking
         let lonely_condition =
             rf.beacon_rate > 0.0 && rf.data_rate == 0.0 && rf.probe_rate == 0.0 && rf.total_frames > 0;
@@ -733,7 +732,7 @@ impl Personality {
             self.override_face = Some(Face::Lonely);
         }
 
-        // Clear a stale Raging/Lonely override from a previous epoch when:
+        // Clear a stale RF override from a previous epoch when:
         //   (a) the RF condition that caused it no longer holds, AND
         //   (b) it is not a protected transition override (transition_epochs_left > 0).
         let deauth_storm = rf.deauth_rate > rf::DEAUTH_STORM_RATE;

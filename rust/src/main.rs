@@ -1870,7 +1870,7 @@ impl Daemon {
                 let ch = self.ao.channel();
                 if ch > 0 { ch as u8 } else { m.channel }
             },
-            aps_seen: (self.lifetime_aps_base + self.ao.ap_count() as u64) as u32,
+            aps_seen: self.ao.ap_count(),
             handshakes: m.handshakes,
             captures_total: self.captures.count(),
             blind_epochs: m.blind_epochs,
