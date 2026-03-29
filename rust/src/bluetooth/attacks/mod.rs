@@ -16,6 +16,7 @@ pub mod smp;
 pub mod target;
 pub mod l2cap_socket;
 pub mod vendor;
+pub mod scan;
 
 // ---------------------------------------------------------------------------
 // BtAttackType — the 8 enum variants (6 active in ALL, 2 retired)
