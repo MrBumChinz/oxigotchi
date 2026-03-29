@@ -258,10 +258,13 @@ pub fn hci_le_scan(hci: &HciSocket, duration_ms: u32) -> Vec<BtDeviceObservation
         log::warn!("bt_scan: set_event_filter failed: {e}");
     }
 
-    // Defensive: disable any stale scan (ignore errors)
+    // Drain any stale events from the socket before sending commands.
+    // Without this, send_command() may read a queued event and misparse it.
+    hci.drain_events();
+
+    // Defensive: disable any stale scan (ignore errors).
     let disable_cmd = HciCommand::new(OGF_LE, LE_SET_SCAN_ENABLE, vec![0x00, 0x00]);
-    let _ = hci.write_command_raw(&disable_cmd);
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    let _ = hci.send_command(&disable_cmd);
 
     // Set scan parameters: passive(0), interval=100ms(0x00A0), window=100ms(0x00A0),
     // own_addr=public(0), filter=accept_all(0)
@@ -337,6 +340,7 @@ pub fn hci_inquiry(hci: &HciSocket, inquiry_length: u8) -> Vec<BtDeviceObservati
     if let Err(e) = hci.set_event_filter() {
         log::warn!("bt_scan: set_event_filter failed: {e}");
     }
+    hci.drain_events();
 
     // HCI_Inquiry: LAP(3) + inquiry_length(1) + num_responses(1)
     let mut params = Vec::with_capacity(5);

@@ -235,6 +235,30 @@ mod platform {
             Ok(Self { fd: new_fd })
         }
 
+        /// Drain any queued events from the socket (non-blocking).
+        /// Call before a scan sequence to clear stale events that would
+        /// confuse send_command().
+        pub fn drain_events(&self) {
+            let mut buf = [0u8; 260];
+            loop {
+                let mut pfd = libc::pollfd {
+                    fd: self.fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pfd, 1, 0) }; // non-blocking
+                if ret <= 0 {
+                    break;
+                }
+                let n = unsafe {
+                    libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+                };
+                if n <= 0 {
+                    break;
+                }
+            }
+        }
+
         /// Write an HCI command without reading the response.
         /// Use for commands that return Command Status (0x0F) instead of
         /// Command Complete, or when the response read would swallow
@@ -256,25 +280,21 @@ mod platform {
         /// Set socket filter to accept only HCI Event packets (0x04),
         /// rejecting ACL/SCO data that would pollute scan collection.
         pub fn set_event_filter(&self) -> Result<(), String> {
-            // struct hci_filter { u32 type_mask; u32 event_mask[2]; u16 opcode; }
-            // We want: type_mask bit 4 (HCI event pkt type 0x04),
-            // event_mask all bits set (accept all HCI events).
-            let mut filter = [0u8; 14];
-            // type_mask: set bit for HCI Event (packet indicator 0x04 → bit 4)
-            filter[0] = 0x10; // 1 << 4
-            // event_mask[0]: all events
-            filter[4] = 0xFF;
-            filter[5] = 0xFF;
-            filter[6] = 0xFF;
-            filter[7] = 0xFF;
-            // event_mask[1]: all events
-            filter[8] = 0xFF;
-            filter[9] = 0xFF;
-            filter[10] = 0xFF;
-            filter[11] = 0xFF;
-            // opcode: 0 = don't filter by opcode
-            filter[12] = 0;
-            filter[13] = 0;
+            // BlueZ userspace struct hci_filter uses uint32_t regardless of arch:
+            //   uint32_t type_mask; uint32_t event_mask[2]; uint16_t opcode;
+            // Total: 14 bytes (padded to 16 by the kernel).
+            #[repr(C)]
+            struct HciFilter {
+                type_mask:  u32,
+                event_mask: [u32; 2],
+                opcode:     u16,
+            }
+
+            let filter = HciFilter {
+                type_mask:  1 << 4,          // HCI Event packet type (0x04)
+                event_mask: [0xFFFFFFFF; 2], // accept all HCI events
+                opcode:     0,               // don't filter by opcode
+            };
 
             const SOL_HCI: libc::c_int = 0;
             const HCI_FILTER: libc::c_int = 2;
@@ -284,8 +304,8 @@ mod platform {
                     self.fd,
                     SOL_HCI,
                     HCI_FILTER,
-                    filter.as_ptr() as *const libc::c_void,
-                    filter.len() as libc::socklen_t,
+                    &filter as *const HciFilter as *const libc::c_void,
+                    std::mem::size_of::<HciFilter>() as libc::socklen_t,
                 )
             };
             if ret < 0 {
@@ -380,6 +400,8 @@ mod platform {
         pub fn try_clone(&self) -> Result<Self, String> {
             Self::open(self._dev_id)
         }
+
+        pub fn drain_events(&self) {}
 
         pub fn write_command_raw(&self, cmd: &HciCommand) -> Result<(), String> {
             log::info!(

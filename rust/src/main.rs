@@ -2247,47 +2247,51 @@ impl Daemon {
             }
         }
 
-        let scan_snapshot = {
-            let s = self.shared_state.lock().unwrap();
-            (s.bt_scan_results.clone(), s.bt_scan_in_progress)
-        };
+        // In BT mode, HCI scanning feeds bt_discovery directly in run_bt_epoch().
+        // Only reset+repopulate from BlueZ scan results in RAGE/SAFE modes.
+        if self.mode != OperatingMode::Bt {
+            let scan_snapshot = {
+                let s = self.shared_state.lock().unwrap();
+                (s.bt_scan_results.clone(), s.bt_scan_in_progress)
+            };
 
-        self.bt_discovery.reset();
-        if scan_snapshot.1 {
-            let _ = self
-                .bt_discovery
-                .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStarted);
-        }
-        for device in &scan_snapshot.0 {
-            let _ = self.bt_discovery.apply(
-                bluetooth::model::observation::BtDiscoveryObservation::DeviceSeen(
-                    bluetooth::model::observation::BtDeviceObservation {
-                        id: device.mac.clone(),
-                        address: device.mac.clone(),
-                        address_type: None,
-                        transport: bluetooth::model::observation::BtTransport::Unknown,
-                        name: if device.name.is_empty() {
-                            None
-                        } else {
-                            Some(device.name.clone())
+            self.bt_discovery.reset();
+            if scan_snapshot.1 {
+                let _ = self
+                    .bt_discovery
+                    .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStarted);
+            }
+            for device in &scan_snapshot.0 {
+                let _ = self.bt_discovery.apply(
+                    bluetooth::model::observation::BtDiscoveryObservation::DeviceSeen(
+                        bluetooth::model::observation::BtDeviceObservation {
+                            id: device.mac.clone(),
+                            address: device.mac.clone(),
+                            address_type: None,
+                            transport: bluetooth::model::observation::BtTransport::Unknown,
+                            name: if device.name.is_empty() {
+                                None
+                            } else {
+                                Some(device.name.clone())
+                            },
+                            rssi: None,
+                            rssi_best: None,
+                            category: bluetooth::model::observation::BtCategory::Unknown,
+                            services: Vec::new(),
+                            manufacturer: None,
+                            first_seen: chrono::Utc::now(),
+                            ts: chrono::Utc::now(),
+                            seen_count: 1,
+                            attack_state: bluetooth::model::observation::BtDeviceAttackState::Untouched,
                         },
-                        rssi: None,
-                        rssi_best: None,
-                        category: bluetooth::model::observation::BtCategory::Unknown,
-                        services: Vec::new(),
-                        manufacturer: None,
-                        first_seen: chrono::Utc::now(),
-                        ts: chrono::Utc::now(),
-                        seen_count: 1,
-                        attack_state: bluetooth::model::observation::BtDeviceAttackState::Untouched,
-                    },
-                ),
-            );
-        }
-        if !scan_snapshot.1 {
-            let _ = self
-                .bt_discovery
-                .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStopped);
+                    ),
+                );
+            }
+            if !scan_snapshot.1 {
+                let _ = self
+                    .bt_discovery
+                    .apply(bluetooth::model::observation::BtDiscoveryObservation::ScanStopped);
+            }
         }
 
         let bt_mode = self.bt_feature.state.mode.clone();
