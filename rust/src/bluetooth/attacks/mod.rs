@@ -84,8 +84,18 @@ impl BtAttackType {
         matches!(self, Self::Knob | Self::L2capFuzz)
     }
 
+    /// Whether this attack runs automatically via TargetSelector each epoch.
+    pub fn is_auto(self) -> bool {
+        matches!(self, Self::SmpDowngrade | Self::Knob | Self::L2capFuzz | Self::AttGattFuzz)
+    }
+
+    /// Whether this attack can be launched manually against a specific device.
+    pub fn is_manual(self) -> bool {
+        matches!(self, Self::Knob | Self::BleAdvInjection | Self::VendorCmdUnlock)
+    }
+
     /// Minimum rage level required to activate this attack.
-    fn min_rage_level(self) -> BtRageLevel {
+    pub fn min_rage_level(self) -> BtRageLevel {
         match self {
             // Low: passive diagnostics only (targets own controller, not external devices)
             Self::VendorCmdUnlock => BtRageLevel::Low,
@@ -700,5 +710,31 @@ stock_hcd = "/tmp/stock.hcd"
             sched.active_attacks.get("d1"),
             Some(&BtAttackType::SmpDowngrade)
         );
+    }
+
+    #[test]
+    fn test_is_auto() {
+        assert!(BtAttackType::SmpDowngrade.is_auto());
+        assert!(BtAttackType::Knob.is_auto());
+        assert!(BtAttackType::L2capFuzz.is_auto());
+        assert!(BtAttackType::AttGattFuzz.is_auto());
+        assert!(!BtAttackType::BleAdvInjection.is_auto());
+        assert!(!BtAttackType::VendorCmdUnlock.is_auto());
+    }
+
+    #[test]
+    fn test_is_manual() {
+        assert!(BtAttackType::Knob.is_manual());
+        assert!(BtAttackType::BleAdvInjection.is_manual());
+        assert!(BtAttackType::VendorCmdUnlock.is_manual());
+        assert!(!BtAttackType::SmpDowngrade.is_manual());
+        assert!(!BtAttackType::L2capFuzz.is_manual());
+        assert!(!BtAttackType::AttGattFuzz.is_manual());
+    }
+
+    #[test]
+    fn test_min_rage_level_is_pub() {
+        assert_eq!(BtAttackType::VendorCmdUnlock.min_rage_level(), BtRageLevel::Low);
+        assert_eq!(BtAttackType::Knob.min_rage_level(), BtRageLevel::Medium);
     }
 }
