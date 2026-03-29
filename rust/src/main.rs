@@ -2224,11 +2224,11 @@ impl Daemon {
         s.bt_attack_smp_downgrade = self.config.bt_attacks.smp_downgrade;
         s.bt_attack_smp_mitm = self.config.bt_attacks.smp_mitm;
         s.bt_attack_knob = self.config.bt_attacks.knob;
-        s.bt_attack_ble_adv_injection = self.config.bt_attacks.ble_adv_injection;
+        s.bt_attack_ble_adv_injection = false; // manual-only: no config toggle (Task 4 cleanup)
         s.bt_attack_ble_conn_hijack = self.config.bt_attacks.ble_conn_hijack;
         s.bt_attack_l2cap_fuzz = self.config.bt_attacks.l2cap_fuzz;
         s.bt_attack_att_gatt_fuzz = self.config.bt_attacks.att_gatt_fuzz;
-        s.bt_attack_vendor_cmd_unlock = self.config.bt_attacks.vendor_cmd_unlock;
+        s.bt_attack_vendor_cmd_unlock = false; // manual-only: no config toggle (Task 4 cleanup)
         s.bt_total_attacks = self.bt_attack_scheduler.total_attacks;
         s.bt_total_captures = self.bt_attack_scheduler.total_captures;
         s.bt_active_attacks = self.bt_attack_scheduler.active_count();
