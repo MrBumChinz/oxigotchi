@@ -660,8 +660,16 @@ impl Daemon {
         }
 
         // ---- Sync state to web ----
+        // Tick transition override countdown before sync so decremented state
+        // is reflected in the broadcast.
+        self.epoch_loop.personality.tick_transition_override();
         self.sync_to_web();
         web::broadcast_state(&self.shared_state, &self.ws_tx);
+        // Clear manual attack result AFTER it has been broadcast to clients.
+        {
+            let mut s = self.shared_state.lock().unwrap();
+            s.bt_manual_result = None;
+        }
 
         // ---- Sleep + watchdog ----
         self.epoch_loop.next_phase(); // -> Sleep
@@ -2546,9 +2554,6 @@ impl Daemon {
         s.wpasec_api_key = self.wpasec_config.api_key.clone();
         s.discord_webhook_url = self.discord_webhook_url.clone();
         s.discord_enabled = self.discord_enabled;
-
-        // Clear manual attack result after it's been included in the snapshot
-        s.bt_manual_result = None;
     }
 
     /// Check for pending display settings changes and apply immediately.
