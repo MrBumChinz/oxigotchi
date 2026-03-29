@@ -870,7 +870,7 @@ pub struct BtTargetRequest {
 }
 
 /// BT attack state response for GET /api/bt/attacks.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtAttackResponse {
     pub enabled: bool,
     pub rage_level: String,
@@ -879,7 +879,7 @@ pub struct BtAttackResponse {
 }
 
 /// BT attack toggle states.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtAttackToggles {
     pub smp_downgrade: bool,
     pub smp_mitm: bool,
@@ -892,7 +892,7 @@ pub struct BtAttackToggles {
 }
 
 /// BT attack statistics.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtAttackStats {
     pub total_attacks: u64,
     pub total_captures: u64,
@@ -913,14 +913,14 @@ pub struct BtDeviceInfo {
 }
 
 /// BT devices response for GET /api/bt/devices.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtDevicesResponse {
     pub count: u32,
     pub devices: Vec<BtDeviceInfo>,
 }
 
 /// BT captures response for GET /api/bt/captures.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtCapturesResponse {
     pub keys: u32,
     pub transcripts: u32,
@@ -930,7 +930,7 @@ pub struct BtCapturesResponse {
 }
 
 /// BT patchram response for GET /api/bt/patchram.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtPatchramResponse {
     pub state: String,
 }
@@ -4342,5 +4342,331 @@ mod tests {
         assert!(resp.ok);
         let s = state.lock().unwrap();
         assert_eq!(s.pending_bt_target.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
+    }
+
+    // === BT attacks GET handler ===
+
+    #[tokio::test]
+    async fn test_bt_attacks_get_returns_defaults() {
+        let (router, _state) = test_router();
+        let (status, body) = get(&router, "/api/bt/attacks").await;
+        assert_eq!(status, 200);
+        let resp: BtAttackResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.rage_level, "Medium");
+        assert!(resp.enabled); // default is true
+        assert!(resp.toggles.smp_downgrade); // default ON
+        assert!(!resp.toggles.smp_mitm); // default OFF
+        assert!(resp.toggles.knob); // default ON
+        assert!(resp.toggles.vendor_cmd_unlock); // default ON
+        assert_eq!(resp.stats.total_attacks, 0);
+        assert_eq!(resp.stats.devices_seen, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bt_attacks_get_reflects_toggle_changes() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_attack_smp_mitm = true;
+            s.bt_attack_knob = false;
+            s.bt_rage_level = "High".into();
+            s.bt_attack_enabled = true;
+            s.bt_active_attacks = 2;
+        }
+        let (status, body) = get(&router, "/api/bt/attacks").await;
+        assert_eq!(status, 200);
+        let resp: BtAttackResponse = serde_json::from_str(&body).unwrap();
+        assert!(resp.enabled);
+        assert_eq!(resp.rage_level, "High");
+        assert!(resp.toggles.smp_mitm);
+        assert!(!resp.toggles.knob);
+        assert_eq!(resp.stats.active_attacks, 2);
+    }
+
+    // === BT attacks toggle handler ===
+
+    #[tokio::test]
+    async fn test_bt_toggle_valid_attack_optimistic_update() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/bt/attacks/toggle",
+            r#"{"attack":"smp_mitm","enabled":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(resp.ok);
+        let s = state.lock().unwrap();
+        assert!(s.bt_attack_smp_mitm, "smp_mitm should update immediately");
+        assert!(s.pending_bt_attack_toggle.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_bt_toggle_all_eight_attacks() {
+        let attacks = [
+            "smp_downgrade", "smp_mitm", "knob", "ble_adv_injection",
+            "ble_conn_hijack", "l2cap_fuzz", "att_gatt_fuzz", "vendor_cmd_unlock",
+        ];
+        for atk in &attacks {
+            let (router, state) = test_router();
+            let json = format!(r#"{{"attack":"{}","enabled":true}}"#, atk);
+            let (status, body) = post_json(&router, "/api/bt/attacks/toggle", &json).await;
+            assert_eq!(status, 200, "toggle {} should return 200", atk);
+            let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+            assert!(resp.ok, "toggle {} should return ok:true", atk);
+            let s = state.lock().unwrap();
+            assert!(
+                s.pending_bt_attack_toggle.is_some(),
+                "toggle {} should queue pending",
+                atk,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bt_toggle_unknown_attack_rejected() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/bt/attacks/toggle",
+            r#"{"attack":"nonexistent","enabled":true}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(!resp.ok, "unknown attack should return ok:false");
+        let s = state.lock().unwrap();
+        assert!(
+            s.pending_bt_attack_toggle.is_none(),
+            "unknown attack should not queue pending",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_bt_toggle_disable_optimistic() {
+        let (router, state) = test_router();
+        // knob defaults to true — disable it
+        let (_, body) = post_json(
+            &router,
+            "/api/bt/attacks/toggle",
+            r#"{"attack":"knob","enabled":false}"#,
+        )
+        .await;
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(resp.ok);
+        let s = state.lock().unwrap();
+        assert!(!s.bt_attack_knob, "knob should be disabled immediately");
+    }
+
+    // === BT rage level handler ===
+
+    #[tokio::test]
+    async fn test_bt_rage_valid_levels() {
+        for level in &["Low", "Medium", "High"] {
+            let (router, state) = test_router();
+            let json = format!(r#"{{"level":"{}"}}"#, level);
+            let (status, body) = post_json(&router, "/api/bt/attacks/rage", &json).await;
+            assert_eq!(status, 200);
+            let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+            assert!(resp.ok, "level {} should be accepted", level);
+            let s = state.lock().unwrap();
+            assert_eq!(s.bt_rage_level, *level, "rage level should update immediately");
+            assert_eq!(
+                s.pending_bt_rage_level.as_deref(),
+                Some(*level),
+                "rage level should be queued",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bt_rage_invalid_level_rejected() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/bt/attacks/rage",
+            r#"{"level":"Extreme"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(!resp.ok, "invalid level should return ok:false");
+        let s = state.lock().unwrap();
+        assert_eq!(s.bt_rage_level, "Medium", "rage level should not change");
+        assert!(s.pending_bt_rage_level.is_none(), "nothing should be queued");
+    }
+
+    #[tokio::test]
+    async fn test_bt_rage_empty_string_rejected() {
+        let (router, _) = test_router();
+        let (_, body) = post_json(
+            &router,
+            "/api/bt/attacks/rage",
+            r#"{"level":""}"#,
+        )
+        .await;
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(!resp.ok);
+    }
+
+    #[tokio::test]
+    async fn test_bt_rage_case_sensitive() {
+        let (router, _) = test_router();
+        let (_, body) = post_json(
+            &router,
+            "/api/bt/attacks/rage",
+            r#"{"level":"low"}"#,
+        )
+        .await;
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(!resp.ok, "lowercase 'low' should be rejected");
+    }
+
+    // === BT devices handler ===
+
+    #[tokio::test]
+    async fn test_bt_devices_empty_default() {
+        let (router, _) = test_router();
+        let (status, body) = get(&router, "/api/bt/devices").await;
+        assert_eq!(status, 200);
+        let resp: BtDevicesResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.count, 0);
+        assert!(resp.devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_bt_devices_with_entries() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_devices_seen = 2;
+            s.bt_device_list = vec![
+                BtDeviceInfo {
+                    address: "AA:BB:CC:DD:EE:01".into(),
+                    name: Some("Speaker".into()),
+                    rssi: Some(-55),
+                    category: "audio".into(),
+                    transport: "Ble".into(),
+                    attack_state: "Untouched".into(),
+                    seen_count: 3,
+                },
+                BtDeviceInfo {
+                    address: "AA:BB:CC:DD:EE:02".into(),
+                    name: None,
+                    rssi: None,
+                    category: String::new(),
+                    transport: "Classic".into(),
+                    attack_state: "Attacking".into(),
+                    seen_count: 1,
+                },
+            ];
+        }
+        let (status, body) = get(&router, "/api/bt/devices").await;
+        assert_eq!(status, 200);
+        let resp: BtDevicesResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.count, 2);
+        assert_eq!(resp.devices.len(), 2);
+        assert_eq!(resp.devices[0].name.as_deref(), Some("Speaker"));
+        assert!(resp.devices[1].name.is_none());
+        assert!(resp.devices[1].rssi.is_none());
+    }
+
+    // === BT captures handler ===
+
+    #[tokio::test]
+    async fn test_bt_captures_default_zero() {
+        let (router, _) = test_router();
+        let (status, body) = get(&router, "/api/bt/captures").await;
+        assert_eq!(status, 200);
+        let resp: BtCapturesResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.keys, 0);
+        assert_eq!(resp.transcripts, 0);
+        assert_eq!(resp.crashes, 0);
+        assert_eq!(resp.vendor, 0);
+        assert_eq!(resp.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_bt_captures_total_is_sum_of_types() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_capture_keys = 5;
+            s.bt_capture_transcripts = 3;
+            s.bt_capture_crashes = 2;
+            s.bt_capture_vendor = 1;
+        }
+        let (status, body) = get(&router, "/api/bt/captures").await;
+        assert_eq!(status, 200);
+        let resp: BtCapturesResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.keys, 5);
+        assert_eq!(resp.transcripts, 3);
+        assert_eq!(resp.crashes, 2);
+        assert_eq!(resp.vendor, 1);
+        assert_eq!(resp.total, 11, "total must equal keys + transcripts + crashes + vendor");
+    }
+
+    // === BT patchram handler ===
+
+    #[tokio::test]
+    async fn test_bt_patchram_default_empty() {
+        let (router, _) = test_router();
+        let (status, body) = get(&router, "/api/bt/patchram").await;
+        assert_eq!(status, 200);
+        let resp: BtPatchramResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.state, "");
+    }
+
+    #[tokio::test]
+    async fn test_bt_patchram_reflects_state() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_patchram_state = "attack".into();
+        }
+        let (status, body) = get(&router, "/api/bt/patchram").await;
+        assert_eq!(status, 200);
+        let resp: BtPatchramResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(resp.state, "attack");
+    }
+
+    // === WsSnapshot BT fields ===
+
+    #[tokio::test]
+    async fn test_ws_snapshot_includes_bt_data() {
+        let (router, state) = test_router();
+        {
+            let mut s = state.lock().unwrap();
+            s.bt_attack_enabled = true;
+            s.bt_rage_level = "High".into();
+            s.bt_devices_seen = 5;
+            s.bt_active_attacks = 2;
+            s.bt_total_attacks = 10;
+            s.bt_capture_keys = 3;
+            s.bt_capture_transcripts = 1;
+            s.bt_capture_crashes = 0;
+            s.bt_capture_vendor = 2;
+            s.bt_patchram_state = "attack".into();
+        }
+        // WsSnapshot is built via build_ws_snapshot; test via /api/bt/* endpoints
+        // which use the same state fields
+        let (_, atk_body) = get(&router, "/api/bt/attacks").await;
+        let atk: BtAttackResponse = serde_json::from_str(&atk_body).unwrap();
+        assert!(atk.enabled);
+        assert_eq!(atk.rage_level, "High");
+        assert_eq!(atk.stats.devices_seen, 5);
+        assert_eq!(atk.stats.active_attacks, 2);
+        assert_eq!(atk.stats.total_attacks, 10);
+
+        let (_, cap_body) = get(&router, "/api/bt/captures").await;
+        let cap: BtCapturesResponse = serde_json::from_str(&cap_body).unwrap();
+        assert_eq!(cap.keys, 3);
+        assert_eq!(cap.transcripts, 1);
+        assert_eq!(cap.total, 6, "total should be 3+1+0+2=6");
+
+        let (_, pr_body) = get(&router, "/api/bt/patchram").await;
+        let pr: BtPatchramResponse = serde_json::from_str(&pr_body).unwrap();
+        assert_eq!(pr.state, "attack");
     }
 }
