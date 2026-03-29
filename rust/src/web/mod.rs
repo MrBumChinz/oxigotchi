@@ -604,7 +604,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             transcripts: s.bt_capture_transcripts,
             crashes: s.bt_capture_crashes,
             vendor: s.bt_capture_vendor,
-            total: s.bt_total_captures,
+            total: (s.bt_capture_keys + s.bt_capture_transcripts + s.bt_capture_crashes + s.bt_capture_vendor) as u64,
         },
         bt_patchram: BtPatchramResponse {
             state: s.bt_patchram_state.clone(),
@@ -2338,7 +2338,12 @@ async fn bt_attacks_toggle_handler(
         "l2cap_fuzz" => s.bt_attack_l2cap_fuzz = body.enabled,
         "att_gatt_fuzz" => s.bt_attack_att_gatt_fuzz = body.enabled,
         "vendor_cmd_unlock" => s.bt_attack_vendor_cmd_unlock = body.enabled,
-        _ => {}
+        _ => {
+            return Json(ActionResponse {
+                ok: false,
+                message: format!("Unknown BT attack: {}", body.attack),
+            });
+        }
     }
     s.pending_bt_attack_toggle = Some(body);
     Json(ActionResponse {
@@ -2352,6 +2357,12 @@ async fn bt_attacks_rage_handler(
     State(state): State<SharedState>,
     Json(body): Json<BtRageLevelRequest>,
 ) -> Json<ActionResponse> {
+    if !matches!(body.level.as_str(), "Low" | "Medium" | "High") {
+        return Json(ActionResponse {
+            ok: false,
+            message: "Invalid rage level".into(),
+        });
+    }
     let mut s = state.lock().unwrap();
     s.bt_rage_level = body.level.clone(); // optimistic
     s.pending_bt_rage_level = Some(body.level.clone());
@@ -2391,7 +2402,7 @@ async fn bt_captures_handler(State(state): State<SharedState>) -> Json<BtCapture
         transcripts: s.bt_capture_transcripts,
         crashes: s.bt_capture_crashes,
         vendor: s.bt_capture_vendor,
-        total: s.bt_total_captures,
+        total: (s.bt_capture_keys + s.bt_capture_transcripts + s.bt_capture_crashes + s.bt_capture_vendor) as u64,
     })
 }
 

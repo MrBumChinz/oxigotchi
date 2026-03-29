@@ -676,7 +676,7 @@ function fmtBytes(b) {
     if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
     return (b/1048576).toFixed(1) + ' MB';
 }
-function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/'/g, '&#39;'); }
+function esc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML.replace(/\\/g, '&#92;').replace(/'/g, '&#39;'); }
 
 var _currentMode = 'rage';
 var _lastHydratedMode = null;
@@ -763,6 +763,12 @@ function updateOverview(state) {
 }
 
 function syncModeUi(rawMode) {
+    var newMode = normalizeMode(rawMode);
+    if (newMode !== _currentMode) {
+        delete _overviewState.bt_attacks;
+        delete _overviewState.bt_devices;
+        delete _overviewState.attacks;
+    }
     document.getElementById('mode-rage').classList.toggle('active', rawMode === 'RAGE' || rawMode === 'AO');
     document.getElementById('mode-bt').classList.toggle('active', rawMode === 'BT');
     document.getElementById('mode-safe').classList.toggle('active', rawMode === 'SAFE' || rawMode === 'PWN');
@@ -1734,11 +1740,6 @@ function updateBtOpsFromWs(btAttacks, btPatchram) {
 
 function updateBtDevicesFromWs(btDevices) {
     if (!btDevices || !btDevices.devices) return;
-    mergeOverviewState({
-        bt_devices: btDevices,
-        bluetooth: Object.assign({}, _overviewState.bluetooth || {}, {nearby_devices: btDevices.count})
-    });
-    updateOverview(_overviewState);
     var tbody = document.getElementById('bt-device-tbody');
     if (btDevices.devices.length === 0) {
         tbody.innerHTML = '<tr><td colspan="7" style="color:#555">No devices yet</td></tr>';
@@ -1769,6 +1770,7 @@ function setBtTarget(address) {
     api('POST', '/api/bt/attacks/target', {address: address});
 }
 
+var _btRageLevel = 'Medium';
 var _btRageDescs = {
     'Low': 'Passive diagnostics only — targets own controller (VendorCmdUnlock)',
     'Medium': 'Active attacks targeting external devices',
@@ -1776,6 +1778,7 @@ var _btRageDescs = {
 };
 
 function setBtRage(level) {
+    _btRageLevel = level;
     document.getElementById('bt-rage-low').classList.toggle('active', level === 'Low');
     document.getElementById('bt-rage-medium').classList.toggle('active', level === 'Medium');
     document.getElementById('bt-rage-high').classList.toggle('active', level === 'High');
@@ -1801,6 +1804,7 @@ function updateBtAttackConstraintState(level) {
 function updateBtRageFromWs(btAttacks) {
     if (!btAttacks) return;
     var level = btAttacks.rage_level || 'Medium';
+    _btRageLevel = level;
     document.getElementById('bt-rage-low').classList.toggle('active', level === 'Low');
     document.getElementById('bt-rage-medium').classList.toggle('active', level === 'Medium');
     document.getElementById('bt-rage-high').classList.toggle('active', level === 'High');
@@ -1809,10 +1813,7 @@ function updateBtRageFromWs(btAttacks) {
 }
 
 function toggleBtAttack(name, enabled) {
-    updateBtAttackConstraintState(
-        document.getElementById('bt-rage-low').classList.contains('active') ? 'Low' :
-        document.getElementById('bt-rage-high').classList.contains('active') ? 'High' : 'Medium'
-    );
+    updateBtAttackConstraintState(_btRageLevel);
     api('POST', '/api/bt/attacks/toggle', {attack: name, enabled: enabled});
 }
 
