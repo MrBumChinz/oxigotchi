@@ -80,7 +80,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 .ap-table th{color:#888;font-size:11px;text-align:left;padding:4px 6px;border-bottom:1px solid #0f3460}
 .ap-table td{padding:4px 6px;border-bottom:1px solid #0f346033;color:#e0e0e0}
 .ap-table tr:last-child td{border-bottom:none}
-.ap-scroll{max-height:300px;overflow-y:auto;margin-top:4px}
+.ap-scroll{max-height:300px;overflow:auto;margin-top:4px}
 .wl-input{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;width:100%}
 .wl-input:focus{outline:none;border-color:#00d4aa}
 .wl-select{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit}
@@ -108,6 +108,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 .bt-type-secondary{display:block;color:#555;font-size:10px;margin-top:2px}
 .bt-row-warning{opacity:.65}
 .bt-row-warning .toggle-label,.bt-row-warning .toggle-desc{color:#f0c040}
+.bt-row-disabled{opacity:.65}
+.bt-row-disabled .toggle-label,.bt-row-disabled .toggle-desc{color:#e67e22}
 .bt-state-untouched{color:#555}
 .bt-state-targeted{color:#3498db}
 .bt-state-attacking{color:#f0c040}
@@ -115,9 +117,10 @@ input:checked+.slider:before{transform:translateX(22px)}
 .bt-state-failed{color:#e94560}
 .bt-target-btn{background:#0f3460;color:#00d4aa;border:1px solid #00d4aa33;border-radius:6px;padding:3px 8px;font-size:10px;cursor:pointer;font-family:inherit}
 .bt-target-btn:hover{background:#00d4aa33}
+.bt-target-btn:disabled{opacity:.45;cursor:not-allowed;background:#0a1628;color:#666;border-color:#0f3460}
 .bt-rage-btn{padding:8px 16px;border-radius:8px;border:2px solid #0f3460;background:#16213e;color:#888;font-size:13px;font-weight:bold;cursor:pointer;font-family:inherit;transition:.2s}
 .bt-rage-btn.active{border-color:#00d4aa;color:#00d4aa;background:#0f3460}
-@media(max-width:400px){.bt-hide-mobile{display:none}.bt-type-secondary{display:inline;color:#555;margin-left:6px}}
+@media(max-width:400px){.bt-hide-mobile{display:none}.bt-type-secondary{display:inline;color:#555;margin-left:6px}.bt-rage-actions{flex-wrap:wrap}.bt-rage-actions .bt-rage-btn{flex:1;min-width:88px}}
 </style>
 </head>
 <body>
@@ -360,7 +363,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card" id="card-bt-rage" data-modes="bt">
 <div class="card-title">BT Rage Level</div>
 <div class="sub">Controls which attack categories are permitted.</div>
-<div style="display:flex;gap:8px;margin:12px 0">
+<div class="bt-rage-actions" style="display:flex;gap:8px;margin:12px 0">
 <button class="bt-rage-btn" id="bt-rage-low" onclick="setBtRage('Low')">Low<br><span style="font-size:10px;font-weight:normal;color:#888">Diagnostics</span></button>
 <button class="bt-rage-btn active" id="bt-rage-medium" onclick="setBtRage('Medium')">Medium<br><span style="font-size:10px;font-weight:normal">Active</span></button>
 <button class="bt-rage-btn" id="bt-rage-high" onclick="setBtRage('High')">High<br><span style="font-size:10px;font-weight:normal">Aggressive</span></button>
@@ -393,7 +396,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <label class="switch"><input type="checkbox" id="bt-atk-att_gatt_fuzz" onchange="toggleBtAttack('att_gatt_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
 <div class="bt-group-header">Classic</div>
-<div class="toggle-row">
+<div class="toggle-row" id="bt-row-knob">
 <div class="toggle-info"><div class="toggle-label">KNOB<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Key negotiation downgrade (requires patchram)</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-knob" checked onchange="toggleBtAttack('knob',this.checked)"><span class="slider"></span></label>
 </div>
@@ -402,7 +405,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <label class="switch"><input type="checkbox" id="bt-atk-l2cap_fuzz" onchange="toggleBtAttack('l2cap_fuzz',this.checked)"><span class="slider"></span></label>
 </div>
 <div class="bt-group-header">Vendor</div>
-<div class="toggle-row">
+<div class="toggle-row" id="bt-row-vendor_cmd_unlock">
 <div class="toggle-info"><div class="toggle-label">Vendor Cmd Unlock<span class="bt-badge bt-badge-pr">PR</span></div><div class="toggle-desc">Unlock vendor HCI commands (requires patchram)</div></div>
 <label class="switch"><input type="checkbox" id="bt-atk-vendor_cmd_unlock" checked onchange="toggleBtAttack('vendor_cmd_unlock',this.checked)"><span class="slider"></span></label>
 </div>
@@ -681,6 +684,7 @@ function esc(s) { var d = document.createElement('div'); d.textContent = s; retu
 var _currentMode = 'rage';
 var _lastHydratedMode = null;
 var _overviewState = {mode: 'RAGE'};
+var _btPatchramState = '';
 function normalizeMode(raw) {
     var m = (raw || '').toUpperCase();
     if (m === 'AO' || m === 'RAGE') return 'rage';
@@ -765,9 +769,9 @@ function updateOverview(state) {
 function syncModeUi(rawMode) {
     var newMode = normalizeMode(rawMode);
     if (newMode !== _currentMode) {
-        delete _overviewState.bt_attacks;
-        delete _overviewState.bt_devices;
-        delete _overviewState.attacks;
+        if (newMode !== 'bt') delete _overviewState.bt_attacks;
+        if (newMode !== 'safe') delete _overviewState.bluetooth;
+        if (newMode !== 'rage') delete _overviewState.attacks;
     }
     document.getElementById('mode-rage').classList.toggle('active', rawMode === 'RAGE' || rawMode === 'AO');
     document.getElementById('mode-bt').classList.toggle('active', rawMode === 'BT');
@@ -789,8 +793,8 @@ function refreshStatus() {
     api('GET', '/api/status').then(function(d) {
         if (!d) return;
         mergeOverviewState(d);
-        updateOverview(_overviewState);
         syncModeUi(d.mode);
+        updateOverview(_overviewState);
         var nameInput = document.getElementById('setting-name');
         if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
         syncSettingsFromData(d);
@@ -1499,8 +1503,8 @@ var _wsConnected = false;
 
 function updateStatusFromWs(d) {
     mergeOverviewState(d);
-    updateOverview(_overviewState);
     syncModeUi(d.mode);
+    updateOverview(_overviewState);
     var nameInput = document.getElementById('setting-name');
     if (nameInput && !nameInput.matches(':focus')) nameInput.value = d.name || '';
 }
@@ -1734,8 +1738,36 @@ function updateBtOpsFromWs(btAttacks, btPatchram) {
     document.getElementById('bt-ops-active').textContent = st.active_attacks != null ? st.active_attacks : '-';
     document.getElementById('bt-ops-total').textContent = st.total_attacks != null ? st.total_attacks : '-';
     if (btPatchram && btPatchram.state != null) {
+        _btPatchramState = btPatchram.state;
         document.getElementById('bt-ops-patchram').textContent = btPatchram.state;
     }
+    updateBtPatchramConstraintState();
+}
+
+function isPatchramReady() {
+    return _btPatchramState === 'attack';
+}
+
+function updateBtPatchramConstraintState() {
+    [
+        {row: 'bt-row-knob', input: 'bt-atk-knob'},
+        {row: 'bt-row-vendor_cmd_unlock', input: 'bt-atk-vendor_cmd_unlock'}
+    ].forEach(function(entry) {
+        var row = document.getElementById(entry.row);
+        var input = document.getElementById(entry.input);
+        if (!row || !input) return;
+        var blocked = input.checked && !isPatchramReady();
+        row.classList.toggle('bt-row-disabled', blocked);
+        if (blocked) {
+            row.title = 'Requires patchram attack firmware';
+        } else if (!row.classList.contains('bt-row-warning')) {
+            row.title = '';
+        }
+    });
+}
+
+function isValidBtAddress(address) {
+    return /^[0-9A-F]{2}(?::[0-9A-F]{2}){5}$/i.test(address || '');
 }
 
 function updateBtDevicesFromWs(btDevices) {
@@ -1747,6 +1779,7 @@ function updateBtDevicesFromWs(btDevices) {
     }
     var html = '';
     btDevices.devices.forEach(function(d) {
+        var validAddress = isValidBtAddress(d.address);
         var name = d.name ? esc(d.name) : '<span style="color:#555">' + esc(d.address) + '</span>';
         var rssi = d.rssi != null ? d.rssi + ' dBm' : '-';
         var rssiColor = d.rssi == null ? '#555' : (d.rssi > -50 ? '#00d4aa' : (d.rssi > -70 ? '#f0c040' : '#e94560'));
@@ -1759,13 +1792,17 @@ function updateBtDevicesFromWs(btDevices) {
             '<td>' + type + '</td>' +
             '<td class="' + stateClass + '">' + esc(d.attack_state || 'Untouched') + '</td>' +
             '<td class="bt-hide-mobile">' + d.seen_count + '</td>' +
-            '<td><button class="bt-target-btn" onclick="setBtTarget(\'' + esc(d.address) + '\')">Target</button></td>' +
+            '<td><button class="bt-target-btn"' + (validAddress ? ' onclick="setBtTarget(\'' + esc(d.address) + '\')"' : ' disabled title="Invalid BT address"') + '>Target</button></td>' +
             '</tr>';
     });
     tbody.innerHTML = html;
 }
 
 function setBtTarget(address) {
+    if (!isValidBtAddress(address)) {
+        toast('Invalid BT address');
+        return;
+    }
     toast('Target queued: ' + address);
     api('POST', '/api/bt/attacks/target', {address: address});
 }
@@ -1797,7 +1834,7 @@ function updateBtAttackConstraintState(level) {
         if (!row || !input) return;
         var warn = input.checked && level !== 'High';
         row.classList.toggle('bt-row-warning', warn);
-        row.title = warn ? 'Requires High rage level' : '';
+        row.title = warn ? 'Requires High rage level' : (row.classList.contains('bt-row-disabled') ? 'Requires patchram attack firmware' : '');
     });
 }
 
@@ -1835,6 +1872,7 @@ function updateBtAttacksFromWs(btAttacks) {
         if (el && !el.matches(':focus')) el.checked = map[key];
     });
     updateBtAttackConstraintState(btAttacks.rage_level || 'Medium');
+    updateBtPatchramConstraintState();
 }
 
 function updateBtCapturesFromWs(btCaptures) {
@@ -1864,7 +1902,9 @@ function refreshBtAttacks() {
     });
     api('GET', '/api/bt/patchram').then(function(d) {
         if (!d) return;
+        _btPatchramState = d.state || '';
         document.getElementById('bt-ops-patchram').textContent = d.state || '-';
+        updateBtPatchramConstraintState();
     });
 }
 

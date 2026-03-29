@@ -604,7 +604,10 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             transcripts: s.bt_capture_transcripts,
             crashes: s.bt_capture_crashes,
             vendor: s.bt_capture_vendor,
-            total: (s.bt_capture_keys + s.bt_capture_transcripts + s.bt_capture_crashes + s.bt_capture_vendor) as u64,
+            total: (s.bt_capture_keys
+                + s.bt_capture_transcripts
+                + s.bt_capture_crashes
+                + s.bt_capture_vendor) as u64,
         },
         bt_patchram: BtPatchramResponse {
             state: s.bt_patchram_state.clone(),
@@ -2372,11 +2375,23 @@ async fn bt_attacks_rage_handler(
     })
 }
 
+fn is_valid_bt_address(address: &str) -> bool {
+    let mut parts = address.split(':');
+    let valid = parts.all(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_hexdigit()));
+    valid && address.matches(':').count() == 5
+}
+
 /// POST /api/bt/attacks/target -> set BT attack target
 async fn bt_attacks_target_handler(
     State(state): State<SharedState>,
     Json(body): Json<BtTargetRequest>,
 ) -> Json<ActionResponse> {
+    if !is_valid_bt_address(&body.address) {
+        return Json(ActionResponse {
+            ok: false,
+            message: "Invalid BT address".into(),
+        });
+    }
     let mut s = state.lock().unwrap();
     s.pending_bt_target = Some(body.address.clone());
     Json(ActionResponse {
@@ -2402,7 +2417,10 @@ async fn bt_captures_handler(State(state): State<SharedState>) -> Json<BtCapture
         transcripts: s.bt_capture_transcripts,
         crashes: s.bt_capture_crashes,
         vendor: s.bt_capture_vendor,
-        total: (s.bt_capture_keys + s.bt_capture_transcripts + s.bt_capture_crashes + s.bt_capture_vendor) as u64,
+        total: (s.bt_capture_keys
+            + s.bt_capture_transcripts
+            + s.bt_capture_crashes
+            + s.bt_capture_vendor) as u64,
     })
 }
 
@@ -3729,16 +3747,14 @@ mod tests {
     #[tokio::test]
     async fn test_autohunt_toggle_on_queues_config() {
         let (router, state) = test_router();
-        let (status, body) = post_json(
-            &router,
-            "/api/channels",
-            r#"{"autohunt":true}"#,
-        )
-        .await;
+        let (status, body) = post_json(&router, "/api/channels", r#"{"autohunt":true}"#).await;
         assert_eq!(status, 200);
         assert!(body.contains("\"ok\":true"));
         let s = state.lock().unwrap();
-        let cfg = s.pending_channel_config.as_ref().expect("config should be queued");
+        let cfg = s
+            .pending_channel_config
+            .as_ref()
+            .expect("config should be queued");
         assert_eq!(cfg.autohunt, Some(true));
     }
 
@@ -3753,7 +3769,10 @@ mod tests {
         .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        let cfg = s.pending_channel_config.as_ref().expect("config should be queued");
+        let cfg = s
+            .pending_channel_config
+            .as_ref()
+            .expect("config should be queued");
         assert_eq!(cfg.autohunt, Some(false));
         assert_eq!(cfg.channels, Some(vec![1, 6, 11]));
         assert_eq!(cfg.dwell_ms, Some(2000));
@@ -3767,12 +3786,7 @@ mod tests {
             s.rage_enabled = true;
             s.rage_level = 3;
         }
-        let (status, _) = post_json(
-            &router,
-            "/api/channels",
-            r#"{"autohunt":true}"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/channels", r#"{"autohunt":true}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(
@@ -3785,17 +3799,18 @@ mod tests {
     #[tokio::test]
     async fn test_autohunt_only_no_channels_no_dwell() {
         let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/channels",
-            r#"{"autohunt":true}"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/channels", r#"{"autohunt":true}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         let cfg = s.pending_channel_config.as_ref().unwrap();
-        assert_eq!(cfg.channels, None, "channels should be None when only toggling autohunt");
-        assert_eq!(cfg.dwell_ms, None, "dwell should be None when only toggling autohunt");
+        assert_eq!(
+            cfg.channels, None,
+            "channels should be None when only toggling autohunt"
+        );
+        assert_eq!(
+            cfg.dwell_ms, None,
+            "dwell should be None when only toggling autohunt"
+        );
         assert_eq!(cfg.autohunt, Some(true));
     }
 
@@ -3812,7 +3827,10 @@ mod tests {
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         let cfg = s.pending_channel_config.as_ref().unwrap();
-        assert_eq!(cfg.autohunt, None, "missing autohunt field should deserialize as None");
+        assert_eq!(
+            cfg.autohunt, None,
+            "missing autohunt field should deserialize as None"
+        );
     }
 
     #[tokio::test]
@@ -3832,24 +3850,14 @@ mod tests {
     #[tokio::test]
     async fn test_channels_invalid_json_returns_error() {
         let (router, _state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/channels",
-            r#"{"not_valid"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/channels", r#"{"not_valid"#).await;
         assert_ne!(status, 200, "malformed JSON should not return 200");
     }
 
     #[tokio::test]
     async fn test_channels_empty_body_returns_error() {
         let (router, _state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/channels",
-            r#""#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/channels", r#""#).await;
         assert_ne!(status, 200, "empty body should not return 200");
     }
 
@@ -3860,12 +3868,7 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.autohunt_enabled = false; // start with autohunt off
         }
-        let (status, _) = post_json(
-            &router,
-            "/api/channels",
-            r#"{"autohunt":true}"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/channels", r#"{"autohunt":true}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert!(
@@ -3901,15 +3904,13 @@ mod tests {
             let mut s = state.lock().unwrap();
             s.skip_captured = false;
         }
-        let (status, _) = post_json(
-            &router,
-            "/api/wifi",
-            r#"{"skip_captured":true}"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/wifi", r#"{"skip_captured":true}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert!(s.skip_captured, "skip_captured should update immediately so toggle doesn't jump back");
+        assert!(
+            s.skip_captured,
+            "skip_captured should update immediately so toggle doesn't jump back"
+        );
     }
 
     #[tokio::test]
@@ -3918,7 +3919,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rate", r#"{"rate":3}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.attack_rate, 3, "attack_rate should update immediately so rate buttons don't jump back");
+        assert_eq!(
+            s.attack_rate, 3,
+            "attack_rate should update immediately so rate buttons don't jump back"
+        );
     }
 
     #[tokio::test]
@@ -3927,7 +3931,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":5}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert!(s.rage_enabled, "rage_enabled should update immediately so slider doesn't jump back");
+        assert!(
+            s.rage_enabled,
+            "rage_enabled should update immediately so slider doesn't jump back"
+        );
         assert_eq!(s.rage_level, 5, "rage_level should update immediately");
     }
 
@@ -3942,7 +3949,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":null}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert!(!s.rage_enabled, "rage_enabled should update immediately on disable");
+        assert!(
+            !s.rage_enabled,
+            "rage_enabled should update immediately on disable"
+        );
     }
 
     #[tokio::test]
@@ -3989,15 +3999,14 @@ mod tests {
     #[tokio::test]
     async fn test_wpasec_post_immediately_updates_state() {
         let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/wpasec",
-            r#"{"api_key":"test_key_12345"}"#,
-        )
-        .await;
+        let (status, _) =
+            post_json(&router, "/api/wpasec", r#"{"api_key":"test_key_12345"}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.wpasec_api_key, "test_key_12345", "wpasec key should update immediately");
+        assert_eq!(
+            s.wpasec_api_key, "test_key_12345",
+            "wpasec key should update immediately"
+        );
     }
 
     #[tokio::test]
@@ -4011,22 +4020,26 @@ mod tests {
         .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.discord_webhook_url, "https://discord.com/api/webhooks/test");
-        assert!(s.discord_enabled, "discord_enabled should update immediately");
+        assert_eq!(
+            s.discord_webhook_url,
+            "https://discord.com/api/webhooks/test"
+        );
+        assert!(
+            s.discord_enabled,
+            "discord_enabled should update immediately"
+        );
     }
 
     #[tokio::test]
     async fn test_settings_name_immediately_updates_state() {
         let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/settings",
-            r#"{"name":"new-oxi"}"#,
-        )
-        .await;
+        let (status, _) = post_json(&router, "/api/settings", r#"{"name":"new-oxi"}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.name, "new-oxi", "name should update immediately so UI doesn't show stale name");
+        assert_eq!(
+            s.name, "new-oxi",
+            "name should update immediately so UI doesn't show stale name"
+        );
     }
 
     #[tokio::test]
@@ -4036,7 +4049,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rate", r#"{"rate":99}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.attack_rate, 3, "clamped rate should be reflected immediately");
+        assert_eq!(
+            s.attack_rate, 3,
+            "clamped rate should be reflected immediately"
+        );
     }
 
     #[tokio::test]
@@ -4046,7 +4062,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":99}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.rage_level, 7, "clamped rage level should be reflected immediately");
+        assert_eq!(
+            s.rage_level, 7,
+            "clamped rage level should be reflected immediately"
+        );
     }
 
     #[tokio::test]
@@ -4057,9 +4076,19 @@ mod tests {
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.attack_rate, 2, "rage preset should set rate immediately");
-        assert_eq!(s.wifi_dwell_ms, 1000, "rage preset should set dwell immediately");
-        assert_eq!(s.wifi_channels.len(), 13, "rage preset should set all 13 channels immediately");
-        assert!(!s.autohunt_enabled, "rage preset should disable autohunt immediately");
+        assert_eq!(
+            s.wifi_dwell_ms, 1000,
+            "rage preset should set dwell immediately"
+        );
+        assert_eq!(
+            s.wifi_channels.len(),
+            13,
+            "rage preset should set all 13 channels immediately"
+        );
+        assert!(
+            !s.autohunt_enabled,
+            "rage preset should disable autohunt immediately"
+        );
     }
 
     #[tokio::test]
@@ -4069,7 +4098,10 @@ mod tests {
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":6}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert_eq!(s.attack_rate, 3, "FURY preset should set rate 3 immediately");
+        assert_eq!(
+            s.attack_rate, 3,
+            "FURY preset should set rate 3 immediately"
+        );
         assert_eq!(s.wifi_dwell_ms, 1000);
     }
 
@@ -4082,10 +4114,14 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","display_invert":false}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
-        assert!(!s.display_invert, "display_invert should update immediately");
+        assert!(
+            !s.display_invert,
+            "display_invert should update immediately"
+        );
         assert!(s.pending_display_reinit, "reinit should be flagged");
     }
 
@@ -4097,11 +4133,15 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","display_invert":true}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert!(s.display_invert);
-        assert!(!s.pending_display_reinit, "reinit should NOT be flagged when value unchanged");
+        assert!(
+            !s.pending_display_reinit,
+            "reinit should NOT be flagged when value unchanged"
+        );
     }
 
     #[tokio::test]
@@ -4111,7 +4151,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","display_rotation":0}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.display_rotation, 0, "rotation should update immediately");
@@ -4126,7 +4167,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","display_rotation":90}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.display_rotation, 0, "rotation 90 should clamp to 0");
@@ -4135,11 +4177,8 @@ mod tests {
     #[tokio::test]
     async fn test_settings_min_rssi_optimistic_update() {
         let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/settings",
-            r#"{"name":"oxi","min_rssi":-50}"#,
-        ).await;
+        let (status, _) =
+            post_json(&router, "/api/settings", r#"{"name":"oxi","min_rssi":-50}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.min_rssi, -50, "min_rssi should update immediately");
@@ -4152,7 +4191,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","min_rssi":-120}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.min_rssi, -100, "min_rssi below -100 should clamp to -100");
@@ -4161,11 +4201,8 @@ mod tests {
     #[tokio::test]
     async fn test_settings_min_rssi_clamps_high() {
         let (router, state) = test_router();
-        let (status, _) = post_json(
-            &router,
-            "/api/settings",
-            r#"{"name":"oxi","min_rssi":-10}"#,
-        ).await;
+        let (status, _) =
+            post_json(&router, "/api/settings", r#"{"name":"oxi","min_rssi":-10}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.min_rssi, -30, "min_rssi above -30 should clamp to -30");
@@ -4178,7 +4215,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","ap_ttl_secs":300}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.ap_ttl_secs, 300, "ap_ttl should update immediately");
@@ -4191,7 +4229,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","ap_ttl_secs":5}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.ap_ttl_secs, 30, "ap_ttl below 30 should clamp to 30");
@@ -4204,7 +4243,8 @@ mod tests {
             &router,
             "/api/settings",
             r#"{"name":"oxi","ap_ttl_secs":9999}"#,
-        ).await;
+        )
+        .await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.ap_ttl_secs, 600, "ap_ttl above 600 should clamp to 600");
@@ -4233,7 +4273,12 @@ mod tests {
         // First set min_rssi
         post_json(&router, "/api/settings", r#"{"name":"oxi","min_rssi":-70}"#).await;
         // Then set ap_ttl only — min_rssi should remain
-        post_json(&router, "/api/settings", r#"{"name":"oxi","ap_ttl_secs":200}"#).await;
+        post_json(
+            &router,
+            "/api/settings",
+            r#"{"name":"oxi","ap_ttl_secs":200}"#,
+        )
+        .await;
         let s = state.lock().unwrap();
         assert_eq!(s.min_rssi, -70, "previous min_rssi should be preserved");
         assert_eq!(s.ap_ttl_secs, 200);
@@ -4256,5 +4301,46 @@ mod tests {
         assert_eq!(resp.ap_ttl_secs, 180);
         assert!(!resp.display_invert);
         assert_eq!(resp.display_rotation, 0);
+    }
+
+    #[test]
+    fn test_is_valid_bt_address() {
+        assert!(is_valid_bt_address("AA:BB:CC:DD:EE:FF"));
+        assert!(is_valid_bt_address("aa:bb:cc:dd:ee:ff"));
+        assert!(!is_valid_bt_address("AA-BB-CC-DD-EE-FF"));
+        assert!(!is_valid_bt_address("AA:BB:CC:DD:EE"));
+        assert!(!is_valid_bt_address("GG:BB:CC:DD:EE:FF"));
+    }
+
+    #[tokio::test]
+    async fn test_bt_target_rejects_invalid_address() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/bt/attacks/target",
+            r#"{"address":"not-a-mac"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(!resp.ok);
+        let s = state.lock().unwrap();
+        assert!(s.pending_bt_target.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_bt_target_accepts_valid_address() {
+        let (router, state) = test_router();
+        let (status, body) = post_json(
+            &router,
+            "/api/bt/attacks/target",
+            r#"{"address":"AA:BB:CC:DD:EE:FF"}"#,
+        )
+        .await;
+        assert_eq!(status, 200);
+        let resp: ActionResponse = serde_json::from_str(&body).unwrap();
+        assert!(resp.ok);
+        let s = state.lock().unwrap();
+        assert_eq!(s.pending_bt_target.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
     }
 }
