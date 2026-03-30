@@ -3784,12 +3784,12 @@ mod tests {
         {
             let mut s = state.lock().unwrap();
             s.rage_enabled = true;
-            s.rage_level = 5;
+            s.rage_level = 3;
         }
         let (status, body) = get(&router, "/api/wifi").await;
         assert_eq!(status, 200);
         let info: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(info["rage_level"], 5);
+        assert_eq!(info["rage_level"], 3);
     }
 
     #[tokio::test]
@@ -3811,7 +3811,7 @@ mod tests {
         {
             let mut s = state.lock().unwrap();
             s.rage_enabled = true;
-            s.rage_level = 5;
+            s.rage_level = 3;
         }
         let (status, _) = post_json(&router, "/api/rate", r#"{"rate":2}"#).await;
         assert_eq!(status, 200);
@@ -3830,7 +3830,7 @@ mod tests {
         {
             let mut s = state.lock().unwrap();
             s.rage_enabled = true;
-            s.rage_level = 5;
+            s.rage_level = 3;
         }
         let (status, _) = post_json(
             &router,

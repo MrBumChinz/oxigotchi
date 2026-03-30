@@ -3800,7 +3800,7 @@ mod tests {
         {
             let mut s = daemon.shared_state.lock().unwrap();
             s.rage_enabled = true;
-            s.rage_level = 5;
+            s.rage_level = 3;
             s.pending_channel_config = Some(web::ChannelConfig {
                 channels: None,
                 dwell_ms: None,
