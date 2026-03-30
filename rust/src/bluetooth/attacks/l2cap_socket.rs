@@ -98,15 +98,21 @@ mod platform {
                         ));
                     }
 
-                    // SOL_BLUETOOTH=274, BT_SECURITY=4, BT_SECURITY_LOW=1
-                    let sec: [u8; 2] = [1, 0]; // level=LOW, key_size=0
-                    libc::setsockopt(
+                    // struct bt_security { level, key_size } — SOL_BLUETOOTH=274, BT_SECURITY=4
+                    let sec: [u8; 2] = [1, 0]; // BT_SECURITY_LOW, key_size=0
+                    let ret = libc::setsockopt(
                         fd,
                         274, // SOL_BLUETOOTH
                         4,   // BT_SECURITY
                         sec.as_ptr() as *const libc::c_void,
                         sec.len() as libc::socklen_t,
                     );
+                    if ret < 0 {
+                        log::warn!(
+                            "setsockopt(BT_SECURITY) failed: {}",
+                            std::io::Error::last_os_error()
+                        );
+                    }
                 }
 
                 let peer = SockaddrL2 {

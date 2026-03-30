@@ -273,10 +273,10 @@ fn parse_inquiry_result(event_code: u8, data: &[u8]) -> Vec<BtDeviceObservation>
                 ts: chrono::Utc::now(),
                 seen_count: 1,
                 attack_state: BtDeviceAttackState::Untouched,
-            last_attack: None,
-            last_attack_detail: None,
-            name_resolve_attempted: false,
-            connectable: true, // Classic devices are always connectable
+                last_attack: None,
+                last_attack_detail: None,
+                name_resolve_attempted: false,
+                connectable: true, // Classic devices are always connectable
             });
         }
     } else if event_code == EVT_EXTENDED_INQUIRY_RESULT {

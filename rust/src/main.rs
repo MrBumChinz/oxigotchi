@@ -858,22 +858,12 @@ impl Daemon {
 
         // Phase 0b: Name resolution — connect to unnamed devices to read GATT Device Name
         // Only when no attacks are active (avoids HCI/L2CAP contention)
-        {
-            let active = self.bt_attack_scheduler.active_count();
-            let total_devs = self.bt_discovery.devices_by_rssi().len();
-            let candidates = self.bt_discovery.devices_by_rssi().iter()
-                .filter(|d| d.name.is_none() && !d.name_resolve_attempted && d.connectable && d.transport == bluetooth::model::observation::BtTransport::Ble)
-                .count();
-            if candidates > 0 {
-                log::info!("bt_name_resolve: active={active} devices={total_devs} connectable_unnamed={candidates}");
-            }
-        }
         if self.bt_attack_scheduler.active_count() == 0 {
-            let unnamed: Vec<(String, String, u8)> = self.bt_discovery
-                .devices_by_rssi()
+            let sorted = self.bt_discovery.devices_by_rssi();
+            let unnamed: Vec<(String, String, u8)> = sorted
                 .iter()
                 .filter(|d| d.name.is_none() && !d.name_resolve_attempted && d.connectable && d.transport == bluetooth::model::observation::BtTransport::Ble)
-                .take(1) // max 1 per epoch — LE connect timeout is 2s
+                .take(1) // max 1 per epoch — LE connect timeout ~5s
                 .map(|d| {
                     let addr_type = match d.address_type.as_deref() {
                         Some("random") => 2u8,
@@ -883,8 +873,8 @@ impl Daemon {
                 })
                 .collect();
             if !unnamed.is_empty() {
-                log::info!("bt_name_resolve: attempting {} devices", unnamed.len());
-                let resolved = bluetooth::attacks::scan::resolve_ble_names(&unnamed, 3);
+                log::info!("bt_name_resolve: attempting {} devices (of {} total)", unnamed.len(), sorted.len());
+                let resolved = bluetooth::attacks::scan::resolve_ble_names(&unnamed, 1);
                 // Mark all attempted devices
                 for (id, _, _) in &unnamed {
                     if let Some(dev) = self.bt_discovery.get_device_mut(id) {
