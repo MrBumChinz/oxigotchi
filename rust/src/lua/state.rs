@@ -9,7 +9,7 @@ pub struct EpochState {
     pub uptime_secs: u64,
     pub epoch: u64,
     pub mode: String,
-    pub rage_level: u8, // 0 = Custom/off, 1-7 = active RAGE level
+    pub rage_level: u8, // 0 = Custom/off, 1-3 = active RAGE level
 
     // wifi / AO
     pub channel: u8,
@@ -41,6 +41,12 @@ pub struct EpochState {
     pub bt_short: String,
     pub bt_ip: String,
     pub bt_internet: bool,
+
+    // bluetooth attack/discovery stats (for BT-mode indicators)
+    pub bt_devices_seen: u32,
+    pub bt_active_attacks: u32,
+    pub bt_total_captures: u32,
+    pub bt_patchram_state: String,
 
     // network
     pub internet_online: bool,
@@ -105,6 +111,10 @@ impl EpochState {
         t.set("bt_short", self.bt_short.as_str())?;
         t.set("bt_ip", self.bt_ip.as_str())?;
         t.set("bt_internet", self.bt_internet)?;
+        t.set("bt_devices_seen", self.bt_devices_seen)?;
+        t.set("bt_active_attacks", self.bt_active_attacks)?;
+        t.set("bt_total_captures", self.bt_total_captures)?;
+        t.set("bt_patchram_state", self.bt_patchram_state.clone())?;
 
         t.set("internet_online", self.internet_online)?;
         t.set("display_ip", self.display_ip.as_str())?;
@@ -178,5 +188,21 @@ mod tests {
         };
         let table = s.to_lua_table(&lua).unwrap();
         assert_eq!(table.get::<String>("mode").unwrap(), "RAGE");
+    }
+
+    #[test]
+    fn test_epoch_state_bt_fields_in_lua_table() {
+        let lua = Lua::new();
+        let mut state = EpochState::default();
+        state.bt_devices_seen = 5;
+        state.bt_active_attacks = 2;
+        state.bt_total_captures = 10;
+        state.bt_patchram_state = "attack".to_string();
+
+        let table = state.to_lua_table(&lua).unwrap();
+        assert_eq!(table.get::<u32>("bt_devices_seen").unwrap(), 5);
+        assert_eq!(table.get::<u32>("bt_active_attacks").unwrap(), 2);
+        assert_eq!(table.get::<u32>("bt_total_captures").unwrap(), 10);
+        assert_eq!(table.get::<String>("bt_patchram_state").unwrap(), "attack");
     }
 }
