@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn test_draw_indicator_sets_pixels() {
-        use crate::lua::{Indicator, IndicatorFont};
+        use crate::lua::{Indicator, IndicatorFont, ModeSet};
         let mut screen = Screen::new(test_config());
         let ind = Indicator {
             name: "test".into(),
@@ -369,6 +369,7 @@ mod tests {
             label: None,
             font: IndicatorFont::Small,
             wrap_width: 0,
+            visible_in: ModeSet::ALL,
         };
         screen.draw_indicator(&ind);
         let has_pixels =
@@ -378,7 +379,7 @@ mod tests {
 
     #[test]
     fn test_draw_indicator_with_label() {
-        use crate::lua::{Indicator, IndicatorFont};
+        use crate::lua::{Indicator, IndicatorFont, ModeSet};
         let mut screen = Screen::new(test_config());
         let ind = Indicator {
             name: "up".into(),
@@ -388,6 +389,7 @@ mod tests {
             label: Some("UP".into()),
             font: IndicatorFont::Small,
             wrap_width: 0,
+            visible_in: ModeSet::ALL,
         };
         screen.draw_indicator(&ind);
         let has_pixels =

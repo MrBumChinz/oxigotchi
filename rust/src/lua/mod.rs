@@ -16,6 +16,51 @@ pub enum IndicatorFont {
     Medium,
 }
 
+/// Bitmask for which operating modes an indicator is visible in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModeSet(u8);
+
+impl ModeSet {
+    pub const RAGE: ModeSet = ModeSet(0b001);
+    pub const BT: ModeSet = ModeSet(0b010);
+    pub const SAFE: ModeSet = ModeSet(0b100);
+    pub const ALL: ModeSet = ModeSet(0b111);
+
+    /// Check if this set contains the given mode.
+    pub fn contains(self, other: ModeSet) -> bool {
+        (self.0 & other.0) == other.0
+    }
+
+    /// Parse a mode name string to a single-mode ModeSet.
+    pub fn from_str(s: &str) -> Option<ModeSet> {
+        match s {
+            "RAGE" => Some(ModeSet::RAGE),
+            "BT" => Some(ModeSet::BT),
+            "SAFE" => Some(ModeSet::SAFE),
+            _ => None,
+        }
+    }
+}
+
+impl std::ops::BitOr for ModeSet {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        ModeSet(self.0 | rhs.0)
+    }
+}
+
+impl std::ops::BitOrAssign for ModeSet {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl PartialEq<u8> for ModeSet {
+    fn eq(&self, other: &u8) -> bool {
+        self.0 == *other
+    }
+}
+
 /// A text indicator registered by a Lua plugin.
 #[derive(Debug, Clone)]
 pub struct Indicator {
@@ -33,6 +78,8 @@ pub struct Indicator {
     pub font: IndicatorFont,
     /// Word-wrap width in chars (0 = no wrap).
     pub wrap_width: u32,
+    /// Which modes this indicator is visible in (default: ALL).
+    pub visible_in: ModeSet,
 }
 
 /// Plugin metadata read from Lua file scope.
@@ -339,6 +386,7 @@ impl PluginRuntime {
                         label,
                         font,
                         wrap_width,
+                        visible_in: ModeSet::ALL,
                     };
 
                     indicators.lock().unwrap().insert(ind_name, indicator);
@@ -630,6 +678,7 @@ mod tests {
             label: None,
             font: IndicatorFont::Small,
             wrap_width: 0,
+            visible_in: ModeSet::ALL,
         };
         assert_eq!(ind.name, "test");
         assert_eq!(ind.value, "hello");
@@ -650,6 +699,7 @@ mod tests {
             label: Some("UP".into()),
             font: IndicatorFont::Small,
             wrap_width: 0,
+            visible_in: ModeSet::ALL,
         };
         assert_eq!(ind.label, Some("UP".into()));
     }
@@ -664,6 +714,7 @@ mod tests {
             label: None,
             font: IndicatorFont::Medium,
             wrap_width: 17,
+            visible_in: ModeSet::ALL,
         };
         assert_eq!(ind.wrap_width, 17);
         assert_eq!(ind.font, IndicatorFont::Medium);
@@ -1084,5 +1135,45 @@ mod tests {
         // Config position preserved
         assert_eq!(indicators[0].x, 10);
         assert_eq!(indicators[0].y, 20);
+    }
+
+    #[test]
+    fn test_mode_set_constants() {
+        assert_eq!(ModeSet::RAGE, 0b001);
+        assert_eq!(ModeSet::BT, 0b010);
+        assert_eq!(ModeSet::SAFE, 0b100);
+        assert_eq!(ModeSet::ALL, 0b111);
+    }
+
+    #[test]
+    fn test_mode_set_contains() {
+        let rage_safe = ModeSet::RAGE | ModeSet::SAFE;
+        assert!(rage_safe.contains(ModeSet::RAGE));
+        assert!(!rage_safe.contains(ModeSet::BT));
+        assert!(rage_safe.contains(ModeSet::SAFE));
+    }
+
+    #[test]
+    fn test_mode_set_from_str() {
+        assert_eq!(ModeSet::from_str("RAGE"), Some(ModeSet::RAGE));
+        assert_eq!(ModeSet::from_str("BT"), Some(ModeSet::BT));
+        assert_eq!(ModeSet::from_str("SAFE"), Some(ModeSet::SAFE));
+        assert_eq!(ModeSet::from_str("INVALID"), None);
+    }
+
+    #[test]
+    fn test_indicator_default_visible_in_all() {
+        let ind = Indicator {
+            name: "test".into(),
+            value: "v".into(),
+            x: 0, y: 0,
+            label: None,
+            font: IndicatorFont::Small,
+            wrap_width: 0,
+            visible_in: ModeSet::ALL,
+        };
+        assert!(ind.visible_in.contains(ModeSet::RAGE));
+        assert!(ind.visible_in.contains(ModeSet::BT));
+        assert!(ind.visible_in.contains(ModeSet::SAFE));
     }
 }
