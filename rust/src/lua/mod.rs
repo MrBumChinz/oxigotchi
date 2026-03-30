@@ -205,6 +205,18 @@ impl PluginRuntime {
         self.indicators.lock().unwrap().values().cloned().collect()
     }
 
+    /// Return indicators visible in the given operating mode.
+    pub fn get_visible_indicators(&self, mode: &str) -> Vec<Indicator> {
+        let mode_bit = ModeSet::from_str(mode).unwrap_or(ModeSet::ALL);
+        self.indicators
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|ind| ind.visible_in.contains(mode_bit))
+            .cloned()
+            .collect()
+    }
+
     /// Number of loaded plugins.
     pub fn plugin_count(&self) -> usize {
         self.plugins.len()
@@ -373,6 +385,31 @@ impl PluginRuntime {
                         _ => IndicatorFont::Small,
                     };
 
+                    let visible_in = match opts.get::<LuaTable>("modes") {
+                        Ok(modes_tbl) => {
+                            let mut set = ModeSet(0);
+                            let mut valid = true;
+                            for pair in modes_tbl.sequence_values::<String>() {
+                                match pair {
+                                    Ok(name) => match ModeSet::from_str(&name) {
+                                        Some(m) => set |= m,
+                                        None => {
+                                            log::warn!(
+                                                "register_indicator '{}': unknown mode '{}', ignoring modes table",
+                                                ind_name, name
+                                            );
+                                            valid = false;
+                                            break;
+                                        }
+                                    },
+                                    Err(_) => { valid = false; break; }
+                                }
+                            }
+                            if valid && set.0 != 0 { set } else { ModeSet::ALL }
+                        }
+                        Err(_) => ModeSet::ALL,
+                    };
+
                     let indicator = Indicator {
                         name: ind_name.clone(),
                         value: String::new(),
@@ -381,7 +418,7 @@ impl PluginRuntime {
                         label,
                         font,
                         wrap_width,
-                        visible_in: ModeSet::ALL,
+                        visible_in,
                     };
 
                     indicators.lock().unwrap().insert(ind_name, indicator);
@@ -1170,5 +1207,63 @@ mod tests {
         assert!(ind.visible_in.contains(ModeSet::RAGE));
         assert!(ind.visible_in.contains(ModeSet::BT));
         assert!(ind.visible_in.contains(ModeSet::SAFE));
+    }
+
+    #[test]
+    fn test_get_visible_indicators_filters_by_mode() {
+        let mut rt = PluginRuntime::new();
+        // Register a RAGE-only indicator
+        let lua_code = r#"
+            plugin = {}
+            plugin.name = "rage_only"
+            plugin.version = "1.0.0"
+            plugin.author = "tester"
+            plugin.tag = "default"
+            function on_load(config)
+                register_indicator("rage_ind", {
+                    x = 0, y = 0, font = "small",
+                    modes = {"RAGE", "SAFE"},
+                })
+            end
+            function on_epoch(state)
+                set_indicator("rage_ind", "AO:ok")
+            end
+        "#;
+        let config = PluginConfig::default_for("rage_only", 0, 0);
+        rt.load_plugin_from_str("rage_only", lua_code, &config).unwrap();
+
+        // Register an ALL-mode indicator (no modes specified)
+        let lua_code2 = r#"
+            plugin = {}
+            plugin.name = "universal"
+            plugin.version = "1.0.0"
+            plugin.author = "tester"
+            plugin.tag = "default"
+            function on_load(config)
+                register_indicator("uni_ind", { x = 10, y = 0, font = "small" })
+            end
+            function on_epoch(state)
+                set_indicator("uni_ind", "UP:1h")
+            end
+        "#;
+        let config2 = PluginConfig::default_for("universal", 10, 0);
+        rt.load_plugin_from_str("universal", lua_code2, &config2).unwrap();
+
+        // All indicators visible
+        assert_eq!(rt.get_indicators().len(), 2);
+
+        // RAGE mode: both visible
+        let rage = rt.get_visible_indicators("RAGE");
+        assert_eq!(rage.len(), 2);
+
+        // BT mode: only universal (rage_ind hidden)
+        let bt = rt.get_visible_indicators("BT");
+        assert_eq!(bt.len(), 1);
+        // HashMap order is not stable — check by content, not index
+        assert!(bt.iter().any(|i| i.name == "uni_ind"));
+
+        // SAFE mode: both visible
+        let safe = rt.get_visible_indicators("SAFE");
+        assert_eq!(safe.len(), 2);
     }
 }
