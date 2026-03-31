@@ -106,6 +106,38 @@ impl Face {
         }
     }
 
+    /// Human-readable display name for the web dashboard.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Face::Awake => "Awake",
+            Face::Sleep => "Sleep",
+            Face::Happy => "Happy",
+            Face::Sad => "Sad",
+            Face::Excited => "Excited",
+            Face::Bored => "Bored",
+            Face::Intense => "Intense",
+            Face::Cool => "Cool",
+            Face::Angry => "Angry",
+            Face::Broken => "Broken",
+            Face::Friend => "Friend",
+            Face::Debug => "Debug",
+            Face::Upload => "Upload",
+            Face::Lonely => "Lonely",
+            Face::Grateful => "Grateful",
+            Face::Motivated => "Motivated",
+            Face::Demotivated => "Demotivated",
+            Face::Smart => "Smart",
+            Face::BatteryCritical => "Battery Critical",
+            Face::BatteryLow => "Battery Low",
+            Face::WifiDown => "WiFi Down",
+            Face::FwCrash => "FW Crash",
+            Face::AoCrashed => "AO Crashed",
+            Face::Shutdown => "Shutdown",
+            Face::Raging => "Raging",
+            Face::Grazing => "Grazing",
+        }
+    }
+
     /// Convert a string key (from variety engine) back to a Face enum.
     /// Returns None for unknown keys.
     pub fn from_key(key: &str) -> Option<Face> {
