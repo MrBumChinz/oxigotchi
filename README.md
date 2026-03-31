@@ -38,7 +38,7 @@ He's a pet that also happens to run 12 concurrent attack types across WiFi and B
 | WiFi attack types | 2 | 6 (+ CSA, disassoc, anon reassoc, rogue M2) |
 | BT attack types | 0 | 6 (ATT fuzz, BLE ADV, KNOB, L2CAP fuzz/flood, SMP) |
 | Memory | ~80 MB | ~10 MB |
-| Boot time | 2-3 min | ~30 sec |
+| Boot time | 2-3 min | ~30 sec (first boot ~2 min) |
 | RF awareness | None | 10 frame types, 256 frames/ms, live RF stats |
 | Binary size | 150MB+ (Python + Go + bettercap) | ~5 MB (single Rust binary) |
 | SD card lifespan | ~1-2 years | 10+ years (tmpfs capture pipeline) |
@@ -129,7 +129,7 @@ The web dashboard stays accessible no matter what. You will never be locked out.
 3. **Insert the SD card** into your Pi Zero 2W.
 4. **Windows users:** install the [USB gadget driver](https://github.com/jayofelony/pwnagotchi/releases) first. Mac/Linux don't need this.
 5. **Plug in** the micro USB **data** port (center port, not the edge one).
-6. **Wait about 30 seconds.** The bull appears. AngryOxide is scanning. You're live.
+6. **Wait about 2 minutes** (first boot only — subsequent boots are ~30s). The bull appears. AngryOxide is scanning. You're live.
 
 > **Default credentials** (change after first boot):
 > - SSH: `ssh pi@10.0.0.2` — password `raspberry`
