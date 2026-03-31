@@ -190,7 +190,7 @@ All fixes applied in the v2.1 sprint, baked into the image via `tools/bake_v2.sh
 | `chmod 644` on all service files | Fixes systemd executable permission warnings |
 | `personality.associate = false`, `personality.deauth = false` in AO overlay | Prevents misleading "Associating to AP_NAME" status text when AO handles attacks |
 | AO default rate set to 1 | Conservative default. All rates (1-3) stable with v6 firmware patch — stress tested 2026-03-26. |
-| Whitelist: `["Alpha", "Alpha 5G"]` | Home network whitelist in both config.toml and angryoxide-v5.toml overlay |
+| Whitelist: `["YourNetwork", "YourNetwork-5G"]` | Home network whitelist in both config.toml and angryoxide-v5.toml overlay |
 | rpi-usb-gadget-ics disabled | Causes NM-dispatcher spam in logs |
 
 ---

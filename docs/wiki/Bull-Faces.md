@@ -4,7 +4,7 @@
 
 ---
 
-Every mood has its own bull. Here are 26 faces:
+Every mood has its own bull. Here are 28 faces:
 
 | Face | Name | What's Happening |
 |---|---|---|

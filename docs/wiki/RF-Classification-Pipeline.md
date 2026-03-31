@@ -52,7 +52,7 @@ The debugging process went through 5 deploy/test cycles:
 
 ## CPU Classifier
 
-The production classifier uses a CPU path — a simple Rust `match` on frame_type/frame_subtype that classifies 256 frames in ~1ms. This is actually **41x faster** than the per-frame QPU approach (which took ~43ms per batch due to ~170µs per QPU launch).
+The production classifier uses a CPU path — a simple Rust `match` on frame_type/frame_subtype that classifies 256 frames in ~1ms. This is **26x faster than bettercap** and 41x faster than the per-frame QPU approach (which took ~43ms per batch due to ~170µs per QPU launch).
 
 The QPU kernel is preserved in the codebase for future work (mailbox-based launch or lookup table approach that avoids conditionals).
 

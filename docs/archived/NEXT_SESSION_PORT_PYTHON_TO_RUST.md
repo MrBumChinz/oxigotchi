@@ -114,7 +114,7 @@ The Python angryoxide plugin (`plugin/angryoxide.py` v2.3.0) has many features t
 cd rust && cargo test
 
 # Cross-compile
-wsl -d Ubuntu -e bash -c 'source ~/.cargo/env && cd /mnt/c/msys64/home/user/oxigotchi/rust && export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc && cargo build --release --target aarch64-unknown-linux-musl'
+wsl -d Ubuntu -e bash -c 'source ~/.cargo/env && cd /path/to/oxigotchi/rust && export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc && cargo build --release --target aarch64-unknown-linux-musl'
 
 # Deploy (stop first to avoid "text file busy")
 ssh pi@10.0.0.2 "sudo systemctl stop pwnagotchi bettercap"

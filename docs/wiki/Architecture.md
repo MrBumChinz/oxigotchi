@@ -8,7 +8,13 @@
 
 A single Rust binary (`rusty-oxigotchi`) manages everything: it spawns AngryOxide as a subprocess, drives the e-ink display via SPI, runs the web dashboard on port 8080, manages Bluetooth tethering, executes Lua plugins, and monitors the WiFi firmware for crashes. Only one program touches the WiFi chip at a time — no TX/RX conflicts, no SDIO bus contention.
 
-The daemon operates in two modes: **RAGE** (WiFi monitor mode, AO attacking, BT off) and **SAFE** (WiFi managed mode, BT tethered to phone, no attacks). Toggle between them with the PiSugar3 button or the dashboard.
+The daemon operates in three modes:
+
+- **RAGE** — WiFi monitor mode, AngryOxide attacking, BT off. The default wardriving mode.
+- **BT** — Bluetooth offensive: HCI scanning, GATT resolution, BT attacks (ATT fuzz, KNOB, L2CAP fuzz/flood, SMP). WiFi off.
+- **SAFE** — WiFi managed mode, BT tethered to phone for internet, no attacks. Used for uploads and maintenance.
+
+Toggle between them with the **PiSugar3 button** (single tap) or the **web dashboard**. Mode transitions are atomic via `RadioManager`, which coordinates WiFi/BT hardware teardown and bringup including patchram loading for BT attack mode.
 
 ## Module Overview
 
@@ -27,7 +33,8 @@ src/
   capture/mod.rs    Capture file management, WPA-SEC upload queue, auto-backup
   wifi/mod.rs       WiFi monitor mode, channel hopping, AP tracker, whitelist
   pisugar/mod.rs    PiSugar 3 battery I2C, button debouncer, action mapping
-  bluetooth/mod.rs  Bluetooth PAN tethering manager
+  bluetooth/mod.rs  Bluetooth PAN tethering, HCI scanning, GATT discovery
+  bluetooth/attacks/ BT attack implementations: ATT fuzz, KNOB, L2CAP, SMP
   recovery/mod.rs   WiFi SDIO recovery, GPIO power cycle, watchdog
   qpu/
     mod.rs          QPU feature config (TOML serde)
@@ -37,7 +44,9 @@ src/
     mailbox.rs      VideoCore IV mailbox interface (/dev/vcio, GPU memory)
     rf.rs           Per-epoch RF environment statistics
     ringbuf.rs      SPSC ring buffer in GPU memory, FrameEntry extraction
-  web/mod.rs        REST API types, embedded HTML dashboard (23 cards)
+  rage/mod.rs       Rage level presets (1-3: Chill/Hunt/RAGE)
+  radio/mod.rs      Radio lock manager: atomic WiFi<->BT mode transitions
+  web/mod.rs        REST API types, embedded HTML dashboard
   migration/mod.rs  Import legacy pwnagotchi config and captures
 ```
 

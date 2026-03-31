@@ -41,7 +41,7 @@ See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint p
 ### Changed
 - **AO mode is now the default**: Ships as oxigotchi (not pwnagotchi) with AO mode enabled, rate 1, bull faces.
 - **Dual-IP networking**: USB gadget configured with both `10.0.0.2/24` and `192.168.137.2/24` for Windows ICS compatibility.
-- **Whitelist**: Set to `["Alpha", "Alpha 5G"]` in both config.toml and angryoxide-v5.toml overlay.
+- **Whitelist**: Set to `["YourNetwork", "YourNetwork-5G"]` in both config.toml and angryoxide-v5.toml overlay.
 - **Documentation updated**: DISPLAY_SPEC.md, IMAGE_FIXES.md, DEEP_ANALYSIS.md, README.md, CHANGELOG.md all updated to reflect current state.
 - **No security hardening (intentional)**: This is a toy for beginners. USB-only access mitigates risk.
 

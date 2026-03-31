@@ -20,10 +20,10 @@ The dashboard has 23 live cards organized by user journey:
 | **Core Stats** | Handshakes captured, APs seen, epoch count, uptime |
 | **Live E-ink Preview** | Real-time rendering of what the e-ink display shows |
 | **Battery** | PiSugar 3 charge level, charging state, estimated runtime |
-| **Bluetooth** | BT state, connected phone, RAGE/SAFE toggle |
+| **Bluetooth** | BT state, discovered devices, BT aggression level, mode toggle (RAGE/BT/SAFE) |
 | **WiFi** | Monitor mode status, current channel, interface state |
 | **Attack Toggles** | Per-attack-type enable/disable (deauth, PMKID, CSA, disassoc, anon reassoc, rogue M2) |
-| **RAGE Slider** | 7-level aggression preset — one slider controls rate, dwell, and channels |
+| **RAGE Slider** | 3-level aggression preset (Chill/Hunt/RAGE) — one slider controls rate, dwell, and channels |
 | **Smart Skip** | Toggle to skip APs you already have handshakes for |
 | **Recent Captures** | Latest handshakes with timestamps and AP names |
 | **Per-File Downloads** | Download individual .pcapng or .22000 files |
@@ -31,7 +31,7 @@ The dashboard has 23 live cards organized by user journey:
 | **Recovery Status** | WiFi firmware health, crash count, recovery state |
 | **Personality/XP** | Current level, XP progress, mood score |
 | **System Info** | CPU temp, memory, SD card usage, uptime |
-| **Mode Switch** | RAGE/SAFE mode buttons |
+| **Mode Switch** | RAGE/BT/SAFE mode buttons |
 | **System Controls** | Restart AO, shutdown Pi, restart SSH |
 | **Plugins** | Installed Lua plugins, enable/disable toggle |
 | **Nearby Networks** | APs currently visible to AngryOxide |
@@ -61,6 +61,6 @@ The dashboard is backed by a REST API. Key endpoints:
 | `/api/captures` | GET | List of capture files with metadata |
 | `/api/config` | GET/POST | Read or update daemon configuration |
 | `/api/attacks` | POST | Toggle individual attack types |
-| `/api/mode` | POST | Switch between RAGE and SAFE mode |
+| `/api/mode` | POST | Switch between RAGE, BT, and SAFE modes |
 | `/api/whitelist` | GET/POST | Manage network whitelist |
 | `/api/channels` | POST | Update channel configuration |

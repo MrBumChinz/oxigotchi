@@ -1,7 +1,7 @@
 # Next Session: Fix Rusty E-ink Display Driver
 
 ## Context
-Rusty Oxigotchi (Rust rewrite of pwnagotchi) is at `/c/msys64/home/user/oxigotchi/rust/`. It compiled, deployed to Pi Zero 2W, spawned AO successfully, web dashboard works on :8080, but the **e-ink display is broken** — garbled/blank output, EPD BUSY timeout errors.
+Rusty Oxigotchi (Rust rewrite of pwnagotchi) is at `/path/to/oxigotchi/rust/`. It compiled, deployed to Pi Zero 2W, spawned AO successfully, web dashboard works on :8080, but the **e-ink display is broken** — garbled/blank output, EPD BUSY timeout errors.
 
 We switched back to Python pwnagotchi for now (`systemctl enable pwnagotchi bettercap`). Rusty is disabled but the binary is at `/usr/local/bin/rusty-oxigotchi`.
 
@@ -36,7 +36,7 @@ Symptoms:
 
 4. **Test on Pi:** Cross-compile with WSL:
    ```
-   wsl -d Ubuntu -e bash -c 'source ~/.cargo/env && cd /mnt/c/msys64/home/user/oxigotchi/rust && export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc && cargo build --release --target aarch64-unknown-linux-musl'
+   wsl -d Ubuntu -e bash -c 'source ~/.cargo/env && cd /path/to/oxigotchi/rust && export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc && cargo build --release --target aarch64-unknown-linux-musl'
    ```
    Then deploy:
    ```
@@ -72,5 +72,5 @@ Symptoms:
 ## Don't Forget
 - Deploy to Pi AND repo
 - No security hardening (toy for newbies)
-- Never share ROM addresses or firmware disassembly
-- Check /c/msys64/home/user/oxigotchi/docs/ for full project docs
+- Never share ROM addresses or firmware internals
+- Check /path/to/oxigotchi/docs/ for full project docs

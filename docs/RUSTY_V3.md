@@ -724,7 +724,7 @@ These improvements would make the firmware fully autonomous — no userspace int
 ### Cross-Compile (from Windows with WSL)
 
 ```bash
-wsl -d Ubuntu -- bash -c "source ~/.cargo/env && cd /mnt/c/msys64/home/user/oxigotchi/rust && cargo build --release --target aarch64-unknown-linux-gnu"
+wsl -d Ubuntu -- bash -c "source ~/.cargo/env && cd /path/to/oxigotchi/rust && cargo build --release --target aarch64-unknown-linux-gnu"
 ```
 
 This produces the binary at:
