@@ -938,10 +938,11 @@ impl XpTracker {
         self.award(1); // passive XP for scanning
     }
 
-    /// Award XP for seeing APs this epoch. +1 per AP seen.
+    /// Award XP for seeing APs this epoch. +1 per AP, capped at 5.
+    /// Keeps idle leveling slow so handshakes feel rewarding.
     pub fn award_aps(&mut self, ap_count: u32) {
         if ap_count > 0 {
-            self.award(ap_count as u64);
+            self.award((ap_count as u64).min(5));
         }
     }
 

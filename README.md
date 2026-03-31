@@ -178,6 +178,7 @@ No pressure — this is free and always will be. But firmware reverse-engineerin
 - [**AngryOxide**](https://github.com/Ragnt/AngryOxide) — Rust-based 802.11 attack engine by Ragnt
 - [**Nexmon**](https://nexmon.org) — Firmware patching framework by the Secure Mobile Networking Lab
 - [**wpa-sec**](https://wpa-sec.stanev.org) — Free distributed WPA handshake cracking service
+- **Pwnagotchi plugin authors** — The Lua plugins in Oxigotchi were rebuilt from ideas pioneered by the pwnagotchi community: exp (XP/leveling), memtemp (system stats), bt-tether (Bluetooth), age (uptime), and many others. The original plugin ecosystem made pwnagotchi what it is.
 
 ## Legal
 
