@@ -1,6 +1,6 @@
 # Bluetooth Tethering on Pi Zero 2W
 
-> **Note (v3.1):** BT tethering uses D-Bus BlueZ directly — no nmcli, no manual MAC address needed. Pair your phone from the web dashboard, and the daemon handles everything: auto-reconnect with exponential backoff, iOS/Android MAC randomization via BlueZ bonding (IRK), and PAN networking via BlueZ `Network1.Connect("nap")`.
+> **Note (v3.2):** BT tethering uses D-Bus BlueZ directly — no nmcli, no manual MAC address needed. Pair your phone from the web dashboard, and the daemon handles everything: auto-reconnect with exponential backoff, iOS/Android MAC randomization via BlueZ bonding (IRK), and PAN networking via BlueZ `Network1.Connect("nap")`.
 
 ## Hardware: BCM43436B0 Dual-Bus Architecture
 
@@ -24,7 +24,7 @@ The daemon sets up BT tethering **before** starting WiFi monitor mode at boot:
 
 This order is important — starting WiFi monitor mode first can sometimes interfere with BT initialization. The daemon handles this automatically in `boot()` (see `rust/src/main.rs`).
 
-> **Default boot mode (v3.1):** The daemon boots into SAFE mode by default. Users can override this by setting `default_mode = "RAGE"` in `/etc/oxigotchi/config.toml` under `[main]`.
+> **Default boot mode (v3.2):** The daemon boots into SAFE mode by default. Users can override this by setting `default_mode = "RAGE"` in `/etc/oxigotchi/config.toml` under `[main]`.
 
 ## Config
 
