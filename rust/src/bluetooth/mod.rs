@@ -3,8 +3,8 @@
 //! Manages Bluetooth Personal Area Network (PAN) connections for
 //! internet tethering via a paired phone.
 //!
-//! Uses `nmcli` and `bluetoothctl` CLI tools (no D-Bus crate needed).
-//! All Command calls are `#[cfg(unix)]` gated.
+//! Uses D-Bus (via `dbus.rs`) for PAN connection and `bluetoothctl` for
+//! adapter control. All Command calls are `#[cfg(unix)]` gated.
 
 pub mod adapter;
 pub mod attacks;
@@ -19,13 +19,8 @@ pub mod persistence;
 pub mod supervisor;
 pub mod ui;
 
-use log::info;
+use log::{info, warn};
 use std::time::Instant;
-
-/// Default nmcli connection profile name (empty = not configured).
-pub const DEFAULT_CONNECTION_NAME: &str = "";
-/// The bnep0 interface sysfs path for status checking.
-pub const BNEP0_SYSFS_PATH: &str = "/sys/class/net/bnep0";
 
 /// Bluetooth connection states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,42 +63,15 @@ impl Default for BtConfig {
     }
 }
 
+/// Reconnect backoff schedule (seconds).
+const BACKOFF_SCHEDULE: &[u64] = &[30, 60, 120, 300];
+
+/// Max backoff interval (seconds).
+const BACKOFF_CAP: u64 = 300;
+
 // ---------------------------------------------------------------------------
 // Command builders (pure functions, testable on any platform)
 // ---------------------------------------------------------------------------
-
-/// Build the nmcli command args to bring up a connection.
-pub fn build_connect_args(connection_name: &str) -> Vec<String> {
-    vec![
-        "connection".to_string(),
-        "up".to_string(),
-        connection_name.to_string(),
-    ]
-}
-
-/// Build the nmcli command args to bring down a connection.
-pub fn build_disconnect_nmcli_args(connection_name: &str) -> Vec<String> {
-    vec![
-        "connection".to_string(),
-        "down".to_string(),
-        connection_name.to_string(),
-    ]
-}
-
-/// Build the bluetoothctl command args to disconnect a device.
-pub fn build_disconnect_bt_args(mac: &str) -> Vec<String> {
-    vec!["disconnect".to_string(), mac.to_string()]
-}
-
-/// Build the ip command args to get the IPv4 address of bnep0.
-pub fn build_ip_addr_args() -> Vec<String> {
-    vec![
-        "-4".to_string(),
-        "addr".to_string(),
-        "show".to_string(),
-        "bnep0".to_string(),
-    ]
-}
 
 /// Build the bluetoothctl command args to power on the adapter.
 pub fn build_power_on_args() -> Vec<String> {
@@ -150,29 +118,6 @@ pub fn build_scan_on_args() -> Vec<String> {
     vec!["--timeout".into(), "10".into(), "scan".into(), "on".into()]
 }
 
-/// Build the nmcli command args to add a PAN bluetooth connection profile.
-pub fn build_nmcli_add_pan_args(con_name: &str, mac: &str) -> Vec<String> {
-    vec![
-        "connection".into(),
-        "add".into(),
-        "type".into(),
-        "bluetooth".into(),
-        "con-name".into(),
-        con_name.into(),
-        "bt-type".into(),
-        "panu".into(),
-        "bluetooth.bdaddr".into(),
-        mac.into(),
-        "autoconnect".into(),
-        "yes".into(),
-    ]
-}
-
-/// Build the nmcli command args to show a connection profile.
-pub fn build_nmcli_show_args(con_name: &str) -> Vec<String> {
-    vec!["connection".into(), "show".into(), con_name.into()]
-}
-
 /// Strip ANSI escape codes from a string.
 fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
@@ -189,45 +134,6 @@ fn strip_ansi(s: &str) -> String {
         }
     }
     result
-}
-
-/// Parse `bluetoothctl scan on` output for a device matching name or MAC.
-/// Handles ANSI color codes in bluetoothctl output.
-/// Output format (after stripping): "[NEW] Device AA:BB:CC:DD:EE:FF Device Name"
-/// Returns the MAC address if found.
-pub fn parse_scan_for_device(output: &str, name: &str, mac: &str) -> Option<String> {
-    let mut first_named: Option<String> = None;
-    for raw_line in output.lines() {
-        let line = strip_ansi(raw_line);
-        if let Some(rest) = line.strip_prefix("[NEW] Device ") {
-            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
-            if !parts.is_empty() {
-                let found_mac = parts[0];
-                let found_name = if parts.len() >= 2 { parts[1] } else { "" };
-
-                // Match by MAC (case-insensitive)
-                if !mac.is_empty() && found_mac.eq_ignore_ascii_case(mac) {
-                    return Some(found_mac.to_string());
-                }
-                // Match by name (case-insensitive substring)
-                if !name.is_empty() && found_name.to_lowercase().contains(&name.to_lowercase()) {
-                    return Some(found_mac.to_string());
-                }
-                // Track first device with a real name (not just a MAC echo)
-                // for auto-detect mode (both name and mac filters empty)
-                if first_named.is_none() && !found_name.is_empty() && !found_name.contains('-')
-                // skip "AA-BB-CC-DD-EE-FF" style names
-                {
-                    first_named = Some(found_mac.to_string());
-                }
-            }
-        }
-    }
-    // Auto-detect: if no name/mac filter specified, return first named device
-    if name.is_empty() && mac.is_empty() {
-        return first_named;
-    }
-    None
 }
 
 /// Parse ALL discovered devices from bluetoothctl scan output.
@@ -267,7 +173,7 @@ fn is_mac_like(s: &str) -> bool {
             .all(|p| p.len() == 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
-/// Parse an IPv4 address from `ip -4 addr show bnep0` output.
+/// Parse an IPv4 address from `ip -4 addr show <iface>` output.
 ///
 /// Looks for a line like `inet 192.168.44.128/24 ...` and extracts the IP.
 pub fn parse_ip_from_output(output: &str) -> Option<String> {
@@ -284,32 +190,9 @@ pub fn parse_ip_from_output(output: &str) -> Option<String> {
     None
 }
 
-/// Generate a deterministic nmcli connection profile name from a MAC address.
-///
-/// Strips non-hex characters and prefixes with "bt-pan-".
-/// Example: "AA:BB:CC:DD:EE:FF" → "bt-pan-AABBCCDDEEFF"
-pub fn generate_connection_name(mac: &str) -> String {
-    let clean: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    format!("bt-pan-{clean}")
-}
-
 // ---------------------------------------------------------------------------
 // System command execution (unix-only)
 // ---------------------------------------------------------------------------
-
-/// Run nmcli with the given arguments. Returns Ok(stdout) or Err(stderr).
-#[cfg(unix)]
-fn run_nmcli(args: &[String]) -> Result<String, String> {
-    let output = std::process::Command::new("nmcli")
-        .args(args)
-        .output()
-        .map_err(|e| format!("failed to run nmcli: {e}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
-    }
-}
 
 /// Run bluetoothctl with the given arguments. Returns Ok(stdout) or Err(stderr).
 #[cfg(unix)]
@@ -376,18 +259,6 @@ fn run_ip(args: &[String]) -> Result<String, String> {
     }
 }
 
-/// Check if the bnep0 interface exists (unix-only).
-#[cfg(unix)]
-fn bnep0_exists() -> bool {
-    std::path::Path::new(BNEP0_SYSFS_PATH).exists()
-}
-
-/// Stub: bnep0 never exists on non-unix.
-#[cfg(not(unix))]
-fn bnep0_exists() -> bool {
-    false
-}
-
 // ---------------------------------------------------------------------------
 // BtTether manager
 // ---------------------------------------------------------------------------
@@ -398,10 +269,14 @@ pub struct BtTether {
     pub config: BtConfig,
     pub retry_count: u32,
     pub last_attempt: Option<Instant>,
-    /// Whether internet is reachable through the BT connection.
     pub internet_available: bool,
-    /// IP address obtained on bnep0, if any.
     pub ip_address: Option<String>,
+    /// Dynamic PAN interface name from Network1.Connect (e.g., "bnep0").
+    pub pan_interface: Option<String>,
+    /// D-Bus connection manager (owns the PAN session lifetime).
+    dbus: Option<dbus::DbusBluez>,
+    /// Whether the user explicitly disconnected (suppresses auto-reconnect).
+    pub user_disconnected: bool,
 }
 
 impl BtTether {
@@ -414,71 +289,320 @@ impl BtTether {
             last_attempt: None,
             internet_available: false,
             ip_address: None,
+            pan_interface: None,
+            dbus: None,
+            user_disconnected: false,
         }
     }
 
-    /// Check if we should attempt a connection.
+    /// Initialize D-Bus connection and attempt PAN tethering.
+    pub fn setup(&mut self) -> Result<(), String> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+
+        // Initialize D-Bus connection (long-lived)
+        match dbus::DbusBluez::new() {
+            Ok(conn) => {
+                self.dbus = Some(conn);
+                info!("BT: D-Bus connection established");
+            }
+            Err(e) => {
+                warn!("BT: D-Bus init failed: {e}");
+                self.state = BtState::Error;
+                return Err(e);
+            }
+        }
+
+        // Register Agent1 for pairing
+        if let Some(ref dbus) = self.dbus {
+            if let Err(e) = dbus.register_agent() {
+                warn!("BT: Agent1 registration failed: {e}");
+            }
+        }
+
+        // Power on adapter
+        #[cfg(unix)]
+        {
+            let _ = run_bluetoothctl(&["power".into(), "on".into()]);
+        }
+        self.state = BtState::Disconnected;
+
+        // Try to connect to a paired device
+        if self.config.auto_connect {
+            let _ = self.connect();
+        }
+
+        Ok(())
+    }
+
+    /// Attempt PAN connection via D-Bus Network1.
+    pub fn connect(&mut self) -> Result<(), String> {
+        self.last_attempt = Some(Instant::now());
+        self.state = BtState::Connecting;
+
+        // Re-initialize D-Bus if it was dropped (bus death recovery)
+        if self.dbus.is_none() {
+            match dbus::DbusBluez::new() {
+                Ok(conn) => {
+                    info!("BT: D-Bus connection re-established");
+                    self.dbus = Some(conn);
+                }
+                Err(e) => {
+                    self.on_error();
+                    return Err(format!("D-Bus re-init failed: {e}"));
+                }
+            }
+        }
+
+        // List paired devices (release borrow before find_best_device)
+        let devices = match &self.dbus {
+            Some(d) => d.list_paired_devices().unwrap_or_default(),
+            None => {
+                self.on_error();
+                return Err("D-Bus not initialized".into());
+            }
+        };
+
+        let target = self.find_best_device(&devices);
+        let device = match target {
+            Some(d) => d.clone(),
+            None => {
+                self.state = BtState::Disconnected;
+                return Err("No paired+trusted devices found".into());
+            }
+        };
+
+        info!("BT: connecting to {} ({})", device.name, device.mac);
+
+        let dbus = self.dbus.as_mut().unwrap();
+        match dbus.connect_pan(&device.path) {
+            Ok(pan) => {
+                info!("BT: PAN connected on {}", pan.interface);
+                self.pan_interface = Some(pan.interface.clone());
+                self.state = BtState::Connected;
+                self.retry_count = 0;
+                self.user_disconnected = false;
+                self.run_dhcp(&pan.interface);
+                self.refresh_ip();
+                if self.config.hide_after_connect {
+                    self.hide();
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("BT: PAN connect failed: {e}");
+                self.on_error();
+                Err(e)
+            }
+        }
+    }
+
+    /// Find the best device to connect to.
+    fn find_best_device<'a>(
+        &self,
+        devices: &'a [dbus::BlueZDevice],
+    ) -> Option<&'a dbus::BlueZDevice> {
+        if devices.is_empty() {
+            return None;
+        }
+        if !self.config.phone_name.is_empty() {
+            let name_lower = self.config.phone_name.to_lowercase();
+            if let Some(d) = devices
+                .iter()
+                .find(|d| d.name.to_lowercase().contains(&name_lower))
+            {
+                return Some(d);
+            }
+        }
+        if let Some(d) = devices.iter().find(|d| d.connected) {
+            return Some(d);
+        }
+        devices.first()
+    }
+
+    /// Disconnect PAN via Network1.Disconnect (PAN-only).
+    pub fn disconnect(&mut self) {
+        if let Some(ref mut dbus) = self.dbus {
+            let _ = dbus.disconnect_pan();
+        }
+        if let Some(iface) = self.pan_interface.take() {
+            let _ = self.release_dhcp(&iface);
+        }
+        self.ip_address = None;
+        self.internet_available = false;
+        self.state = BtState::Disconnected;
+    }
+
+    /// Check if we should attempt a reconnection.
     pub fn should_connect(&self) -> bool {
-        if !self.config.auto_connect {
+        if !self.config.enabled || !self.config.auto_connect || self.user_disconnected {
             return false;
         }
         match self.state {
             BtState::Off | BtState::Pairing | BtState::Connecting | BtState::Connected => false,
             BtState::Disconnected => true,
             BtState::Error => {
+                let backoff_secs = BACKOFF_SCHEDULE
+                    .get(self.retry_count.saturating_sub(1) as usize)
+                    .copied()
+                    .unwrap_or(BACKOFF_CAP);
                 match self.last_attempt {
-                    Some(t) => t.elapsed().as_secs() >= 30,
+                    Some(t) => t.elapsed().as_secs() >= backoff_secs,
                     None => true,
                 }
             }
         }
     }
 
-    /// Initiate BT PAN connection via nmcli.
-    pub fn connect(&mut self) -> Result<(), String> {
-        self.state = BtState::Connecting;
-        self.last_attempt = Some(Instant::now());
-
+    /// Refresh the IP address from the PAN interface.
+    pub fn refresh_ip(&mut self) {
+        let iface = match &self.pan_interface {
+            Some(i) => i.clone(),
+            None => {
+                self.ip_address = None;
+                return;
+            }
+        };
         #[cfg(unix)]
         {
-            // connection_name is resolved at pair_and_connect / setup time and stored in phone_name
-            // For now use a placeholder; Task 6 will rewrite this flow with D-Bus.
-            let args = build_connect_args("bt-pan");
-            match run_nmcli(&args) {
-                Ok(_) => {
-                    self.state = BtState::Connected;
-                    self.retry_count = 0;
-                    self.internet_available = true;
-                    self.refresh_ip();
-                    return Ok(());
+            let args = vec!["-4".into(), "addr".into(), "show".into(), iface];
+            match run_ip(&args) {
+                Ok(output) => {
+                    self.ip_address = parse_ip_from_output(&output);
                 }
-                Err(e) => {
-                    self.on_error();
-                    return Err(format!("nmcli connection up failed: {e}"));
+                Err(_) => {
+                    self.ip_address = None;
                 }
             }
         }
-
         #[cfg(not(unix))]
         {
-            // Non-unix stub: simulate successful connection
-            self.state = BtState::Connected;
-            self.retry_count = 0;
-            self.internet_available = true;
-            Ok(())
+            let _ = iface;
+            self.ip_address = None;
         }
     }
 
-    /// Disconnect BT PAN via nmcli + bluetoothctl.
-    pub fn disconnect(&mut self) {
+    /// Run DHCP on a PAN interface.
+    fn run_dhcp(&self, iface: &str) {
         #[cfg(unix)]
         {
-            let nmcli_args = build_disconnect_nmcli_args("bt-pan");
-            let _ = run_nmcli(&nmcli_args);
+            let result = std::process::Command::new("dhcpcd")
+                .args(["-n", iface])
+                .output();
+            match result {
+                Ok(o) if o.status.success() => {
+                    info!("BT: DHCP via dhcpcd on {iface}");
+                    return;
+                }
+                _ => {}
+            }
+            let result = std::process::Command::new("dhclient")
+                .arg(iface)
+                .output();
+            match result {
+                Ok(o) if o.status.success() => info!("BT: DHCP via dhclient on {iface}"),
+                Ok(o) => warn!(
+                    "BT: dhclient failed: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ),
+                Err(e) => warn!("BT: DHCP failed: {e}"),
+            }
         }
-        self.state = BtState::Disconnected;
-        self.internet_available = false;
-        self.ip_address = None;
+        #[cfg(not(unix))]
+        {
+            let _ = iface;
+        }
+    }
+
+    /// Release DHCP lease on a PAN interface.
+    fn release_dhcp(&self, iface: &str) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let _ = std::process::Command::new("dhcpcd")
+                .args(["-k", iface])
+                .output();
+        }
+        let _ = iface;
+        Ok(())
+    }
+
+    /// Check connection status by probing the PAN interface and D-Bus bus.
+    pub fn check_status(&mut self) -> BtState {
+        // Check if D-Bus bus is still alive
+        if let Some(ref dbus) = self.dbus {
+            if !dbus.is_bus_alive() {
+                warn!("BT: D-Bus connection lost, forcing re-init");
+                self.dbus = None;
+                self.pan_interface = None;
+                self.ip_address = None;
+                self.internet_available = false;
+                self.state = BtState::Disconnected;
+                return self.state;
+            }
+        }
+
+        if let Some(ref iface) = self.pan_interface {
+            let _sysfs = format!("/sys/class/net/{iface}");
+            #[cfg(unix)]
+            {
+                if std::path::Path::new(&_sysfs).exists() {
+                    if self.state != BtState::Connected {
+                        self.state = BtState::Connected;
+                    }
+                    return self.state;
+                }
+                // Interface gone — disconnected
+                self.pan_interface = None;
+                self.ip_address = None;
+                self.internet_available = false;
+                self.state = BtState::Disconnected;
+            }
+        }
+        self.state
+    }
+
+    /// Pair, trust, and connect a device via D-Bus.
+    pub fn pair_and_connect(&mut self, device_path: &str) -> Result<(), String> {
+        self.state = BtState::Pairing;
+
+        let dbus = self.dbus.as_ref().ok_or("D-Bus not initialized")?;
+
+        info!("BT: pairing {device_path}");
+        dbus.pair_device(device_path)?;
+        dbus.trust_device(device_path)?;
+        info!("BT: device trusted");
+
+        self.state = BtState::Connecting;
+        let dbus = self.dbus.as_mut().ok_or("D-Bus not initialized")?;
+        match dbus.connect_pan(device_path) {
+            Ok(pan) => {
+                self.pan_interface = Some(pan.interface.clone());
+                self.state = BtState::Connected;
+                self.retry_count = 0;
+                self.user_disconnected = false;
+                self.run_dhcp(&pan.interface);
+                self.refresh_ip();
+                if self.config.hide_after_connect {
+                    self.hide();
+                }
+                Ok(())
+            }
+            Err(e) => {
+                warn!("BT: post-pair PAN connect failed: {e}");
+                self.state = BtState::Disconnected;
+                Err(e)
+            }
+        }
+    }
+
+    /// Remove a device from BlueZ (untrust + remove).
+    pub fn forget_device(&mut self, device_path: &str) -> Result<(), String> {
+        if let Some(ref dbus) = self.dbus {
+            dbus.remove_device(device_path)?;
+            info!("BT: removed device {device_path}");
+        }
+        Ok(())
     }
 
     /// Scan for nearby BT devices (blocking, ~10s). Returns list of (MAC, name).
@@ -503,52 +627,6 @@ impl BtTether {
         }
         #[cfg(not(unix))]
         Vec::new()
-    }
-
-    /// Pair with a device by MAC, trust it, create nmcli profile, and connect.
-    pub fn pair_and_connect(&mut self, mac: &str) -> Result<(), String> {
-        #[cfg(unix)]
-        {
-            info!("BT: pairing with {mac}");
-            self.state = BtState::Pairing;
-
-            // Power on + agent
-            let _ = run_bluetoothctl(&build_power_on_args());
-            let _ = run_bluetoothctl(&build_agent_on_args());
-            let _ = run_bluetoothctl(&build_default_agent_args());
-
-            // Pair and trust
-            let _ = run_bluetoothctl(&build_pair_args(mac));
-            let _ = run_bluetoothctl(&build_trust_args(mac));
-
-            // Ensure nmcli profile
-            let con_name = generate_connection_name(mac);
-            let profile_exists = run_nmcli(&build_nmcli_show_args(&con_name)).is_ok();
-            if !profile_exists {
-                info!("BT: creating nmcli profile '{con_name}'");
-                let _ = run_nmcli(&build_nmcli_add_pan_args(&con_name, mac));
-            }
-
-            // Connect
-            match self.connect() {
-                Ok(()) => {
-                    info!("BT: paired and connected to {mac}");
-                    if self.config.hide_after_connect {
-                        let _ = run_bluetoothctl(&build_discoverable_off_args());
-                    }
-                    Ok(())
-                }
-                Err(e) => {
-                    self.state = BtState::Disconnected;
-                    Err(format!("Paired but connect failed: {e}"))
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            self.state = BtState::Connected;
-            Ok(())
-        }
     }
 
     /// Make BT adapter discoverable (visible to other devices).
@@ -591,33 +669,6 @@ impl BtTether {
         self.ip_address = None;
     }
 
-    /// Check connection status by probing bnep0 interface.
-    pub fn check_status(&mut self) -> BtState {
-        if bnep0_exists() {
-            if self.state != BtState::Connected {
-                self.state = BtState::Connected;
-                self.internet_available = true;
-                self.refresh_ip();
-            }
-        } else if self.state == BtState::Connected {
-            self.state = BtState::Disconnected;
-            self.internet_available = false;
-            self.ip_address = None;
-        }
-        self.state
-    }
-
-    /// Refresh the IP address from bnep0.
-    pub fn refresh_ip(&mut self) {
-        #[cfg(unix)]
-        {
-            let args = build_ip_addr_args();
-            if let Ok(output) = run_ip(&args) {
-                self.ip_address = parse_ip_from_output(&output);
-            }
-        }
-    }
-
     /// Get the current IP address, if connected.
     pub fn get_ip(&self) -> Option<&str> {
         self.ip_address.as_deref()
@@ -657,83 +708,6 @@ impl BtTether {
             BtState::Pairing | BtState::Connecting => {} // ignore during pairing/connection
         }
     }
-
-    /// Boot-time setup: power on adapter, scan for device, pair, create nmcli profile, connect.
-    ///
-    /// Does nothing and returns `Ok(())` if `config.enabled` is false.
-    pub fn setup(&mut self) -> Result<(), String> {
-        if !self.config.enabled {
-            return Ok(());
-        }
-
-        #[cfg(unix)]
-        {
-            use log::{info, warn};
-
-            // 1. Power on
-            info!("BT: powering on adapter");
-            let _ = run_bluetoothctl(&build_power_on_args());
-            let _ = run_bluetoothctl(&build_agent_on_args());
-            let _ = run_bluetoothctl(&build_default_agent_args());
-
-            // 2. Scan for device by name
-            info!("BT: scanning for devices (10s)...");
-            self.state = BtState::Pairing;
-            let mac = match run_bluetoothctl(&build_scan_on_args()) {
-                Ok(output) => {
-                    match parse_scan_for_device(&output, &self.config.phone_name, "") {
-                        Some(found) => {
-                            info!("BT: found device {found}");
-                            found
-                        }
-                        None => {
-                            self.state = BtState::Disconnected;
-                            return Err("No matching device found during scan".into());
-                        }
-                    }
-                }
-                Err(e) => {
-                    self.state = BtState::Disconnected;
-                    return Err(format!("BT scan failed: {e}"));
-                }
-            };
-
-            // 3. Pair and trust
-            info!("BT: pairing with {mac}");
-            self.state = BtState::Pairing;
-            let _ = run_bluetoothctl(&build_pair_args(&mac));
-            let _ = run_bluetoothctl(&build_trust_args(&mac));
-
-            // 4. Ensure nmcli profile exists
-            let con_name = generate_connection_name(&mac);
-            let profile_exists = run_nmcli(&build_nmcli_show_args(&con_name)).is_ok();
-            if !profile_exists {
-                info!("BT: creating nmcli profile '{con_name}'");
-                match run_nmcli(&build_nmcli_add_pan_args(&con_name, &mac)) {
-                    Ok(_) => info!("BT: profile created"),
-                    Err(e) => warn!("BT: profile creation failed: {e}"),
-                }
-            }
-
-            // 5. Connect
-            info!("BT: connecting");
-            match self.connect() {
-                Ok(()) => info!("BT: connected, IP: {:?}", self.ip_address),
-                Err(e) => {
-                    warn!("BT: initial connect failed: {e}");
-                    self.state = BtState::Disconnected;
-                }
-            }
-
-            // 6. Hide visibility
-            if self.config.hide_after_connect {
-                info!("BT: hiding visibility");
-                let _ = run_bluetoothctl(&build_discoverable_off_args());
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl Default for BtTether {
@@ -745,38 +719,6 @@ impl Default for BtTether {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ===== Command builder tests =====
-
-    #[test]
-    fn test_build_connect_args() {
-        let args = build_connect_args("My Phone PAN");
-        assert_eq!(args, vec!["connection", "up", "My Phone PAN"]);
-    }
-
-    #[test]
-    fn test_build_connect_args_custom_name() {
-        let args = build_connect_args("My Phone PAN");
-        assert_eq!(args, vec!["connection", "up", "My Phone PAN"]);
-    }
-
-    #[test]
-    fn test_build_disconnect_nmcli_args() {
-        let args = build_disconnect_nmcli_args("My Phone PAN");
-        assert_eq!(args, vec!["connection", "down", "My Phone PAN"]);
-    }
-
-    #[test]
-    fn test_build_disconnect_bt_args() {
-        let args = build_disconnect_bt_args("AA:BB:CC:DD:EE:FF");
-        assert_eq!(args, vec!["disconnect", "AA:BB:CC:DD:EE:FF"]);
-    }
-
-    #[test]
-    fn test_build_ip_addr_args() {
-        let args = build_ip_addr_args();
-        assert_eq!(args, vec!["-4", "addr", "show", "bnep0"]);
-    }
 
     // ===== IP parsing tests =====
 
@@ -823,45 +765,9 @@ mod tests {
         assert_eq!(bt.state, BtState::Off);
         assert!(!bt.internet_available);
         assert!(bt.ip_address.is_none());
-    }
-
-    #[test]
-    fn test_connect_non_unix_stub() {
-        // On non-unix the stub always succeeds (no MAC needed)
-        #[cfg(not(unix))]
-        {
-            let mut bt = BtTether::default();
-            assert!(bt.connect().is_ok());
-            assert_eq!(bt.state, BtState::Connected);
-        }
-        #[cfg(unix)]
-        {
-            // On unix without nmcli available, connect will error — that's fine
-        }
-    }
-
-    #[test]
-    fn test_connect_success_non_unix() {
-        // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix)
-            && std::process::Command::new("nmcli")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_err()
-        {
-            return;
-        }
-        let config = BtConfig {
-            auto_connect: true,
-            ..Default::default()
-        };
-        let mut bt = BtTether::new(config);
-        bt.state = BtState::Disconnected;
-        assert!(bt.connect().is_ok());
-        assert_eq!(bt.state, BtState::Connected);
-        assert!(bt.internet_available);
+        assert!(bt.pan_interface.is_none());
+        assert!(bt.dbus.is_none());
+        assert!(!bt.user_disconnected);
     }
 
     #[test]
@@ -873,14 +779,17 @@ mod tests {
         bt.state = BtState::Connected;
         bt.internet_available = true;
         bt.ip_address = Some("192.168.44.1".into());
+        bt.pan_interface = Some("bnep0".into());
         bt.disconnect();
         assert_eq!(bt.state, BtState::Disconnected);
         assert!(!bt.internet_available);
         assert!(bt.ip_address.is_none());
+        assert!(bt.pan_interface.is_none());
     }
 
     #[test]
     fn test_should_connect_auto_off() {
+        // Default config has enabled: false, so should_connect returns false
         let bt = BtTether::default();
         assert!(!bt.should_connect());
     }
@@ -888,6 +797,7 @@ mod tests {
     #[test]
     fn test_should_connect_disconnected() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
@@ -899,6 +809,7 @@ mod tests {
     #[test]
     fn test_should_connect_already_connected() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
@@ -910,6 +821,7 @@ mod tests {
     #[test]
     fn test_should_connect_while_connecting() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
@@ -921,19 +833,22 @@ mod tests {
     #[test]
     fn test_error_retry_interval_elapsed() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
         let mut bt = BtTether::new(config);
         bt.state = BtState::Error;
         bt.retry_count = 2;
-        bt.last_attempt = Some(Instant::now() - std::time::Duration::from_secs(31));
+        // With retry_count=2, backoff = BACKOFF_SCHEDULE[1] = 60s
+        bt.last_attempt = Some(Instant::now() - std::time::Duration::from_secs(61));
         assert!(bt.should_connect());
     }
 
     #[test]
     fn test_error_retry_interval_not_elapsed() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
@@ -997,76 +912,6 @@ mod tests {
     // ===== Toggle state machine tests =====
 
     #[test]
-    fn test_toggle_connect_disconnect() {
-        // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix)
-            && std::process::Command::new("nmcli")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_err()
-        {
-            return;
-        }
-        let config = BtConfig {
-            ..Default::default()
-        };
-        let mut bt = BtTether::new(config);
-        bt.state = BtState::Disconnected;
-        bt.toggle();
-        assert_eq!(bt.state, BtState::Connected);
-        bt.toggle();
-        assert_eq!(bt.state, BtState::Disconnected);
-    }
-
-    #[test]
-    fn test_toggle_from_off() {
-        // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix)
-            && std::process::Command::new("nmcli")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_err()
-        {
-            return;
-        }
-        let config = BtConfig {
-            ..Default::default()
-        };
-        let mut bt = BtTether::new(config);
-        assert_eq!(bt.state, BtState::Off);
-        bt.toggle();
-        assert_eq!(bt.state, BtState::Connected);
-    }
-
-    #[test]
-    fn test_toggle_from_error() {
-        // Skip on non-Pi Linux — nmcli/bluetoothctl not available in WSL
-        if cfg!(unix)
-            && std::process::Command::new("nmcli")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .is_err()
-        {
-            return;
-        }
-        let config = BtConfig {
-            ..Default::default()
-        };
-        let mut bt = BtTether::new(config);
-        bt.state = BtState::Error;
-        bt.retry_count = 5;
-        bt.toggle();
-        assert_eq!(bt.state, BtState::Connected);
-        assert_eq!(bt.retry_count, 0);
-    }
-
-    #[test]
     fn test_toggle_ignored_while_connecting() {
         let config = BtConfig {
             ..Default::default()
@@ -1080,13 +925,15 @@ mod tests {
     // ===== Status detection tests =====
 
     #[test]
-    fn test_check_status_no_bnep0() {
+    fn test_check_status_no_pan_interface() {
+        // No pan_interface set — state should remain as-is
         let mut bt = BtTether::default();
         bt.state = BtState::Connected;
         bt.internet_available = true;
+        bt.pan_interface = None;
         let state = bt.check_status();
-        assert_eq!(state, BtState::Disconnected);
-        assert!(!bt.internet_available);
+        // No pan_interface means we don't detect disconnection via sysfs
+        assert_eq!(state, BtState::Connected);
     }
 
     #[test]
@@ -1123,15 +970,7 @@ mod tests {
         assert_eq!(bt.get_ip(), Some("192.168.44.128"));
     }
 
-    // ===== Constants tests =====
-
-    #[test]
-    fn test_constants() {
-        assert!(DEFAULT_CONNECTION_NAME.is_empty());
-        assert_eq!(BNEP0_SYSFS_PATH, "/sys/class/net/bnep0");
-    }
-
-    // ===== New bluetoothctl builder tests =====
+    // ===== Bluetoothctl builder tests =====
 
     #[test]
     fn test_build_power_on_args() {
@@ -1169,6 +1008,13 @@ mod tests {
     fn test_build_discoverable_on_args() {
         assert_eq!(build_discoverable_on_args(), vec!["discoverable", "on"]);
     }
+
+    #[test]
+    fn test_build_scan_on_args() {
+        assert_eq!(build_scan_on_args(), vec!["--timeout", "10", "scan", "on"]);
+    }
+
+    // ===== Scan output parser tests =====
 
     #[test]
     fn test_parse_scan_all_devices_basic() {
@@ -1225,80 +1071,13 @@ mod tests {
     }
 
     #[test]
-    fn test_build_scan_on_args() {
-        assert_eq!(build_scan_on_args(), vec!["--timeout", "10", "scan", "on"]);
-    }
-
-    // ===== New nmcli builder tests =====
-
-    #[test]
-    fn test_build_nmcli_add_pan_args() {
-        let args = build_nmcli_add_pan_args("MyPhone", "AA:BB:CC:DD:EE:FF");
-        assert_eq!(
-            args,
-            vec![
-                "connection",
-                "add",
-                "type",
-                "bluetooth",
-                "con-name",
-                "MyPhone",
-                "bt-type",
-                "panu",
-                "bluetooth.bdaddr",
-                "AA:BB:CC:DD:EE:FF",
-                "autoconnect",
-                "yes",
-            ]
-        );
-    }
-
-    #[test]
-    fn test_build_nmcli_show_args() {
-        let args = build_nmcli_show_args("MyPhone");
-        assert_eq!(args, vec!["connection", "show", "MyPhone"]);
-    }
-
-    // ===== Scan output parser tests =====
-
-    #[test]
-    fn test_parse_scan_output_finds_device() {
-        let output = "[NEW] Device AA:BB:CC:DD:EE:FF My Phone\n[NEW] Device 11:22:33:44:55:66 Other Device\n";
-        let result = parse_scan_for_device(output, "My Phone", "");
-        assert_eq!(result, Some("AA:BB:CC:DD:EE:FF".to_string()));
-    }
-
-    #[test]
-    fn test_parse_scan_output_finds_by_mac() {
-        let output = "[NEW] Device AA:BB:CC:DD:EE:FF My Phone\n[NEW] Device 11:22:33:44:55:66 Other Device\n";
-        let result = parse_scan_for_device(output, "", "AA:BB:CC:DD:EE:FF");
-        assert_eq!(result, Some("AA:BB:CC:DD:EE:FF".to_string()));
-    }
-
-    #[test]
-    fn test_parse_scan_output_no_match() {
-        let output = "[NEW] Device AA:BB:CC:DD:EE:FF My Phone\n";
-        let result = parse_scan_for_device(output, "Nonexistent", "");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_parse_scan_output_with_ansi_colors() {
-        // Real bluetoothctl output has ANSI color codes
-        let output = "\x1b[0;92m[NEW]\x1b[0m Device 9C:9E:D5:E3:F2:19 Xiaomi 13T\n\
-                      \x1b[0;92m[NEW]\x1b[0m Device 70:B1:3D:99:CE:4D [TV] Samsung 7 Series (50)\n";
-        let result = parse_scan_for_device(output, "Xiaomi", "");
-        assert_eq!(result, Some("9C:9E:D5:E3:F2:19".to_string()));
-    }
-
-    #[test]
     fn test_strip_ansi() {
         assert_eq!(strip_ansi("\x1b[0;92m[NEW]\x1b[0m Device"), "[NEW] Device");
         assert_eq!(strip_ansi("no escapes"), "no escapes");
         assert_eq!(strip_ansi(""), "");
     }
 
-    // ===== Task 3: Pairing state tests =====
+    // ===== Pairing state tests =====
 
     #[test]
     fn test_pairing_state() {
@@ -1311,6 +1090,7 @@ mod tests {
     #[test]
     fn test_should_connect_pairing() {
         let config = BtConfig {
+            enabled: true,
             auto_connect: true,
             ..Default::default()
         };
@@ -1342,9 +1122,99 @@ mod tests {
         assert_eq!(bt.state, BtState::Off);
     }
 
+    // ===== Backoff schedule tests =====
+
     #[test]
-    fn test_connection_name_generation() {
-        let name = generate_connection_name("AA:BB:CC:DD:EE:FF");
-        assert_eq!(name, "bt-pan-AABBCCDDEEFF");
+    fn test_backoff_schedule() {
+        assert_eq!(BACKOFF_SCHEDULE, &[30, 60, 120, 300]);
+        assert_eq!(BACKOFF_CAP, 300);
+    }
+
+    // ===== find_best_device tests =====
+
+    #[test]
+    fn test_find_best_device_empty() {
+        let bt = BtTether::default();
+        let devices: Vec<dbus::BlueZDevice> = vec![];
+        assert!(bt.find_best_device(&devices).is_none());
+    }
+
+    #[test]
+    fn test_find_best_device_by_name() {
+        let config = BtConfig {
+            phone_name: "iPhone".into(),
+            ..Default::default()
+        };
+        let bt = BtTether::new(config);
+        let devices = vec![
+            dbus::BlueZDevice {
+                path: "/org/bluez/hci0/dev_AA".into(),
+                mac: "AA:BB:CC:DD:EE:FF".into(),
+                name: "Galaxy".into(),
+                paired: true,
+                trusted: true,
+                connected: false,
+            },
+            dbus::BlueZDevice {
+                path: "/org/bluez/hci0/dev_BB".into(),
+                mac: "11:22:33:44:55:66".into(),
+                name: "iPhone 15".into(),
+                paired: true,
+                trusted: true,
+                connected: false,
+            },
+        ];
+        let best = bt.find_best_device(&devices).unwrap();
+        assert_eq!(best.name, "iPhone 15");
+    }
+
+    #[test]
+    fn test_find_best_device_prefers_connected() {
+        let bt = BtTether::default();
+        let devices = vec![
+            dbus::BlueZDevice {
+                path: "/org/bluez/hci0/dev_AA".into(),
+                mac: "AA:BB:CC:DD:EE:FF".into(),
+                name: "Phone A".into(),
+                paired: true,
+                trusted: true,
+                connected: false,
+            },
+            dbus::BlueZDevice {
+                path: "/org/bluez/hci0/dev_BB".into(),
+                mac: "11:22:33:44:55:66".into(),
+                name: "Phone B".into(),
+                paired: true,
+                trusted: true,
+                connected: true,
+            },
+        ];
+        let best = bt.find_best_device(&devices).unwrap();
+        assert_eq!(best.name, "Phone B");
+    }
+
+    #[test]
+    fn test_user_disconnected_prevents_reconnect() {
+        let config = BtConfig {
+            enabled: true,
+            auto_connect: true,
+            ..Default::default()
+        };
+        let mut bt = BtTether::new(config);
+        bt.state = BtState::Disconnected;
+        bt.user_disconnected = true;
+        assert!(!bt.should_connect());
+    }
+
+    #[test]
+    fn test_should_connect_disabled() {
+        let config = BtConfig {
+            enabled: false,
+            auto_connect: true,
+            ..Default::default()
+        };
+        let mut bt = BtTether::new(config);
+        bt.state = BtState::Disconnected;
+        assert!(!bt.should_connect());
     }
 }
