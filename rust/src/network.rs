@@ -62,13 +62,22 @@ pub enum InternetStatus {
     Offline,
 }
 
-/// Which IP to show on the e-ink display (rotation).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DisplaySlot {
-    /// Show USB IP + port, e.g. "USB:10.0.0.2 :8080"
-    UsbIp,
-    /// Show Bluetooth IP, e.g. "BT:192.168.44.128"
-    BtIp,
+/// Format USB IP for e-ink display. Always shown.
+pub fn format_usb_ip(ip: Option<&str>) -> String {
+    if let Some(ip) = ip {
+        format!("USB:{ip} :8080")
+    } else {
+        "USB:--".to_string()
+    }
+}
+
+/// Format BT IP for e-ink display. Empty when not connected.
+pub fn format_bt_ip(ip: Option<&str>) -> String {
+    if let Some(ip) = ip {
+        format!("BT:{ip}")
+    } else {
+        String::new()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -183,38 +192,6 @@ pub fn parse_operstate(content: &str) -> Usb0State {
     }
 }
 
-/// Format an IP for e-ink display rotation.
-pub fn format_display_ip(slot: DisplaySlot, usb_ip: Option<&str>, bt_ip: Option<&str>) -> String {
-    match slot {
-        DisplaySlot::UsbIp => {
-            if let Some(ip) = usb_ip {
-                format!("USB:{ip} :8080")
-            } else {
-                "USB:--".to_string()
-            }
-        }
-        DisplaySlot::BtIp => {
-            if let Some(ip) = bt_ip {
-                format!("BT:{ip}")
-            } else {
-                "BT:--".to_string()
-            }
-        }
-    }
-}
-
-/// Advance to the next display slot (cycles USB -> BT -> USB ...).
-/// In RAGE mode, always returns UsbIp (BT is off).
-pub fn next_display_slot(current: DisplaySlot, is_rage: bool) -> DisplaySlot {
-    if is_rage {
-        return DisplaySlot::UsbIp;
-    }
-    match current {
-        DisplaySlot::UsbIp => DisplaySlot::BtIp,
-        DisplaySlot::BtIp => DisplaySlot::UsbIp,
-    }
-}
-
 /// Determine which IPs are missing from the current configuration.
 ///
 /// Returns `(need_primary, need_ics)`.
@@ -313,8 +290,6 @@ pub struct NetworkManager {
     pub usb0_ips: Vec<String>,
     /// Internet connectivity status.
     pub internet: InternetStatus,
-    /// Current display rotation slot.
-    pub display_slot: DisplaySlot,
     /// Last time we successfully applied IPs.
     pub last_ip_apply: Option<Instant>,
     /// Last time we checked internet connectivity.
@@ -332,7 +307,6 @@ impl NetworkManager {
             usb0_state: Usb0State::Absent,
             usb0_ips: Vec::new(),
             internet: InternetStatus::Unknown,
-            display_slot: DisplaySlot::UsbIp,
             last_ip_apply: None,
             last_inet_check: None,
             consecutive_failures: 0,
@@ -531,16 +505,10 @@ impl NetworkManager {
         }
     }
 
-    /// Get the current display string for the e-ink IP rotation.
-    pub fn display_ip_str(&self, bt_ip: Option<&str>) -> String {
+    /// Get USB IP display string.
+    pub fn usb_ip_str(&self) -> String {
         let usb_ip = self.usb0_ips.first().map(|s| s.as_str());
-        format_display_ip(self.display_slot, usb_ip, bt_ip)
-    }
-
-    /// Advance the display rotation to the next slot.
-    /// In RAGE mode, forces UsbIp (no rotation).
-    pub fn rotate_display(&mut self, is_rage: bool) {
-        self.display_slot = next_display_slot(self.display_slot, is_rage);
+        format_usb_ip(usb_ip)
     }
 
     /// Record a state change timestamp.
@@ -573,6 +541,28 @@ impl Default for NetworkManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ===== New independent IP formatter tests =====
+
+    #[test]
+    fn test_format_usb_ip_with_ip() {
+        assert_eq!(format_usb_ip(Some("10.0.0.2")), "USB:10.0.0.2 :8080");
+    }
+
+    #[test]
+    fn test_format_usb_ip_no_ip() {
+        assert_eq!(format_usb_ip(None), "USB:--");
+    }
+
+    #[test]
+    fn test_format_bt_ip_with_ip() {
+        assert_eq!(format_bt_ip(Some("192.168.44.128")), "BT:192.168.44.128");
+    }
+
+    #[test]
+    fn test_format_bt_ip_no_ip() {
+        assert_eq!(format_bt_ip(None), "");
+    }
 
     // ===== IP parsing tests =====
 
@@ -793,50 +783,6 @@ mod tests {
         assert!(content.contains("nameserver 1.1.1.1"));
     }
 
-    // ===== Display rotation tests =====
-
-    #[test]
-    fn test_format_display_ip_usb_with_ip() {
-        let s = format_display_ip(DisplaySlot::UsbIp, Some("10.0.0.2"), None);
-        assert_eq!(s, "USB:10.0.0.2 :8080");
-    }
-
-    #[test]
-    fn test_format_display_ip_usb_no_ip() {
-        let s = format_display_ip(DisplaySlot::UsbIp, None, None);
-        assert_eq!(s, "USB:--");
-    }
-
-    #[test]
-    fn test_format_display_ip_bt_with_ip() {
-        let s = format_display_ip(DisplaySlot::BtIp, None, Some("192.168.44.128"));
-        assert_eq!(s, "BT:192.168.44.128");
-    }
-
-    #[test]
-    fn test_format_display_ip_bt_no_ip() {
-        let s = format_display_ip(DisplaySlot::BtIp, None, None);
-        assert_eq!(s, "BT:--");
-    }
-
-    #[test]
-    fn test_display_slot_cycling() {
-        let slot = DisplaySlot::UsbIp;
-        let slot = next_display_slot(slot, false);
-        assert_eq!(slot, DisplaySlot::BtIp);
-        let slot = next_display_slot(slot, false);
-        assert_eq!(slot, DisplaySlot::UsbIp);
-    }
-
-    #[test]
-    fn test_display_slot_rage_always_usb() {
-        let slot = DisplaySlot::BtIp;
-        let slot = next_display_slot(slot, true);
-        assert_eq!(slot, DisplaySlot::UsbIp);
-        let slot = next_display_slot(slot, true);
-        assert_eq!(slot, DisplaySlot::UsbIp);
-    }
-
     // ===== Interface existence check =====
 
     #[test]
@@ -853,7 +799,6 @@ mod tests {
         assert_eq!(nm.usb0_state, Usb0State::Absent);
         assert!(nm.usb0_ips.is_empty());
         assert_eq!(nm.internet, InternetStatus::Unknown);
-        assert_eq!(nm.display_slot, DisplaySlot::UsbIp);
         assert_eq!(nm.consecutive_failures, 0);
     }
 
@@ -912,39 +857,6 @@ mod tests {
         nm.usb0_state = Usb0State::Up;
         nm.check_internet();
         assert!(nm.last_inet_check.is_some());
-    }
-
-    #[test]
-    fn test_network_manager_display_ip_str_no_ips() {
-        let nm = NetworkManager::new();
-        let s = nm.display_ip_str(None);
-        assert_eq!(s, "USB:--");
-    }
-
-    #[test]
-    fn test_network_manager_display_ip_str_with_usb_ip() {
-        let mut nm = NetworkManager::new();
-        nm.usb0_ips = vec!["10.0.0.2".to_string()];
-        let s = nm.display_ip_str(None);
-        assert_eq!(s, "USB:10.0.0.2 :8080");
-    }
-
-    #[test]
-    fn test_network_manager_display_ip_str_bt_slot() {
-        let mut nm = NetworkManager::new();
-        nm.display_slot = DisplaySlot::BtIp;
-        let s = nm.display_ip_str(Some("192.168.44.128"));
-        assert_eq!(s, "BT:192.168.44.128");
-    }
-
-    #[test]
-    fn test_network_manager_rotate_display() {
-        let mut nm = NetworkManager::new();
-        assert_eq!(nm.display_slot, DisplaySlot::UsbIp);
-        nm.rotate_display(false);
-        assert_eq!(nm.display_slot, DisplaySlot::BtIp);
-        nm.rotate_display(false);
-        assert_eq!(nm.display_slot, DisplaySlot::UsbIp);
     }
 
     #[test]
@@ -1066,30 +978,6 @@ mod tests {
 
         let resolv = build_resolv_conf(DNS_SERVER);
         assert!(resolv.contains("nameserver 8.8.8.8"));
-    }
-
-    // ===== Full display rotation cycle test =====
-
-    #[test]
-    fn test_full_display_rotation_cycle() {
-        let mut nm = NetworkManager::new();
-        nm.usb0_ips = vec!["10.0.0.2".to_string()];
-
-        // Slot 1: USB IP
-        let s1 = nm.display_ip_str(Some("192.168.44.128"));
-        assert_eq!(s1, "USB:10.0.0.2 :8080");
-
-        nm.rotate_display(false);
-
-        // Slot 2: BT IP
-        let s2 = nm.display_ip_str(Some("192.168.44.128"));
-        assert_eq!(s2, "BT:192.168.44.128");
-
-        nm.rotate_display(false);
-
-        // Back to slot 1
-        let s3 = nm.display_ip_str(Some("192.168.44.128"));
-        assert_eq!(s3, "USB:10.0.0.2 :8080");
     }
 
     // ===== Internet check result handling =====

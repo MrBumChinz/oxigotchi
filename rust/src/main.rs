@@ -490,9 +490,6 @@ impl Daemon {
         // ---- Network health ----
         self.network.health_check();
         self.network.check_internet();
-        if self.mode == OperatingMode::Rage {
-            self.network.rotate_display(true);
-        }
 
         // ---- Firmware health (RAGE mode only) ----
         if self.mode == OperatingMode::Rage {
@@ -766,11 +763,8 @@ impl Daemon {
             }
 
             if self.mode == OperatingMode::Safe {
-                self.network.rotate_display(false);
-                let ip_str = self
-                    .network
-                    .display_ip_str(self.bluetooth.ip_address.as_deref());
-                self.lua.update_indicator_value("ip_display", &ip_str);
+                let usb_ip_str = self.network.usb_ip_str();
+                self.lua.update_indicator_value("ip_display", &usb_ip_str);
             }
 
             // Check for display settings changes (invert/rotation) every tick
@@ -2067,9 +2061,7 @@ impl Daemon {
             bt_patchram_state: self.patchram.state.as_str().to_string(),
             bt_rage_level: self.config.bt_attacks.rage_level.as_str().to_string(),
             internet_online: self.network.internet == network::InternetStatus::Online,
-            display_ip: self
-                .network
-                .display_ip_str(self.bluetooth.ip_address.as_deref()),
+            display_ip: self.network.usb_ip_str(),
             mood: self.epoch_loop.personality.mood.value(),
             face: self.epoch_loop.current_face().as_str().to_string(),
             level: self.epoch_loop.personality.xp.level,
@@ -3064,7 +3056,6 @@ impl Daemon {
         }
 
         self.mode = OperatingMode::Rage;
-        self.network.display_slot = network::DisplaySlot::UsbIp;
         self.epoch_loop.personality.clear_override();
         // Radio transition disrupts SPI bus — force display reinit so next flush doesn't BUSY-timeout
         display::driver::request_reinit();
