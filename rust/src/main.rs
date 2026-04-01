@@ -338,6 +338,7 @@ impl Daemon {
             lua::PluginConfig::default_for("uptime", 178, 0),
             lua::PluginConfig::default_for("status_msg", 125, 20),
             lua::PluginConfig::default_for("sys_stats", 125, 85),
+            lua::PluginConfig::default_for("bt_ip_display", 0, 85),
             lua::PluginConfig::default_for("ip_display", 0, 95),
             lua::PluginConfig::default_for("crash", 0, 112),
             lua::PluginConfig::default_for("www", 52, 112),
@@ -766,6 +767,9 @@ impl Daemon {
                 let usb_ip_str = self.network.usb_ip_str();
                 self.lua.update_indicator_value("ip_display", &usb_ip_str);
             }
+
+            let bt_ip_str = network::format_bt_ip(self.bluetooth.ip_address.as_deref());
+            self.lua.update_indicator_value("bt_ip_display", &bt_ip_str);
 
             // Check for display settings changes (invert/rotation) every tick
             self.apply_pending_display_settings();
