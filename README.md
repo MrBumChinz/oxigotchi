@@ -2,7 +2,7 @@
 
 > The pwnagotchi was a pet. This is a workbull.
 
-![Oxigotchi e-ink display](docs/oxigotchi-eink.png)
+![Oxigotchi e-ink display](docs/eink-cool.png)
 
 **This is not a proof of concept.** Oxigotchi is a finished, tested, daily-driven tool — weeks of field testing, overnight soak tests, stress tests, and real-world refinement. Flash the image, plug in the Pi, and it works. No setup wizards, no dependency hell, no "coming soon" features. Everything described here is shipping.
 
