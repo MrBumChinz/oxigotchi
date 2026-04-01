@@ -187,6 +187,11 @@ impl Daemon {
         );
         let bt_attack_scheduler = bluetooth::attacks::BtAttackScheduler::new(config.bt_attacks.clone());
         let bt_capture_manager = bluetooth::capture::BtCaptureManager::new(&config.bt_attacks.capture_dir);
+        let boot_mode = match config.main.default_mode.to_uppercase().as_str() {
+            "RAGE" => OperatingMode::Rage,
+            "BT" => OperatingMode::Bt,
+            _ => OperatingMode::Safe,
+        };
 
         Self {
             config,
@@ -218,7 +223,7 @@ impl Daemon {
             gpu_runtime_ingestor: gpu::runtime::ingest::GpuRuntimeIngestor::new(),
             gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer::new(),
             qpu_engine: None, // initialized in boot()
-            mode: OperatingMode::Rage,
+            mode: boot_mode,
             boot_target_mode: None,
             shared_state,
             ws_tx,
@@ -3752,9 +3757,9 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_starts_in_rage_mode() {
+    fn test_daemon_starts_in_safe_mode_by_default() {
         let daemon = make_daemon();
-        assert_eq!(daemon.mode, OperatingMode::Rage);
+        assert_eq!(daemon.mode, OperatingMode::Safe);
     }
 
     #[test]
