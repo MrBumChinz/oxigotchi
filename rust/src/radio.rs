@@ -210,18 +210,17 @@ impl RadioManager {
     /// 4. Delete wlan0mon
     /// 5. Verify wlan0mon gone
     /// 6. Bring wlan0 down
-    /// 7. Reload hci_uart
-    /// 8. Verify /sys/class/bluetooth/hci0 exists
-    /// 9. Power on BT
-    /// 10. Verify BT powered
-    /// 11. Write BT to lock
+    /// 7. Write BT to lock
     ///
-    /// On failure: rollback — tear down BT, restart WiFi, write WIFI to lock.
+    /// hci_uart is never unloaded, so the BT adapter stays up throughout.
+    /// `bt.ensure_connected()` reconnects the tether after WiFi stops.
+    ///
+    /// On failure: rollback — restart WiFi, write WIFI to lock.
     pub fn transition_to_bt(
         &mut self,
         ao: &mut ao::AoManager,
         wifi: &mut wifi::WifiManager,
-        _bt: &mut bluetooth::BtTether,
+        bt: &mut bluetooth::BtTether,
     ) -> Result<(), String> {
         info!("radio: beginning transition to BT");
 
@@ -289,37 +288,10 @@ impl RadioManager {
                 .output();
         }
 
-        // Step 7: Reload hci_uart
-        info!("radio: step 7 — reloading hci_uart");
-        bluetooth::reset_hci_uart();
+        // Reconnect BT tether (hci_uart was never unloaded, adapter is still up)
+        bt.ensure_connected();
 
-        // Step 8: Verify /sys/class/bluetooth/hci0 exists
-        if !verify_bt_adapter_exists() {
-            error!("radio: hci0 not found after hci_uart reload, rolling back to WIFI");
-            if !self.rollback_to_wifi(ao, wifi) {
-                error!("radio: rollback_to_wifi failed after hci0 not-found check");
-            }
-            return Err("BT adapter hci0 not found after hci_uart reload".into());
-        }
-        info!("radio: step 8 — hci0 adapter verified");
-
-        // Step 9: Power on BT
-        info!("radio: step 9 — powering on BT");
-        #[cfg(unix)]
-        {
-            let _ = std::process::Command::new("bluetoothctl")
-                .args(["power", "on"])
-                .output();
-        }
-
-        // Step 10: Verify BT powered
-        if !verify_bt_powered() {
-            warn!("radio: BT does not show powered after power on");
-            // Non-fatal on non-Pi, continue
-        }
-        info!("radio: step 10 — BT power verified");
-
-        // Step 11: Write BT lock
+        // Step 7: Write BT lock
         self.acquire_lock(RadioMode::Bt)?;
         info!("radio: transition to BT complete");
         Ok(())
