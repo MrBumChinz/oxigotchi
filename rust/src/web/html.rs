@@ -906,6 +906,9 @@ function refreshAttacks() {
 }
 
 function updateRfFromWs(d) {
+    var rfCard = document.getElementById('card-rf');
+    if (rfCard) rfCard.style.display = (d.enabled && d.available) ? 'block' : 'none';
+    if (!d.enabled || !d.available) return;
     var speed = (d.last_batch_size > 0 && d.last_batch_duration_us > 0)
         ? (d.last_batch_size / (d.last_batch_duration_us / 1000)).toFixed(0)
         : '-';
