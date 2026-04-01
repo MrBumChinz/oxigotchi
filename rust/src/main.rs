@@ -409,6 +409,13 @@ impl Daemon {
         // enter_bt_mode()/enter_safe_mode() handles the radio transition
         // in the first epoch.
         if self.boot_target_mode.is_none() {
+            // Set up BT tether so it's available in RAGE mode alongside WiFi.
+            // Non-fatal: if the phone isn't paired yet, we proceed and retry each epoch.
+            match self.bluetooth.setup() {
+                Ok(()) => info!("BT tether ready at boot: {}", self.bluetooth.status_str()),
+                Err(e) => log::warn!("BT tether setup at boot failed (non-fatal): {e}"),
+            }
+
             // Start AngryOxide subprocess
             match self.ao.start() {
                 Ok(()) => info!("AO started: PID {}", self.ao.pid),
