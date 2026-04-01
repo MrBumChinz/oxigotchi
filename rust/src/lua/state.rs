@@ -60,6 +60,7 @@ pub struct EpochState {
     pub xp: u64,
     pub status_message: String,
     pub epoch_phase_status: String,
+    pub joke_active: bool,
 
     // firmware
     pub fw_crash_suppress: u32,
@@ -127,6 +128,7 @@ impl EpochState {
         t.set("xp", self.xp)?;
         t.set("status_message", self.status_message.as_str())?;
         t.set("epoch_phase_status", self.epoch_phase_status.as_str())?;
+        t.set("joke_active", self.joke_active)?;
 
         t.set("fw_crash_suppress", self.fw_crash_suppress)?;
         t.set("fw_hardfault", self.fw_hardfault)?;

@@ -138,6 +138,8 @@ struct Daemon {
     tmpfs_capture_dir: String,
     /// Cumulative APs seen across all previous sessions (loaded from state.json).
     lifetime_aps_base: u64,
+    /// Previous epoch's cumulative AP count from AO — used to compute delta (new unique APs).
+    prev_ap_count: u32,
 }
 
 impl Daemon {
@@ -233,6 +235,7 @@ impl Daemon {
             channel_scorer: wifi::ChannelScorer::new(3),
             tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
             lifetime_aps_base: 0,
+            prev_ap_count: 0,
         }
     }
 
@@ -796,9 +799,11 @@ impl Daemon {
             .log(recovery::DiagLevel::Info, "epoch scan start");
 
         result.channel = self.ao.channel() as u8;
-        // Use AO's AP count (from stdout BSSID tracking) since AO owns the
-        // monitor interface — the beacon tracker can't read frames while AO runs.
-        result.aps_seen = self.ao.ap_count();
+        // Compute NEW unique APs this epoch (delta from previous epoch's cumulative count).
+        // AO tracks cumulative unique BSSIDs — subtracting prev gives only genuinely new APs.
+        let current_ap_count = self.ao.ap_count();
+        result.aps_seen = current_ap_count.saturating_sub(self.prev_ap_count);
+        self.prev_ap_count = current_ap_count;
 
         // Health check on WiFi (RAGE mode only — SAFE mode intentionally has no monitor)
         if self.mode == OperatingMode::Rage && self.recovery.should_check() {
@@ -1264,8 +1269,7 @@ impl Daemon {
         }
 
         // Periodic XP save (every 5 epochs)
-        self.epoch_loop.personality.xp.tick_epoch(); // +1 passive XP
-        self.epoch_loop.personality.xp.award_aps(self.ao.ap_count()); // +1 per AP
+        self.epoch_loop.personality.xp.tick_epoch(); // +1 passive XP + epoch counter
         if self.epoch_loop.personality.xp.should_save() {
             let mood = self.epoch_loop.personality.mood.value();
             if let Err(e) = self.epoch_loop.personality.xp.save(mood) {
@@ -2073,6 +2077,7 @@ impl Daemon {
             xp: self.epoch_loop.personality.xp.xp,
             status_message: self.epoch_loop.personality.status_msg(),
             epoch_phase_status: self.epoch_loop.status_message(),
+            joke_active: self.epoch_loop.personality.joke_active(),
             skip_captured: self.skip_captured,
             fw_crash_suppress: self.firmware_monitor.crash_suppress,
             fw_hardfault: self.firmware_monitor.hardfault,
