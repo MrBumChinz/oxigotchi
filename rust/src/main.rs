@@ -305,11 +305,20 @@ impl Daemon {
         // deciding whether to start WiFi or BT.
         self.load_runtime_state();
 
+        // Fresh install (no state.json) defaults to SAFE mode since v3.2.
+        #[cfg(unix)]
+        if self.boot_target_mode.is_none()
+            && !std::path::Path::new("/var/lib/oxigotchi/state.json").exists()
+        {
+            self.boot_target_mode = Some("SAFE".to_string());
+            info!("fresh install — defaulting to SAFE mode");
+        }
+
         // Start WiFi monitor mode — but only if booting into a WiFi mode.
-        // If the persisted mode is BT, skip WiFi and queue a mode switch
-        // so the first epoch transitions the radio to BT.
+        // If the persisted mode is BT/SAFE, skip WiFi and queue a mode switch
+        // so the first epoch transitions the radio.
         if let Some(ref target) = self.boot_target_mode {
-            info!("persisted mode is {target} — skipping WiFi, will transition in first epoch");
+            info!("target mode is {target} — skipping WiFi, will transition in first epoch");
             let mut s = self.shared_state.lock().unwrap();
             s.pending_mode_switch = Some(target.clone());
             drop(s);
@@ -1991,6 +2000,19 @@ impl Daemon {
                 info!("web: epoch sleep set to {clamped}s");
                 any_command = true;
             }
+        }
+
+        // Process pending mood boost from interact buttons
+        let mood_boost = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_mood_boost.take()
+        };
+        if let Some(boost) = mood_boost {
+            any_command = true;
+            self.epoch_loop.personality.mood.adjust(boost);
+            info!("web: mood boost +{:.0}% (now {:.0}%)",
+                  boost * 100.0,
+                  self.epoch_loop.personality.mood.value() * 100.0);
         }
 
         // Persist runtime state if any command was processed
