@@ -160,6 +160,10 @@ def step_clean_personal_data(client):
     ssh_run(client, "rm -f /etc/pwnagotchi/custom-plugins/angryoxide_state.json")
     cleaned += 1
 
+    # Clear oxigotchi runtime state (forces SAFE mode default on first boot)
+    ssh_run(client, "rm -f /var/lib/oxigotchi/state.json")
+    cleaned += 1
+
     # Clear wpa-sec results
     ssh_run(client, "rm -f /etc/pwnagotchi/handshakes/wpa-sec.cracked*")
     cleaned += 1

@@ -2189,6 +2189,7 @@ impl Daemon {
             "epoch_sleep_secs": s.epoch_sleep_secs,
             "operating_mode": self.mode.as_str(),
             "bt_scan_mode": self.config.bt_attacks.scan_mode.as_str(),
+            "state_version": 2,
         });
         drop(s);
         let path = "/var/lib/oxigotchi/state.json";
@@ -2395,6 +2396,13 @@ impl Daemon {
                 self.boot_target_mode = Some(mode_str.to_string());
                 info!("state: will restore operating mode {mode_str} after boot");
             }
+        }
+
+        // Migration: pre-v3.2 state files lack state_version and defaulted
+        // to RAGE due to a bug. Reset to SAFE so users aren't stuck.
+        if state.get("state_version").is_none() {
+            self.boot_target_mode = Some("SAFE".to_string());
+            info!("migrating pre-v3.2 state — defaulting to SAFE mode");
         }
 
         if let Some(mode_str) = state.get("bt_scan_mode").and_then(|v| v.as_str()) {

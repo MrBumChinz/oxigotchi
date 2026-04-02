@@ -655,7 +655,12 @@ impl Personality {
             return;
         }
 
-        let face = self.current_face();
+        // Use the underlying face (skip joke_face_lock) so mood changes
+        // interrupt stale jokes instead of being masked by the lock.
+        let face = self
+            .override_face
+            .or_else(|| self.variety.current_override().and_then(Face::from_key))
+            .unwrap_or_else(|| self.mood.face());
         let face_name = face.face_key().to_string();
 
         // If face changed, reset joke state and seed current_status defensively.
