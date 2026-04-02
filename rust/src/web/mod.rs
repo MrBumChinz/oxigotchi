@@ -263,6 +263,10 @@ pub struct DaemonState {
     pub radio_mode: String,
     pub radio_pid: u32,
     pub pending_radio_request: Option<String>,
+
+    // -- mood interaction --
+    pub interact_cooldowns: std::collections::HashMap<String, std::time::Instant>,
+    pub pending_mood_boost: Option<f32>,
 }
 
 impl DaemonState {
@@ -434,6 +438,8 @@ impl DaemonState {
             radio_mode: "FREE".into(),
             radio_pid: 0,
             pending_radio_request: None,
+            interact_cooldowns: std::collections::HashMap::new(),
+            pending_mood_boost: None,
         }
     }
 }
@@ -872,6 +878,25 @@ pub struct ActionResponse {
     pub message: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct InteractRequest {
+    pub action: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InteractResponse {
+    pub ok: bool,
+    pub message: String,
+    pub cooldown_secs: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct InteractStatusResponse {
+    pub pet: u32,
+    pub treat: u32,
+    pub praise: u32,
+}
+
 /// BT attack toggle request for POST /api/bt/attacks/toggle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtAttackToggle {
@@ -1296,6 +1321,7 @@ pub const API_BT_SCAN_MODE: &str = "/api/bt/scan-mode";
 pub const API_BT_FORGET: &str = "/api/bluetooth/forget";
 pub const API_BT_DISCONNECT: &str = "/api/bluetooth/disconnect";
 pub const API_BT_CONFIRM_PASSKEY: &str = "/api/bluetooth/confirm-passkey";
+pub const API_INTERACT: &str = "/api/interact";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -1645,6 +1671,104 @@ async fn personality_handler(State(state): State<SharedState>) -> Json<Personali
         xp: s.xp,
         level: s.level,
     })
+}
+
+const INTERACT_COOLDOWN_SECS: u64 = 300; // 5 minutes
+
+/// POST /api/interact — mood boost with cooldown and soft cap.
+async fn interact_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<InteractRequest>,
+) -> Json<InteractResponse> {
+    let base_boost = match body.action.as_str() {
+        "pet" => 0.03f32,
+        "treat" => 0.05f32,
+        "praise" => 0.04f32,
+        _ => {
+            return Json(InteractResponse {
+                ok: false,
+                message: "Unknown action".into(),
+                cooldown_secs: 0,
+            });
+        }
+    };
+
+    let mut s = state.lock().unwrap();
+    let now = std::time::Instant::now();
+
+    // Check cooldown
+    if let Some(&last) = s.interact_cooldowns.get(&body.action) {
+        let elapsed = now.duration_since(last).as_secs();
+        if elapsed < INTERACT_COOLDOWN_SECS {
+            let remaining = (INTERACT_COOLDOWN_SECS - elapsed) as u32;
+            return Json(InteractResponse {
+                ok: false,
+                message: format!("{} on cooldown", capitalize(&body.action)),
+                cooldown_secs: remaining,
+            });
+        }
+    }
+
+    // Compute effective boost
+    let effective = crate::personality::interact_boost(base_boost, s.mood);
+    let pct = (effective * 100.0).round() as i32;
+
+    // Apply optimistically to shared state
+    s.mood = (s.mood + effective).clamp(0.0, 1.0);
+
+    // Queue for daemon to apply to real personality state
+    let existing = s.pending_mood_boost.unwrap_or(0.0);
+    s.pending_mood_boost = Some(existing + effective);
+
+    // Update cooldown
+    s.interact_cooldowns.insert(body.action.clone(), now);
+
+    let label = capitalize(&body.action);
+    let message = if pct > 0 {
+        format!("{}! +{}% mood", label, pct)
+    } else {
+        format!("{}! Mood near cap", label)
+    };
+
+    Json(InteractResponse {
+        ok: true,
+        message,
+        cooldown_secs: INTERACT_COOLDOWN_SECS as u32,
+    })
+}
+
+/// GET /api/interact — current cooldown status for all buttons.
+async fn interact_status_handler(
+    State(state): State<SharedState>,
+) -> Json<InteractStatusResponse> {
+    let s = state.lock().unwrap();
+    let now = std::time::Instant::now();
+    let remaining = |action: &str| -> u32 {
+        s.interact_cooldowns
+            .get(action)
+            .map(|&last| {
+                let elapsed = now.duration_since(last).as_secs();
+                if elapsed < INTERACT_COOLDOWN_SECS {
+                    (INTERACT_COOLDOWN_SECS - elapsed) as u32
+                } else {
+                    0
+                }
+            })
+            .unwrap_or(0)
+    };
+    Json(InteractStatusResponse {
+        pet: remaining("pet"),
+        treat: remaining("treat"),
+        praise: remaining("praise"),
+    })
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+    }
 }
 
 /// GET /api/system -> JSON system info (CPU, memory, disk)
@@ -2722,6 +2846,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_DEVICES, get(bt_devices_handler))
         .route(API_BT_CAPTURES, get(bt_captures_handler))
         .route(API_BT_PATCHRAM, get(bt_patchram_handler))
+        .route(API_INTERACT, get(interact_status_handler).post(interact_handler))
         .with_state(app)
 }
 
