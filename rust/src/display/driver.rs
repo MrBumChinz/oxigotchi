@@ -617,6 +617,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// Flag to force a full display reinit on next flush.
 static DISPLAY_REINIT: AtomicBool = AtomicBool::new(false);
 
+/// Consecutive flush failure counter for exponential backoff.
+/// After 3 consecutive failures, skip display for 2^(failures-3) epochs (1, 2, 4, 8...).
+static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Epochs remaining to skip before retrying display after repeated failures.
+static BACKOFF_REMAINING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Request a full display reinit on the next flush cycle.
 /// Used when display settings (invert, rotation) change at runtime.
 pub fn request_reinit() {
@@ -627,12 +633,33 @@ pub fn request_reinit() {
 ///
 /// This is the high-level entry point called by `Screen::flush()`.
 /// On non-aarch64 platforms this is a no-op.
+///
+/// Resilience features:
+/// - **Exponential backoff**: After 3 consecutive failures, skips display for
+///   2^(n-3) epochs (1, 2, 4, 8) to avoid rapid reinit→timeout→reinit loops
+///   that cause the black border flash crash loop.
+/// - **Periodic full refresh**: Every `FULL_REFRESH_INTERVAL` (10) partial
+///   refreshes, forces a full init+clear+base to clear accumulated ghosting
+///   that can trigger BUSY lockup.
 #[cfg(target_arch = "aarch64")]
 pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(), String> {
     use std::sync::Mutex;
     use std::time::Instant;
 
     static DRIVER: Mutex<Option<Ssd1680Driver<RppalHal>>> = Mutex::new(None);
+
+    // ── Backoff gate: skip display if cooling down after repeated failures ──
+    let remaining = BACKOFF_REMAINING.load(Ordering::Relaxed);
+    if remaining > 0 {
+        BACKOFF_REMAINING.store(remaining - 1, Ordering::Relaxed);
+        let failures = CONSECUTIVE_FAILURES.load(Ordering::Relaxed);
+        log::info!(
+            "display: backoff skip ({} remaining, {} consecutive failures)",
+            remaining - 1,
+            failures
+        );
+        return Ok(());
+    }
 
     // Check if a reinit was requested (display settings changed)
     if DISPLAY_REINIT.swap(false, Ordering::Relaxed) {
@@ -654,20 +681,69 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
             );
             let hal = RppalHal::new()?;
             let mut driver = Ssd1680Driver::with_invert(hal, config.rotation, config.invert);
-            driver.init()?;
-            driver.clear()?;
-            driver.flush_base(fb)?;
-            log::info!("display: init OK ({:.0}ms)", start.elapsed().as_millis());
-            *guard = Some(driver);
+            match (|| -> Result<(), String> {
+                driver.init()?;
+                driver.clear()?;
+                driver.flush_base(fb)?;
+                Ok(())
+            })() {
+                Ok(()) => {
+                    log::info!("display: init OK ({:.0}ms)", start.elapsed().as_millis());
+                    CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+                    *guard = Some(driver);
+                }
+                Err(e) => {
+                    log::error!("display: init failed ({e}), entering backoff");
+                    let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+                    if failures >= 3 {
+                        let skip = 1u32 << (failures - 3).min(4); // 1, 2, 4, 8, 16 max
+                        BACKOFF_REMAINING.store(skip, Ordering::Relaxed);
+                        log::warn!(
+                            "display: {} consecutive failures, backing off {} epochs",
+                            failures,
+                            skip
+                        );
+                    }
+                    return Err(e);
+                }
+            }
         }
         Some(driver) => {
-            if let Err(e) = driver.flush_partial(fb) {
-                // BUSY timeout or SPI failure — drop driver, reinit next epoch
-                log::warn!("display: partial flush failed ({e}), will reinit next epoch");
+            // Periodic full refresh to clear ghosting buildup
+            if driver.partial_count > 0
+                && driver.partial_count % FULL_REFRESH_INTERVAL == 0
+            {
+                log::info!(
+                    "display: periodic full refresh after {} partials",
+                    driver.partial_count
+                );
+                // Drop and reinit for a clean full refresh
                 *guard = None;
+                drop(guard);
+                // Recurse once — will hit the None arm above
+                return flush_to_hardware(fb, config);
+            }
+
+            if let Err(e) = driver.flush_partial(fb) {
+                // BUSY timeout or SPI failure — drop driver, apply backoff
+                log::warn!("display: partial flush failed ({e})");
+                *guard = None;
+                let failures = CONSECUTIVE_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+                if failures >= 3 {
+                    let skip = 1u32 << (failures - 3).min(4);
+                    BACKOFF_REMAINING.store(skip, Ordering::Relaxed);
+                    log::warn!(
+                        "display: {} consecutive failures, backing off {} epochs",
+                        failures,
+                        skip
+                    );
+                } else {
+                    log::info!("display: failure {}/3, will reinit next epoch", failures);
+                }
                 return Err(e);
             }
             driver.partial_count += 1;
+            CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
             if driver.partial_count % 50 == 0 {
                 log::info!(
                     "display: partial refresh #{} OK ({:.0}ms)",
