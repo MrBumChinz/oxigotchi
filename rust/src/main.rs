@@ -47,8 +47,6 @@ fn ensure_tmpfs_capture_dir() -> String {
     dir.to_string_lossy().to_string()
 }
 
-/// Default epoch sleep in seconds (between active phases).
-const DEFAULT_EPOCH_SLEEP_SECS: u64 = 0;
 /// Default attack rate. All rates (1-3) stable with v6 firmware patch.
 const ATTACK_RATE: u32 = 1;
 /// Default capture directory.
@@ -150,7 +148,7 @@ impl Daemon {
         ws_tx: tokio::sync::broadcast::Sender<String>,
     ) -> Self {
         let screen = display::Screen::new(config.display.clone());
-        let epoch_loop = epoch::EpochLoop::new(Duration::from_secs(DEFAULT_EPOCH_SLEEP_SECS));
+        let epoch_loop = epoch::EpochLoop::new(Duration::ZERO);
         let wifi = wifi::WifiManager::new();
         let mut attacks = attacks::AttackScheduler::new(ATTACK_RATE);
 
@@ -651,10 +649,9 @@ impl Daemon {
                     })
                     .collect();
 
-                let sleep_secs = self.shared_state.lock().unwrap().epoch_sleep_secs;
                 let rf = qpu::rf::RfEnvironment::compute(
                     &classified,
-                    sleep_secs as f32 + 10.0, // active phases ~10s + configurable sleep
+                    10.0, // active phases ~10s
                     &ao_bssids,
                 );
 
@@ -752,89 +749,6 @@ impl Daemon {
         if self.watchdog.needs_ping() {
             self.watchdog.ping();
         }
-        // Sub-epoch loop: sleep in 5s ticks for IP rotation in SAFE mode.
-        // In RAGE mode, just sleeps the full duration (no display changes).
-        const IP_ROTATE_SECS: u64 = 5;
-        let total_secs = {
-            let s = self.shared_state.lock().unwrap();
-            s.epoch_sleep_secs
-        };
-        let ticks = total_secs / IP_ROTATE_SECS;
-        let remainder = total_secs % IP_ROTATE_SECS;
-
-        for _ in 0..ticks {
-            std::thread::sleep(Duration::from_secs(IP_ROTATE_SECS));
-
-            // Break out of sleep early if a mode switch is pending
-            // so the next epoch processes it immediately.
-            {
-                let s = self.shared_state.lock().unwrap();
-                if s.pending_mode_switch.is_some() {
-                    break;
-                }
-            }
-
-            // Process BT visibility toggle immediately (don't wait for epoch)
-            {
-                let bt_toggle = {
-                    let mut s = self.shared_state.lock().unwrap();
-                    s.pending_bt_toggle.take()
-                };
-                if let Some(visible) = bt_toggle {
-                    info!("web: BT visibility set to {visible} (mid-epoch)");
-                    if visible {
-                        self.bluetooth.show();
-                    } else {
-                        self.bluetooth.hide();
-                    }
-                }
-            }
-
-            // Update channel indicator every tick (AO hops every ~5s)
-            let ch = self.ao.channel();
-            if ch > 0 {
-                let ch_str = format!("CH:{ch}");
-                // ao_status format: "AO: X/Y | Zm | CH:N"
-                let hs = self.epoch_loop.metrics.handshakes;
-                let caps = self.captures.count();
-                let up_secs = self
-                    .ao
-                    .start_time
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
-                let uptime = if up_secs < 60 {
-                    format!("{up_secs}s")
-                } else if up_secs < 3600 {
-                    format!("{}m", up_secs / 60)
-                } else {
-                    let h = up_secs / 3600;
-                    let m = (up_secs % 3600) / 60;
-                    if m == 0 {
-                        format!("{h}h")
-                    } else {
-                        format!("{h}h{m}m")
-                    }
-                };
-                let ao_text = format!("AO: {hs}/{caps} | {uptime} | {ch_str}");
-                self.lua.update_indicator_value("ao_status", &ao_text);
-            }
-
-            if self.mode == OperatingMode::Safe {
-                let usb_ip_str = self.network.usb_ip_str();
-                self.lua.update_indicator_value("ip_display", &usb_ip_str);
-            }
-
-            let bt_ip_str = network::format_bt_ip(self.bluetooth.ip_address.as_deref());
-            self.lua.update_indicator_value("bt_ip_display", &bt_ip_str);
-
-            // Check for display settings changes (invert/rotation) every tick
-            self.apply_pending_display_settings();
-            self.update_display();
-        }
-        if remainder > 0 {
-            std::thread::sleep(Duration::from_secs(remainder));
-        }
-
         // Reset QPU ring buffer between epochs
         if let Some(e) = self.qpu_engine.as_mut() { e.reset_ring(); }
 
@@ -2082,14 +1996,6 @@ impl Daemon {
                 info!("web: AP TTL set to {clamped}s");
                 any_command = true;
             }
-            if let Some(sleep) = update.epoch_sleep_secs {
-                let clamped = sleep.clamp(0, 30);
-                let mut s = self.shared_state.lock().unwrap();
-                s.epoch_sleep_secs = clamped;
-                self.epoch_loop.epoch_duration = Duration::from_secs(clamped);
-                info!("web: epoch sleep set to {clamped}s");
-                any_command = true;
-            }
             if let Some(interval) = update.display_refresh_interval {
                 let clamped = interval.clamp(10, 500);
                 self.screen.config.full_refresh_interval = clamped;
@@ -2285,7 +2191,6 @@ impl Daemon {
             "display_refresh_interval": self.screen.config.full_refresh_interval,
             "min_rssi": s.min_rssi,
             "ap_ttl_secs": s.ap_ttl_secs,
-            "epoch_sleep_secs": s.epoch_sleep_secs,
             "operating_mode": self.mode.as_str(),
             "bt_scan_mode": self.config.bt_attacks.scan_mode.as_str(),
             "state_version": 2,
@@ -2485,13 +2390,6 @@ impl Daemon {
             let mut s = self.shared_state.lock().unwrap();
             s.ap_ttl_secs = ttl.clamp(30, 600);
         }
-        if let Some(sleep) = state.get("epoch_sleep_secs").and_then(|v| v.as_u64()) {
-            let clamped = sleep.clamp(0, 30);
-            let mut s = self.shared_state.lock().unwrap();
-            s.epoch_sleep_secs = clamped;
-            self.epoch_loop.epoch_duration = Duration::from_secs(clamped);
-        }
-
         // Restore operating mode — boot() checks self.mode to decide
         // whether to start WiFi or BT. We set a separate flag so boot()
         // knows to skip WiFi, but keep self.mode as Rage so enter_bt_mode()
@@ -3397,7 +3295,6 @@ impl Daemon {
             display_refresh_interval: s.display_refresh_interval,
             min_rssi: s.min_rssi,
             ap_ttl_secs: s.ap_ttl_secs,
-            epoch_sleep_secs: s.epoch_sleep_secs,
         })
     }
 
@@ -3702,8 +3599,10 @@ mod tests {
     fn test_epoch_drives_mood_faces() {
         let mut daemon = make_daemon();
 
+        // Initial face is Excited (mood starts high on boot).
         assert_eq!(daemon.epoch_loop.current_face(), personality::Face::Excited);
 
+        // After handshakes, mood stays high — face should be Excited or Happy.
         for _ in 0..10 {
             daemon.epoch_loop.record_result(&epoch::EpochResult {
                 handshakes_captured: 3,
@@ -3717,15 +3616,18 @@ mod tests {
             "expected Excited or Happy after many handshakes, got {face:?}"
         );
 
-        for _ in 0..50 {
-            daemon
-                .epoch_loop
-                .record_result(&epoch::EpochResult::default());
+        // The new mood system is a mean-reverting random walk driven by wall-clock
+        // ticks (mood_tick()), not blind epoch counts. Simulate many ticks to drive
+        // mood from high toward center, then verify face is no longer at maximum.
+        // 500 ticks (each -0.2% drift + noise) is enough to move from 1.0 toward 0.5.
+        for _ in 0..500 {
+            daemon.epoch_loop.personality.mood_tick();
         }
         let face = daemon.epoch_loop.current_face();
-        assert!(
-            face == personality::Face::Sad || face == personality::Face::Demotivated,
-            "expected Sad or Demotivated after many blind epochs, got {face:?}"
+        assert_ne!(
+            face,
+            personality::Face::Excited,
+            "expected mood to drift from Excited after many mood ticks, got {face:?}"
         );
     }
 

@@ -136,6 +136,22 @@ input:checked+.slider:before{transform:translateX(22px)}
 .bt-dev-actions{display:flex;gap:4px;flex-shrink:0}
 .bt-dev-empty{text-align:center;padding:24px 12px;color:#444;font-size:13px}
 .bt-dev-count{font-size:11px;color:#555;text-align:right;padding:4px 0}
+.interact-btn{padding:8px 16px;border:1px solid #0f3460;border-radius:8px;background:#0a1628;color:#e0e0e0;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s;min-width:72px}
+.interact-btn:hover:not(:disabled){background:#0f3460;border-color:#00d4aa;color:#00d4aa}
+.interact-btn:active:not(:disabled){transform:scale(0.95)}
+.interact-btn:disabled{opacity:0.35;cursor:not-allowed;color:#555}
+.interact-btn.on-cooldown{border-color:#0f3460;color:#555;font-size:11px}
+.interact-response{margin-top:8px;font-size:12px;color:#00d4aa;text-align:center;min-height:18px;transition:opacity .3s}
+.util-btn{padding:6px 14px;border:1px solid #0f3460;border-radius:8px;background:#0a1628;color:#e0e0e0;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
+.util-btn:hover:not(:disabled){background:#0f3460;border-color:#00d4aa;color:#00d4aa}
+.util-btn:active:not(:disabled){transform:scale(0.95)}
+.util-btn:disabled{opacity:0.35;cursor:not-allowed}
+.util-btn-danger{border-color:#5c1a1a;color:#e94560;background:#1a1a2e}
+.util-btn-danger:hover:not(:disabled){background:#5c1a1a;border-color:#e94560}
+.util-btn-confirm{border-color:#1a5c1a;color:#00d4aa}
+.util-btn-confirm:hover:not(:disabled){background:#1a5c1a;border-color:#00d4aa}
+.util-btn-reject{border-color:#5c1a1a;color:#e94560}
+.util-btn-reject:hover:not(:disabled){background:#5c1a1a;border-color:#e94560}
 @media(max-width:400px){.grid-2{grid-template-columns:1fr}.stat-row{gap:4px}.stat .value{font-size:15px}.bt-dev{padding:8px 10px;gap:8px}.bt-dev-rssi{display:none}}
 </style>
 </head>
@@ -150,11 +166,12 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="card" id="card-eink" style="text-align:center">
 <div class="card-title">Live Display</div>
 <div style="padding:8px;background:#fff;display:inline-block;border-radius:4px"><img id="eink-img" src="/api/display.png" alt="e-ink" style="width:250px;height:122px;image-rendering:pixelated"></div>
-<div id="interact-btns" style="margin-top:8px;display:flex;gap:6px;justify-content:center">
-<button class="btn" id="btn-pet" onclick="interact('pet')" style="font-size:12px;padding:4px 10px">Pet</button>
-<button class="btn" id="btn-treat" onclick="interact('treat')" style="font-size:12px;padding:4px 10px">Treat</button>
-<button class="btn" id="btn-praise" onclick="interact('praise')" style="font-size:12px;padding:4px 10px">Praise</button>
+<div id="interact-btns" style="margin-top:10px;display:flex;gap:8px;justify-content:center">
+<button class="interact-btn" id="btn-pet" onclick="interact('pet')">Pet</button>
+<button class="interact-btn" id="btn-treat" onclick="interact('treat')">Treat</button>
+<button class="interact-btn" id="btn-praise" onclick="interact('praise')">Praise</button>
 </div>
+<div class="interact-response" id="interact-response"></div>
 </div>
 
 <!-- 2. Mode switch -->
@@ -261,15 +278,6 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="rage-level" id="rage-label">&mdash;</div>
 </div>
 <div class="rage-disclaimer" id="rage-yolo">&#9888; YOLO: Only combo that crashed in stress tests. AO may die &mdash; daemon auto-recovers.</div>
-
-<div style="margin-top:10px">
-<div style="display:flex;align-items:center;gap:8px">
-<div style="font-size:12px;color:#888">Epoch sleep:</div>
-<input type="number" id="epoch-sleep" min="0" max="30" value="0" style="width:48px;background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px;padding:2px 6px;font-size:12px;text-align:center" onchange="setEpochSleep(parseInt(this.value)||0)">
-<div style="font-size:12px;color:#888">sec</div>
-</div>
-<div style="font-size:10px;color:#555;margin-top:2px">Pause between epochs. Default 0. Increase to 3&ndash;5 if WiFi firmware keeps crashing.</div>
-</div>
 
 <div style="margin-top:12px;padding-top:10px;border-top:1px solid #0f3460">
 <div style="font-size:12px;color:#888;margin-bottom:4px">Attack Rate</div>
@@ -536,15 +544,17 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 </div>
 <div class="card-section" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
 <div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px">Phone Tethering</div>
-<button class="action-btn" onclick="btScan()" id="bt-scan-btn" style="font-size:11px;padding:4px 10px">Scan for Devices</button>
-<button class="action-btn" id="bt-disconnect-btn" onclick="btDisconnect()" style="display:none;font-size:10px;padding:2px 8px;background:#5c1a1a;margin-left:6px">Disconnect</button>
+<div style="display:flex;gap:8px;align-items:center">
+<button class="util-btn" onclick="btScan()" id="bt-scan-btn">Scan for Devices</button>
+<button class="util-btn util-btn-danger" id="bt-disconnect-btn" onclick="btDisconnect()" style="display:none">Disconnect</button>
+</div>
 <div id="bt-device-list" style="margin-top:8px"></div>
 <div id="bt-passkey-area" style="display:none;margin-top:10px;padding:10px;background:#0a1628;border-radius:8px">
 <div style="color:#e0e0e0;font-size:12px">Confirm passkey matches your phone:</div>
 <div id="bt-passkey-code" style="font-size:24px;font-weight:bold;color:#00d4ff;text-align:center;padding:10px">------</div>
 <div style="display:flex;gap:8px;justify-content:center">
-<button class="action-btn" onclick="btConfirmPasskey(true)" style="background:#1a5c1a;font-size:11px;padding:4px 12px">Confirm</button>
-<button class="action-btn" onclick="btConfirmPasskey(false)" style="background:#5c1a1a;font-size:11px;padding:4px 12px">Reject</button>
+<button class="util-btn util-btn-confirm" onclick="btConfirmPasskey(true)">Confirm</button>
+<button class="util-btn util-btn-reject" onclick="btConfirmPasskey(false)">Reject</button>
 </div>
 </div>
 </div>
@@ -677,6 +687,13 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <input type="range" id="setting-ttl" class="ch-slider" min="30" max="600" step="10" value="120" oninput="document.getElementById('setting-ttl-val').textContent=this.value">
 <div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>30s (forget fast)</span><span>600s (remember long)</span></div>
 </div>
+</div>
+
+<div style="font-size:13px;color:#00d4aa;font-weight:bold;margin:12px 0 6px">Display</div>
+<div style="margin-bottom:8px">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Full refresh every: <span id="setting-refresh-val">10</span> partials</div>
+<input type="range" id="setting-refresh" class="ch-slider" min="3" max="100" step="1" value="10" oninput="document.getElementById('setting-refresh-val').textContent=this.value">
+<div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>3 (less ghosting)</span><span>100 (less flicker)</span></div>
 </div>
 
 <div style="margin-top:12px">
@@ -1387,14 +1404,6 @@ function slideRage(level) {
     });
 }
 
-function setEpochSleep(secs) {
-    secs = Math.max(0, Math.min(30, secs));
-    document.getElementById('epoch-sleep').value = secs;
-    api('POST', '/api/settings', {epoch_sleep_secs: secs}).then(function(r) {
-        if (r && r.ok) toast('Epoch sleep: ' + secs + 's');
-    });
-}
-
 function breakRage() {
     var toggle = document.getElementById('rage-toggle');
     if (toggle.checked) {
@@ -1487,7 +1496,7 @@ function btPair(mac, name) {
     api('POST', '/api/bluetooth/pair', {mac: mac}).then(function(r) {
         if (r && r.ok) {
             toast(r.message);
-            document.getElementById('bt-device-list').innerHTML = '<div style="color:#00d4aa;font-size:12px">Pairing in progress...</div>';
+            document.getElementById('bt-device-list').innerHTML = '<div style="color:#f0c040;font-size:12px" id="bt-pair-status">&#9881; Pairing with ' + esc(label) + '... confirm on your phone</div>';
         }
     });
 }
@@ -1514,12 +1523,12 @@ function btConfirmPasskey(c) {
 function renderBtDeviceList(devices) {
     var dl = document.getElementById('bt-device-list');
     if (!dl || !devices || devices.length === 0) return;
-    var html = '<div style="font-size:11px;color:#888;margin-bottom:4px">Found ' + devices.length + ' device(s). Tap to pair:</div>';
+    var html = '<div style="font-size:11px;color:#888;margin-bottom:4px">Found ' + devices.length + ' device(s):</div>';
     devices.forEach(function(v) {
         var ms = v.mac ? v.mac.slice(-5) : '';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #0a1628">' +
+        html += '<div onclick="btPair(\'' + esc(v.mac) + '\',\'' + esc(v.name || '') + '\')" style="display:flex;justify-content:space-between;align-items:center;padding:8px;margin:4px 0;border:1px solid #0f3460;border-radius:8px;background:#0a1628;cursor:pointer;transition:all .2s" onmouseover="this.style.borderColor=\'#00d4aa\';this.style.background=\'#0f3460\'" onmouseout="this.style.borderColor=\'#0f3460\';this.style.background=\'#0a1628\'">' +
             '<span style="color:#e0e0e0;font-size:12px">' + esc(v.name || 'Unknown') + ' <span style="color:#666;font-size:10px">(' + ms + ')</span></span>' +
-            '<button class="action-btn" onclick="btPair(\'' + esc(v.mac) + '\',\'' + esc(v.name || '') + '\')" style="font-size:10px;padding:2px 8px">Pair</button></div>';
+            '<span style="color:#00d4aa;font-size:11px;font-weight:600">Pair &rarr;</span></div>';
     });
     dl.innerHTML = html;
 }
@@ -1783,7 +1792,7 @@ function saveSettings() {
     body.display_rotation = parseInt(document.getElementById('setting-rotation').value) || 0;
     body.min_rssi = parseInt(document.getElementById('setting-rssi').value) || -100;
     body.ap_ttl_secs = parseInt(document.getElementById('setting-ttl').value) || 120;
-    body.epoch_sleep_secs = parseInt(document.getElementById('epoch-sleep').value) || 0;
+    body.display_refresh_interval = parseInt(document.getElementById('setting-refresh').value) || 10;
     api('POST', '/api/settings', body).then(function(r) {
         if (r && r.ok) toast('Settings saved');
     });
@@ -1820,9 +1829,9 @@ function syncSettingsFromData(d) {
         var ttl = document.getElementById('setting-ttl');
         if (ttl && !ttl.matches(':active')) { ttl.value = d.ap_ttl_secs; document.getElementById('setting-ttl-val').textContent = d.ap_ttl_secs; }
     }
-    if (d.epoch_sleep_secs != null) {
-        var sl = document.getElementById('epoch-sleep');
-        if (sl && !sl.matches(':focus')) sl.value = d.epoch_sleep_secs;
+    if (d.display_refresh_interval != null) {
+        var ri = document.getElementById('setting-refresh');
+        if (ri && !ri.matches(':active')) { ri.value = d.display_refresh_interval; document.getElementById('setting-refresh-val').textContent = d.display_refresh_interval; }
     }
 }
 
@@ -1864,6 +1873,22 @@ function updateBluetoothFromWs(d) {
     } else {
         var pa = document.getElementById('bt-passkey-area');
         if (pa) pa.style.display = 'none';
+    }
+    // live pairing status update
+    var ps = document.getElementById('bt-pair-status');
+    if (ps) {
+        if (d.pair_in_progress) {
+            if (d.passkey) {
+                ps.innerHTML = '&#128273; Passkey: <b>' + String(d.passkey).padStart(6,'0') + '</b> — confirm on phone';
+                ps.style.color = '#00d4aa';
+            }
+        } else if (d.connected) {
+            ps.innerHTML = '&#10004; Connected!';
+            ps.style.color = '#00d4aa';
+        } else if (d.state === 'Error') {
+            ps.innerHTML = '&#10006; Pairing failed';
+            ps.style.color = '#e94560';
+        }
     }
 }
 
@@ -2352,34 +2377,61 @@ connectWebSocket();
 refreshStatus();
 // Display image stays on its own interval (binary, not suitable for WS)
 setInterval(function(){ document.getElementById('eink-img').src='/api/display.png?t='+Date.now(); }, 5000);
+var _interactCooldownTimer = null;
 function interact(action) {
-  var btn = document.getElementById('btn-' + action);
-  btn.disabled = true;
-  btn.style.opacity = '0.5';
+  var allBtns = ['btn-pet', 'btn-treat', 'btn-praise'];
+  allBtns.forEach(function(id) {
+    var b = document.getElementById(id);
+    if (b) { b.disabled = true; b.classList.add('on-cooldown'); }
+  });
   api('POST', '/api/interact', { action: action }).then(function(d) {
-    if (!d) { btn.disabled = false; btn.style.opacity = '1'; return; }
-    if (d.ok) refreshPersonality();
-    startCooldown(btn, action, d.cooldown_secs);
+    if (!d) { enableAllInteract(); return; }
+    var resp = document.getElementById('interact-response');
+    if (resp) { resp.textContent = d.message || ''; resp.style.opacity = '1'; resp.style.color = d.ok ? '#00d4aa' : '#e94560'; }
+    if (d.ok) { refreshPersonality(); startInteractCooldown(d.cooldown_secs); }
+    else { enableAllInteract(); }
   });
 }
-function startCooldown(btn, action, secs) {
-  var label = action.charAt(0).toUpperCase() + action.slice(1);
-  if (secs <= 0) { btn.textContent = label; btn.disabled = false; btn.style.opacity = '1'; return; }
+function enableAllInteract() {
+  ['pet', 'treat', 'praise'].forEach(function(action) {
+    var b = document.getElementById('btn-' + action);
+    if (b) { b.disabled = false; b.classList.remove('on-cooldown'); b.textContent = action.charAt(0).toUpperCase() + action.slice(1); }
+  });
+}
+function startInteractCooldown(secs) {
+  if (secs <= 0) { enableAllInteract(); return; }
+  if (_interactCooldownTimer) clearInterval(_interactCooldownTimer);
   var end = Date.now() + secs * 1000;
-  var iv = setInterval(function() {
+  var allBtns = ['btn-pet', 'btn-treat', 'btn-praise'];
+  _interactCooldownTimer = setInterval(function() {
     var left = Math.max(0, Math.round((end - Date.now()) / 1000));
-    if (left <= 0) { clearInterval(iv); btn.textContent = label; btn.disabled = false; btn.style.opacity = '1'; return; }
+    if (left <= 0) {
+      clearInterval(_interactCooldownTimer); _interactCooldownTimer = null;
+      enableAllInteract();
+      var resp = document.getElementById('interact-response');
+      if (resp) { resp.style.opacity = '0'; }
+      return;
+    }
+    allBtns.forEach(function(id) {
+      var b = document.getElementById(id);
+      if (b) { b.disabled = true; b.classList.add('on-cooldown'); }
+    });
     var m = Math.floor(left / 60), s = left % 60;
-    btn.textContent = label + ' ' + m + ':' + (s < 10 ? '0' : '') + s;
+    var timeStr = m + ':' + (s < 10 ? '0' : '') + s;
+    allBtns.forEach(function(id) {
+      var b = document.getElementById(id);
+      if (b) {
+        var label = id.replace('btn-', '');
+        b.textContent = label.charAt(0).toUpperCase() + label.slice(1) + ' ' + timeStr;
+      }
+    });
   }, 1000);
 }
 function loadInteractCooldowns() {
   api('GET', '/api/interact').then(function(d) {
     if (!d) return;
-    ['pet', 'treat', 'praise'].forEach(function(action) {
-      var secs = d[action] || 0;
-      if (secs > 0) startCooldown(document.getElementById('btn-' + action), action, secs);
-    });
+    var maxSecs = Math.max(d.pet || 0, d.treat || 0, d.praise || 0);
+    if (maxSecs > 0) startInteractCooldown(maxSecs);
   });
 }
 loadInteractCooldowns();

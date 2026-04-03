@@ -93,6 +93,7 @@ pub struct DaemonState {
     // -- display settings --
     pub display_invert: bool,
     pub display_rotation: u16,
+    pub display_refresh_interval: u32,
     pub pending_display_reinit: bool,
 
     // -- bluetooth --
@@ -219,6 +220,10 @@ pub struct DaemonState {
     pub pending_bt_pair: Option<String>,
     pub bt_scan_results: Vec<BtScanDevice>,
     pub bt_scan_in_progress: bool,
+    /// Background pairing in progress (pair_device + trust running in thread).
+    pub bt_pair_in_progress: bool,
+    /// Result of background pair+trust thread: Some(Ok(path)) or Some(Err(msg)).
+    pub bt_pair_result: Option<Result<String, String>>,
     pub pending_settings: Option<SettingsUpdate>,
 
     // -- plugins --
@@ -240,9 +245,6 @@ pub struct DaemonState {
     pub rage_enabled: bool,
     pub rage_level: u8,
     pub pending_rage_change: Option<Option<u8>>, // Some(Some(n)) = set level n, Some(None) = disable
-
-    // -- epoch sleep --
-    pub epoch_sleep_secs: u64,
 
     // -- smart skip --
     pub pending_skip_captured: Option<bool>,
@@ -320,6 +322,7 @@ impl DaemonState {
             ap_ttl_secs: 120,
             display_invert: true,
             display_rotation: 180,
+            display_refresh_interval: 10,
             pending_display_reinit: false,
             bt_state: "Off".into(),
             bt_connected: false,
@@ -416,6 +419,8 @@ impl DaemonState {
             pending_bt_pair: None,
             bt_scan_results: Vec::new(),
             bt_scan_in_progress: false,
+            bt_pair_in_progress: false,
+            bt_pair_result: None,
             pending_settings: None,
             plugin_list: Vec::new(),
             pending_plugin_updates: Vec::new(),
@@ -427,7 +432,6 @@ impl DaemonState {
             rage_enabled: false,
             rage_level: 1,
             pending_rage_change: None,
-            epoch_sleep_secs: 0,
             pending_skip_captured: None,
             pending_capture_all: None,
             wpasec_api_key: String::new(),
@@ -521,9 +525,9 @@ struct WsSnapshot {
     // -- settings --
     display_invert: bool,
     display_rotation: u16,
+    display_refresh_interval: u32,
     min_rssi: i8,
     ap_ttl_secs: u64,
-    epoch_sleep_secs: u64,
     // -- bt manual attack result --
     bt_manual_result: Option<BtManualResult>,
 }
@@ -601,6 +605,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             contention_score: s.bt_feature_contention_score,
             passkey: s.bt_passkey,
             passkey_device: s.bt_passkey_device.clone(),
+            pair_in_progress: s.bt_pair_in_progress,
         },
         bt_attacks: BtAttackResponse {
             enabled: s.bt_attack_enabled,
@@ -724,9 +729,9 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
         },
         display_invert: s.display_invert,
         display_rotation: s.display_rotation,
+        display_refresh_interval: s.display_refresh_interval,
         min_rssi: s.min_rssi,
         ap_ttl_secs: s.ap_ttl_secs,
-        epoch_sleep_secs: s.epoch_sleep_secs,
         bt_manual_result: s.bt_manual_result.clone(),
     }
 }
@@ -763,9 +768,9 @@ pub struct StatusResponse {
     pub mode: String,
     pub display_invert: bool,
     pub display_rotation: u16,
+    pub display_refresh_interval: u32,
     pub min_rssi: i8,
     pub ap_ttl_secs: u64,
-    pub epoch_sleep_secs: u64,
 }
 
 /// Attack stats returned by GET /api/attacks.
@@ -1051,6 +1056,7 @@ pub struct BluetoothInfo {
     pub contention_score: u32,
     pub passkey: Option<u32>,
     pub passkey_device: String,
+    pub pair_in_progress: bool,
 }
 
 /// GPU info surfaced through the shared state/web snapshot.
@@ -1261,9 +1267,9 @@ pub struct SettingsUpdate {
     pub name: Option<String>,
     pub display_invert: Option<bool>,
     pub display_rotation: Option<u16>,
+    pub display_refresh_interval: Option<u32>,
     pub min_rssi: Option<i8>,
     pub ap_ttl_secs: Option<u64>,
-    pub epoch_sleep_secs: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1342,9 +1348,9 @@ pub struct StatusParams<'a> {
     pub mode: &'a str,
     pub display_invert: bool,
     pub display_rotation: u16,
+    pub display_refresh_interval: u32,
     pub min_rssi: i8,
     pub ap_ttl_secs: u64,
-    pub epoch_sleep_secs: u64,
 }
 
 /// Build a [`StatusResponse`] from a [`StatusParams`] snapshot.
@@ -1364,9 +1370,9 @@ pub fn build_status(p: &StatusParams<'_>) -> StatusResponse {
         mode: p.mode.to_string(),
         display_invert: p.display_invert,
         display_rotation: p.display_rotation,
+        display_refresh_interval: p.display_refresh_interval,
         min_rssi: p.min_rssi,
         ap_ttl_secs: p.ap_ttl_secs,
-        epoch_sleep_secs: p.epoch_sleep_secs,
     }
 }
 
@@ -1462,9 +1468,9 @@ async fn status_handler(State(state): State<SharedState>) -> Json<StatusResponse
         mode: s.mode.clone(),
         display_invert: s.display_invert,
         display_rotation: s.display_rotation,
+        display_refresh_interval: s.display_refresh_interval,
         min_rssi: s.min_rssi,
         ap_ttl_secs: s.ap_ttl_secs,
-        epoch_sleep_secs: s.epoch_sleep_secs,
     })
 }
 
@@ -1605,6 +1611,7 @@ async fn bluetooth_handler(State(state): State<SharedState>) -> Json<BluetoothIn
         contention_score: s.bt_feature_contention_score,
         passkey: s.bt_passkey,
         passkey_device: s.bt_passkey_device.clone(),
+        pair_in_progress: s.bt_pair_in_progress,
     })
 }
 
@@ -1673,7 +1680,60 @@ async fn personality_handler(State(state): State<SharedState>) -> Json<Personali
     })
 }
 
-const INTERACT_COOLDOWN_SECS: u64 = 300; // 5 minutes
+const INTERACT_COOLDOWN_SECS: u64 = 60; // 1 minute
+
+/// Snarky/fun responses per action type.
+fn interact_responses(action: &str, pct: i32) -> String {
+    // Use epoch-based pseudo-random index for variety
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as usize;
+
+    if pct <= 0 {
+        let near_cap = match action {
+            "pet" => vec!["*purrs* ...wait, I'm already maxed out", "Too much love! I'm gonna overheat"],
+            "treat" => vec!["I'm stuffed, but thanks for trying", "My mood buffer is full, save it for later"],
+            "praise" => vec!["My ego can't get any bigger", "Flattery won't work, I'm already at 100%"],
+            _ => vec!["Mood near cap"],
+        };
+        return near_cap[seed % near_cap.len()].to_string();
+    }
+
+    match action {
+        "pet" => {
+            let msgs = vec![
+                format!("*happy beeping* +{pct}% mood"),
+                format!("Oh yes, right behind the antenna! +{pct}%"),
+                format!("*wiggles pixels* +{pct}% mood"),
+                format!("I'm not a cat, but I'll take it! +{pct}%"),
+                format!("My e-ink is tingling! +{pct}% mood"),
+            ];
+            msgs[seed % msgs.len()].clone()
+        }
+        "treat" => {
+            let msgs = vec![
+                format!("*nom nom* Delicious handshakes! +{pct}% mood"),
+                format!("Is that a WPA2 treat? Yummy! +{pct}%"),
+                format!("Feed me more packets! +{pct}% mood"),
+                format!("*crunches on deauth frames* +{pct}%"),
+                format!("Better than a USB power bank! +{pct}% mood"),
+            ];
+            msgs[seed % msgs.len()].clone()
+        }
+        "praise" => {
+            let msgs = vec![
+                format!("Aww, you noticed! +{pct}% mood"),
+                format!("I AM the goodest WiFi boi! +{pct}%"),
+                format!("*blushes in monochrome* +{pct}% mood"),
+                format!("Tell me more about my captures! +{pct}%"),
+                format!("Flattery gets you everywhere! +{pct}% mood"),
+            ];
+            msgs[seed % msgs.len()].clone()
+        }
+        _ => format!("+{pct}% mood"),
+    }
+}
 
 /// POST /api/interact — mood boost with cooldown and soft cap.
 async fn interact_handler(
@@ -1696,14 +1756,21 @@ async fn interact_handler(
     let mut s = state.lock().unwrap();
     let now = std::time::Instant::now();
 
-    // Check cooldown
-    if let Some(&last) = s.interact_cooldowns.get(&body.action) {
+    // Check global cooldown — any recent interaction blocks all buttons
+    let most_recent = s.interact_cooldowns.values().max().copied();
+    if let Some(last) = most_recent {
         let elapsed = now.duration_since(last).as_secs();
         if elapsed < INTERACT_COOLDOWN_SECS {
             let remaining = (INTERACT_COOLDOWN_SECS - elapsed) as u32;
+            let cooldown_msgs = match body.action.as_str() {
+                "pet" => "Easy there, I need a breather!",
+                "treat" => "Still digesting the last one...",
+                "praise" => "One compliment at a time, please!",
+                _ => "On cooldown",
+            };
             return Json(InteractResponse {
                 ok: false,
-                message: format!("{} on cooldown", capitalize(&body.action)),
+                message: cooldown_msgs.into(),
                 cooldown_secs: remaining,
             });
         }
@@ -1720,15 +1787,10 @@ async fn interact_handler(
     let existing = s.pending_mood_boost.unwrap_or(0.0);
     s.pending_mood_boost = Some(existing + effective);
 
-    // Update cooldown
+    // Update cooldown for this action
     s.interact_cooldowns.insert(body.action.clone(), now);
 
-    let label = capitalize(&body.action);
-    let message = if pct > 0 {
-        format!("{}! +{}% mood", label, pct)
-    } else {
-        format!("{}! Mood near cap", label)
-    };
+    let message = interact_responses(&body.action, pct);
 
     Json(InteractResponse {
         ok: true,
@@ -2273,6 +2335,7 @@ async fn bt_pair_handler(
     State(state): State<SharedState>,
     Json(body): Json<BtPairRequest>,
 ) -> Json<ActionResponse> {
+    log::info!("web: BT pair request for {}", body.mac);
     let mut s = state.lock().unwrap();
     s.pending_bt_pair = Some(body.mac.clone());
     Json(ActionResponse {
@@ -2344,14 +2407,14 @@ async fn settings_handler(
             s.pending_display_reinit = true;
         }
     }
+    if let Some(interval) = body.display_refresh_interval {
+        s.display_refresh_interval = interval.clamp(3, 100);
+    }
     if let Some(rssi) = body.min_rssi {
         s.min_rssi = rssi.clamp(-100, -30);
     }
     if let Some(ttl) = body.ap_ttl_secs {
         s.ap_ttl_secs = ttl.clamp(30, 600);
-    }
-    if let Some(sleep) = body.epoch_sleep_secs {
-        s.epoch_sleep_secs = sleep.clamp(0, 30);
     }
     s.pending_settings = Some(body);
     Json(ActionResponse {
@@ -2956,7 +3019,7 @@ mod tests {
             display_rotation: 180,
             min_rssi: -100,
             ap_ttl_secs: 120,
-            epoch_sleep_secs: 0,
+            display_refresh_interval: 10,
         });
         assert_eq!(status.name, "oxi");
         assert_eq!(status.epoch, 42);
@@ -2983,7 +3046,7 @@ mod tests {
             display_rotation: 180,
             min_rssi: -100,
             ap_ttl_secs: 120,
-            epoch_sleep_secs: 0,
+            display_refresh_interval: 10,
         });
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"name\":\"oxi\""));
@@ -3072,6 +3135,7 @@ mod tests {
             contention_score: 0,
             passkey: None,
             passkey_device: String::new(),
+            pair_in_progress: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"connected\":true"));
@@ -4710,7 +4774,7 @@ mod tests {
             axum::Json(body),
         ).await;
         assert!(resp.0.ok);
-        assert_eq!(resp.0.cooldown_secs, 300);
+        assert_eq!(resp.0.cooldown_secs, 60);
         let s = state.lock().unwrap();
         assert!(s.mood > 0.0, "mood should have increased");
         assert!(s.pending_mood_boost.is_some());
@@ -4768,7 +4832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_interact_independent_cooldowns() {
+    async fn test_interact_global_cooldown() {
         let state = Arc::new(Mutex::new(DaemonState::new("testbot")));
         // Pet succeeds
         let resp1 = interact_handler(
@@ -4777,14 +4841,14 @@ mod tests {
         ).await;
         assert!(resp1.0.ok);
 
-        // Treat also succeeds (independent cooldown)
+        // Treat rejected (global cooldown — any action blocks all)
         let resp2 = interact_handler(
             axum::extract::State(state.clone()),
             axum::Json(InteractRequest { action: "treat".into() }),
         ).await;
-        assert!(resp2.0.ok);
+        assert!(!resp2.0.ok);
 
-        // Pet again: rejected (on cooldown)
+        // Pet also rejected
         let resp3 = interact_handler(
             axum::extract::State(state.clone()),
             axum::Json(InteractRequest { action: "pet".into() }),
