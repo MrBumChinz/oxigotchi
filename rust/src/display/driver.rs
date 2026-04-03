@@ -298,9 +298,14 @@ impl Ssd1680Hal for RppalHal {
     fn partial_reset(&mut self) -> Result<(), String> {
         use std::thread;
         use std::time::Duration;
-        self.rst.set_low();
-        thread::sleep(Duration::from_millis(1));
+        // Match Python displayPartial reset: HIGH 20ms → LOW 2ms → HIGH 20ms
+        // The original 1ms LOW-only pulse caused BUSY timeouts under AO load.
         self.rst.set_high();
+        thread::sleep(Duration::from_millis(20));
+        self.rst.set_low();
+        thread::sleep(Duration::from_millis(2));
+        self.rst.set_high();
+        thread::sleep(Duration::from_millis(20));
         Ok(())
     }
 }
@@ -312,7 +317,8 @@ impl Ssd1680Hal for RppalHal {
 /// Generic over the HAL backend so tests can use `MockHal` while the Pi
 /// uses `RppalHal`.
 /// Number of partial refreshes before forcing a full refresh to clear ghosting.
-pub const FULL_REFRESH_INTERVAL: u32 = 10;
+/// 15 partials × ~6s epoch ≈ 90s between full clears — balances ghosting vs white-flash frequency.
+pub const FULL_REFRESH_INTERVAL: u32 = 15;
 
 pub struct Ssd1680Driver<H: Ssd1680Hal> {
     pub hal: H,
@@ -638,7 +644,7 @@ pub fn request_reinit() {
 /// - **Exponential backoff**: After 3 consecutive failures, skips display for
 ///   2^(n-3) epochs (1, 2, 4, 8) to avoid rapid reinit→timeout→reinit loops
 ///   that cause the black border flash crash loop.
-/// - **Periodic full refresh**: Every `FULL_REFRESH_INTERVAL` (10) partial
+/// - **Periodic full refresh**: Every `FULL_REFRESH_INTERVAL` (15) partial
 ///   refreshes, forces a full init+clear+base to clear accumulated ghosting
 ///   that can trigger BUSY lockup.
 #[cfg(target_arch = "aarch64")]
