@@ -28,7 +28,8 @@ mod wifi;
 use chrono::Timelike;
 use log::info;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use crate::timer::WallTimer;
 
 /// Ensure tmpfs capture directory exists for AO output.
 /// Creates /tmp/ao_captures/ if it doesn't exist.
@@ -139,6 +140,21 @@ struct Daemon {
     lifetime_aps_base: u64,
     /// Previous epoch's cumulative AP count from AO — used to compute delta (new unique APs).
     prev_ap_count: u32,
+    // ---- Wall-clock timers (replace epoch % N scheduling) ----
+    mood_timer: WallTimer,
+    xp_passive_timer: WallTimer,
+    xp_save_timer: WallTimer,
+    psm_reset_timer: WallTimer,
+    wpasec_fetch_timer: WallTimer,
+    ws_broadcast_timer: WallTimer,
+    cpu_sample_timer: WallTimer,
+    lua_tick_timer: WallTimer,
+    bt_scan_alt_timer: WallTimer,
+    qpu_reset_timer: WallTimer,
+    autohunt_coldstart: WallTimer,
+    autohunt_warmed_up: bool,
+    bt_scan_use_le: bool,
+    epoch_start: Instant,
 }
 
 impl Daemon {
@@ -235,6 +251,21 @@ impl Daemon {
             tmpfs_capture_dir: ensure_tmpfs_capture_dir(),
             lifetime_aps_base: 0,
             prev_ap_count: 0,
+            // Wall-clock timers
+            mood_timer: WallTimer::new(Duration::from_secs(30)),
+            xp_passive_timer: WallTimer::new(Duration::from_secs(30)),
+            xp_save_timer: WallTimer::new(Duration::from_secs(150)),
+            psm_reset_timer: WallTimer::new(Duration::from_secs(900)),
+            wpasec_fetch_timer: WallTimer::new(Duration::from_secs(1500)),
+            ws_broadcast_timer: WallTimer::new(Duration::from_secs(2)),
+            cpu_sample_timer: WallTimer::new(Duration::from_secs(5)),
+            lua_tick_timer: WallTimer::new(Duration::from_secs(5)),
+            bt_scan_alt_timer: WallTimer::new(Duration::from_secs(60)),
+            qpu_reset_timer: WallTimer::new(Duration::from_secs(10)),
+            autohunt_coldstart: WallTimer::new(Duration::from_secs(300)),
+            autohunt_warmed_up: false,
+            bt_scan_use_le: true,
+            epoch_start: Instant::now(),
         }
     }
 
@@ -457,6 +488,7 @@ impl Daemon {
 
     /// Run one full epoch: Scan -> Attack -> Capture -> Display -> Sleep.
     fn run_epoch(&mut self) {
+        self.epoch_start = Instant::now();
         let mut result = epoch::EpochResult::default();
 
         // ---- Web commands ----
@@ -591,10 +623,13 @@ impl Daemon {
             self.channel_scorer.tick_epoch();
 
             // When autohunt is ON, update AO's channel config with the best channels.
-            // Cold-start guard: use safe 1,6,11 for the first 10 epochs so the
+            // Cold-start guard: use safe 1,6,11 for the first 5 min so the
             // scorer collects real AP data before making decisions.
+            if !self.autohunt_warmed_up && self.autohunt_coldstart.due() {
+                self.autohunt_warmed_up = true;
+            }
             if self.autohunt {
-                let best = if self.epoch_loop.metrics.epoch < 10 {
+                let best = if !self.autohunt_warmed_up {
                     vec![1, 6, 11]
                 } else {
                     self.channel_scorer.top_channels()
@@ -649,9 +684,10 @@ impl Daemon {
                     })
                     .collect();
 
+                let epoch_secs = self.epoch_start.elapsed().as_secs_f32().max(1.0);
                 let rf = qpu::rf::RfEnvironment::compute(
                     &classified,
-                    10.0, // active phases ~10s
+                    epoch_secs,
                     &ao_bssids,
                 );
 
@@ -687,9 +723,11 @@ impl Daemon {
             self.update_face_and_personality(&result);
         }
 
-        // ---- Lua plugins + display ----
-        let epoch_state = self.build_epoch_state();
-        self.lua.tick_epoch(&epoch_state);
+        // ---- Lua plugins (gated to every 5s) + display ----
+        if self.lua_tick_timer.due() {
+            let epoch_state = self.build_epoch_state();
+            self.lua.tick_epoch(&epoch_state);
+        }
 
         // ---- Plugin hot-reload: check inotify for changed .lua files ----
         if let Some(ref watcher) = self.plugin_watcher {
@@ -706,21 +744,20 @@ impl Daemon {
 
         self.update_display();
 
-        // ---- CPU usage sampling ----
-        if let Some(sample) = personality::CpuSample::read() {
-            if let Some(ref prev) = self.prev_cpu_sample {
-                let cpu_pct = sample.cpu_percent(prev);
-                let mut s = self.shared_state.lock().unwrap();
-                s.cpu_percent = cpu_pct;
+        // ---- CPU usage sampling (every 5s) ----
+        if self.cpu_sample_timer.due() {
+            if let Some(sample) = personality::CpuSample::read() {
+                if let Some(ref prev) = self.prev_cpu_sample {
+                    let cpu_pct = sample.cpu_percent(prev);
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.cpu_percent = cpu_pct;
+                }
+                self.prev_cpu_sample = Some(sample);
             }
-            self.prev_cpu_sample = Some(sample);
         }
 
-        // ---- PSM counter reset (every 30 epochs = ~15 min) ----
-        if self.mode == OperatingMode::Rage
-            && self.epoch_loop.metrics.epoch > 0
-            && self.epoch_loop.metrics.epoch % 30 == 0
-        {
+        // ---- PSM counter reset (every 15 min wall-clock) ----
+        if self.mode == OperatingMode::Rage && self.psm_reset_timer.due() {
             if let Err(e) = recovery::reset_watchdog_counters() {
                 log::debug!("PSM counter reset skipped: {e}");
             } else {
@@ -728,11 +765,13 @@ impl Daemon {
             }
         }
 
-        // ---- Sync state to web ----
+        // ---- Sync state to web (every 2s wall-clock) ----
         // tick_transition_override() already called in update_face_and_personality()
         // before generate_status(), so face state is consistent across display + web.
-        self.sync_to_web();
-        web::broadcast_state(&self.shared_state, &self.ws_tx);
+        if self.ws_broadcast_timer.due() {
+            self.sync_to_web();
+            web::broadcast_state(&self.shared_state, &self.ws_tx);
+        }
         // Keep manual attack result visible for a few broadcasts, then clear.
         {
             let mut s = self.shared_state.lock().unwrap();
@@ -749,8 +788,10 @@ impl Daemon {
         if self.watchdog.needs_ping() {
             self.watchdog.ping();
         }
-        // Reset QPU ring buffer between epochs
-        if let Some(e) = self.qpu_engine.as_mut() { e.reset_ring(); }
+        // Reset QPU ring buffer (every 10s wall-clock)
+        if self.qpu_reset_timer.due() {
+            if let Some(e) = self.qpu_engine.as_mut() { e.reset_ring(); }
+        }
 
         self.epoch_loop.next_phase(); // -> Scan (increments epoch counter)
     }
@@ -804,7 +845,6 @@ impl Daemon {
         // Phase 0: Scan — discover nearby BT devices via HCI
         if let Some(ref hci) = self.bt_hci_socket {
             let scan_mode = self.config.bt_attacks.scan_mode;
-            let epoch_num = self.epoch_loop.metrics.epoch;
 
             let discovered = match scan_mode {
                 bluetooth::attacks::BtScanMode::Ble => {
@@ -818,7 +858,7 @@ impl Daemon {
                     }
                 }
                 bluetooth::attacks::BtScanMode::Both => {
-                    if epoch_num % 2 == 0 {
+                    if self.bt_scan_use_le {
                         bluetooth::attacks::scan::hci_le_scan(hci, 2000)
                     } else if self.bt_attack_scheduler.active_count() == 0 {
                         bluetooth::attacks::scan::hci_inquiry(hci, 3)
@@ -827,6 +867,11 @@ impl Daemon {
                     }
                 }
             };
+
+            // Toggle LE/Classic scan on wall-clock timer (every 60s)
+            if scan_mode == bluetooth::attacks::BtScanMode::Both && self.bt_scan_alt_timer.due() {
+                self.bt_scan_use_le = !self.bt_scan_use_le;
+            }
 
             for dev in discovered {
                 self.bt_discovery.apply(
@@ -1149,8 +1194,8 @@ impl Daemon {
             log::warn!("WPA-SEC: {upload_failed} upload(s) failed");
         }
 
-        // 5b. Fetch cracked passwords from WPA-SEC every 50 epochs (~25min)
-        if self.epoch_loop.metrics.epoch % 50 == 10 && self.wpasec_config.enabled {
+        // 5b. Fetch cracked passwords from WPA-SEC (every 25 min wall-clock)
+        if self.wpasec_fetch_timer.due() && self.wpasec_config.enabled {
             let cracked = capture::fetch_cracked_from_wpasec(&self.wpasec_config);
             if !cracked.is_empty() {
                 info!("WPA-SEC: fetched {} cracked password(s)", cracked.len());
@@ -1235,9 +1280,18 @@ impl Daemon {
             self.epoch_loop.personality.variety.morning_greeted = true;
         }
 
-        // Periodic XP save (every 5 epochs)
-        self.epoch_loop.personality.xp.tick_epoch(); // +1 passive XP + epoch counter
-        if self.epoch_loop.personality.xp.should_save() {
+        // Mood tick (30s wall-clock)
+        if self.mood_timer.due() {
+            self.epoch_loop.personality.mood_tick();
+        }
+
+        // Passive XP (30s wall-clock)
+        if self.xp_passive_timer.due() {
+            self.epoch_loop.personality.xp.award(1);
+        }
+
+        // XP save (2.5 min wall-clock)
+        if self.xp_save_timer.due() {
             let mood = self.epoch_loop.personality.mood.value();
             if let Err(e) = self.epoch_loop.personality.xp.save(mood) {
                 log::warn!("XP save failed: {e}");
