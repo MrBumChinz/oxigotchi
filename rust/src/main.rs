@@ -486,7 +486,7 @@ impl Daemon {
         web::broadcast_state(&self.shared_state, &self.ws_tx);
     }
 
-    /// Run one full epoch: Scan -> Attack -> Capture -> Display -> Sleep.
+    /// Run one full epoch: Scan -> Attack -> Capture -> Display.
     fn run_epoch(&mut self) {
         self.epoch_start = Instant::now();
         let mut result = epoch::EpochResult::default();
@@ -783,8 +783,9 @@ impl Daemon {
             }
         }
 
-        // ---- Sleep + watchdog ----
-        self.epoch_loop.next_phase(); // -> Sleep
+        // ---- Finish epoch + watchdog ----
+        // next_phase() on Display wraps back to Scan and calls finish_epoch() internally.
+        self.epoch_loop.next_phase(); // Display -> Scan (increments epoch counter)
         if self.watchdog.needs_ping() {
             self.watchdog.ping();
         }
@@ -792,8 +793,6 @@ impl Daemon {
         if self.qpu_reset_timer.due() {
             if let Some(e) = self.qpu_engine.as_mut() { e.reset_ring(); }
         }
-
-        self.epoch_loop.next_phase(); // -> Scan (increments epoch counter)
     }
 
     /// Scan phase: count tracked APs, check WiFi health (RAGE mode only).

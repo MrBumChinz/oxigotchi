@@ -752,7 +752,7 @@ impl Personality {
                 self.joke_face = face_name;
                 self.current_status = question;
                 self.status_display_until = Some(now + Duration::from_secs(45));
-                self.mood.adjust(mood_deltas::JOKE);
+                // mood boost already applied in mood_tick() — don't double-boost here
                 return;
             }
         }

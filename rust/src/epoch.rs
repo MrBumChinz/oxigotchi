@@ -104,7 +104,7 @@ impl EpochLoop {
         }
     }
 
-    /// Called when the epoch's Sleep phase completes — prepares for next epoch.
+    /// Called when the epoch's Display phase completes — prepares for next epoch.
     fn finish_epoch(&mut self) {
         self.metrics.epoch += 1;
         self.metrics.uptime = self.start_time.elapsed();
