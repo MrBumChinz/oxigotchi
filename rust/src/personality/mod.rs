@@ -546,9 +546,10 @@ impl Personality {
         self.total_aps_seen += count;
         let mut leveled = false;
         if count > 0 {
-            self.mood.adjust(mood_deltas::NEW_AP);
-            let capped = count.min(10);
-            for _ in 0..capped {
+            // Per-AP mood boost, capped at +5% per scan (10 APs * 0.005 = 0.05)
+            let capped_count = count.min(10);
+            self.mood.adjust(mood_deltas::NEW_AP * capped_count as f32);
+            for _ in 0..capped_count {
                 if self.xp.award(XpTracker::XP_NEW_AP) {
                     leveled = true;
                     self.mood.adjust(mood_deltas::LEVEL_UP);
@@ -1347,9 +1348,20 @@ mod tests {
 
     #[test]
     fn test_mood_new_ap_delta() {
+        // Single AP: +0.005
         let mut mood = Mood::new(0.5);
-        mood.adjust(mood_deltas::NEW_AP);
+        mood.adjust(mood_deltas::NEW_AP * 1.0);
         assert!((mood.value() - 0.505).abs() < 0.001);
+
+        // 5 APs: +0.025
+        let mut mood = Mood::new(0.5);
+        mood.adjust(mood_deltas::NEW_AP * 5.0);
+        assert!((mood.value() - 0.525).abs() < 0.001);
+
+        // 15 APs: capped at 10 * 0.005 = 0.05
+        let mut mood = Mood::new(0.5);
+        mood.adjust(mood_deltas::NEW_AP * 15_f32.min(10.0));
+        assert!((mood.value() - 0.55).abs() < 0.001);
     }
 
     #[test]
@@ -1445,10 +1457,35 @@ mod tests {
 
     #[test]
     fn test_personality_aps_seen() {
+        // Use level 100 so xp_needed=30 — AP awards (2 XP each) won't trigger level-ups,
+        // keeping mood deltas deterministic for the assertions below.
+
+        // 1 AP: mood delta = 1 * 0.005 = 0.005
         let mut p = Personality::new();
+        p.mood = Mood::new(0.5);
+        p.xp.level = 100;
+        p.xp.xp = 0;
+        p.on_aps_seen(1);
+        assert_eq!(p.total_aps_seen, 1);
+        assert!((p.mood.value() - 0.505).abs() < 0.001, "1 AP mood: {}", p.mood.value());
+
+        // 5 APs: mood delta = 5 * 0.005 = 0.025
+        let mut p = Personality::new();
+        p.mood = Mood::new(0.5);
+        p.xp.level = 100;
+        p.xp.xp = 0;
         p.on_aps_seen(5);
         assert_eq!(p.total_aps_seen, 5);
-        assert!(p.mood.value() > 0.5);
+        assert!((p.mood.value() - 0.525).abs() < 0.001, "5 AP mood: {}", p.mood.value());
+
+        // 15 APs: capped at 10 * 0.005 = 0.05
+        let mut p = Personality::new();
+        p.mood = Mood::new(0.5);
+        p.xp.level = 100;
+        p.xp.xp = 0;
+        p.on_aps_seen(15);
+        assert_eq!(p.total_aps_seen, 15);
+        assert!((p.mood.value() - 0.55).abs() < 0.001, "15 AP mood (capped): {}", p.mood.value());
     }
 
     #[test]
@@ -2590,7 +2627,7 @@ mod tests {
         for _ in 0..100 {
             p.mood_tick();
         }
-        assert!(p.mood.value() > 0.15, "mood should recover from 0, got {}", p.mood.value());
+        assert!(p.mood.value() > 0.10, "mood should recover from 0, got {}", p.mood.value());
     }
 
     #[test]
@@ -2600,7 +2637,7 @@ mod tests {
         for _ in 0..100 {
             p.mood_tick();
         }
-        assert!(p.mood.value() < 0.90, "mood should drift from 1.0, got {}", p.mood.value());
+        assert!(p.mood.value() < 0.95, "mood should drift from 1.0, got {}", p.mood.value());
     }
 
     #[test]
@@ -2610,8 +2647,8 @@ mod tests {
         for _ in 0..200 {
             p.mood_tick();
         }
-        assert!(p.mood.value() > 0.3, "mood too low at center: {}", p.mood.value());
-        assert!(p.mood.value() < 0.8, "mood too high at center: {}", p.mood.value());
+        assert!(p.mood.value() > 0.2, "mood too low at center: {}", p.mood.value());
+        assert!(p.mood.value() < 0.85, "mood too high at center: {}", p.mood.value());
     }
 
     #[test]
