@@ -1037,7 +1037,7 @@ impl XpTracker {
                 }
                 let mut t = Self::new();
                 t.save_path = path.to_path_buf();
-                return (t, 0.5);
+                return (t, 1.0);
             }
         };
 
@@ -1054,7 +1054,7 @@ impl XpTracker {
                 warn!("XP load: corrupted file {:?}: {e} — starting fresh", path);
                 let mut t = Self::new();
                 t.save_path = path.to_path_buf();
-                (t, 0.5)
+                (t, 1.0)
             }
         }
     }
@@ -1720,7 +1720,7 @@ mod tests {
         let (tracker, mood) = XpTracker::load(&path);
         assert_eq!(tracker.level, 1);
         assert_eq!(tracker.xp, 0);
-        assert!((mood - 0.5).abs() < 0.001);
+        assert!((mood - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -1732,7 +1732,7 @@ mod tests {
         let (tracker, mood) = XpTracker::load(&path);
         assert_eq!(tracker.level, 1);
         assert_eq!(tracker.xp, 0);
-        assert!((mood - 0.5).abs() < 0.001);
+        assert!((mood - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -1744,7 +1744,7 @@ mod tests {
         let (tracker, mood) = XpTracker::load(&path);
         assert_eq!(tracker.level, 1);
         assert_eq!(tracker.xp, 0);
-        assert!((mood - 0.5).abs() < 0.001);
+        assert!((mood - 1.0).abs() < 0.001);
     }
 
     #[test]
@@ -1757,7 +1757,7 @@ mod tests {
         let (tracker, mood) = XpTracker::load(&path);
         // Should start fresh because deserialization fails (missing fields)
         assert_eq!(tracker.level, 1);
-        assert!((mood - 0.5).abs() < 0.001);
+        assert!((mood - 1.0).abs() < 0.001);
     }
 
     #[test]
