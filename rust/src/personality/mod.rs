@@ -552,10 +552,13 @@ impl Personality {
             for _ in 0..capped_count {
                 if self.xp.award(XpTracker::XP_NEW_AP) {
                     leveled = true;
-                    self.mood.adjust(mood_deltas::LEVEL_UP);
-                    self.context.level_up = true;
-                    self.context.level = self.xp.level;
                 }
+            }
+            if leveled {
+                // One LEVEL_UP mood boost regardless of how many levels gained
+                self.mood.adjust(mood_deltas::LEVEL_UP);
+                self.context.level_up = true;
+                self.context.level = self.xp.level;
             }
         }
         leveled
@@ -875,14 +878,15 @@ pub struct XpSaveData {
 
 /// Experience point tracker and leveling system.
 ///
-/// XP values per event (matching Python exp.py spec):
+/// XP values per event:
 ///   - Handshake:   100 XP
-///   - Deauth:       10 XP
-///   - Association:  15 XP
-///   - New AP seen:   5 XP
+///   - Deauth:        1 XP
+///   - Association:   1 XP
+///   - New AP seen:   2 XP (capped at 10 APs per epoch)
+///   - Passive:       1 XP (every 30s via wall-clock timer)
 ///
-/// Level-up formula: XP needed = level * 100.
-///   Level 1 → 100 XP, Level 2 → 200 XP, Level 3 → 300 XP, etc.
+/// Level-up formula: XP needed = max(1, level² / 330).
+///   Quadratic curve: ~1 year passive-only to reach level 999.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XpTracker {
     /// XP accumulated toward the current level.

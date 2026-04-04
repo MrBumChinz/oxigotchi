@@ -74,7 +74,7 @@ pub struct FaceVariety {
     pub morning_greeted: bool,
 
     // -- Rare face --
-    /// Rare face for this epoch (rolled in tick_countdowns).
+    /// Rare face (rolled every 30s in tick_countdowns).
     pub rare_face: Option<&'static str>,
 }
 
@@ -183,17 +183,19 @@ impl FaceVariety {
         }
     }
 
-    /// Tick down all active countdowns. Call once per epoch.
-    /// Also rolls for rare face and resets per-epoch state.
+    /// Reset per-epoch transient state. Called every epoch (fast, 1-2s).
+    pub fn tick_epoch(&mut self) {
+        self.captures_this_epoch = 0;
+        self.capture_face = None;
+    }
+
+    /// Tick down all active countdowns and roll for rare face.
+    /// Called every 30s by the mood timer (not per-epoch).
     pub fn tick_countdowns(&mut self) {
         let now = Instant::now();
 
-        // Roll for rare face this epoch
+        // Roll for rare face this tick (12% chance every 30s)
         self.rare_face = self.rare_face_roll();
-
-        // Reset per-epoch capture state
-        self.captures_this_epoch = 0;
-        self.capture_face = None;
 
         if self.milestone_until.map_or(false, |t| now >= t) {
             self.milestone_face = None;
@@ -497,11 +499,11 @@ mod tests {
     }
 
     #[test]
-    fn test_tick_resets_capture_state() {
+    fn test_tick_epoch_resets_capture_state() {
         let mut fv = FaceVariety::new();
         fv.captures_this_epoch = 3;
         fv.capture_face = Some("happy");
-        fv.tick_countdowns();
+        fv.tick_epoch();
         assert_eq!(fv.captures_this_epoch, 0);
         assert!(fv.capture_face.is_none());
     }

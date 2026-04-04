@@ -691,8 +691,8 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 
 <div style="font-size:13px;color:#00d4aa;font-weight:bold;margin:12px 0 6px">Display</div>
 <div style="margin-bottom:8px">
-<div style="font-size:12px;color:#888;margin-bottom:4px">Full refresh every: <span id="setting-refresh-val">10</span> partials</div>
-<input type="range" id="setting-refresh" class="ch-slider" min="10" max="500" step="1" value="10" oninput="document.getElementById('setting-refresh-val').textContent=this.value">
+<div style="font-size:12px;color:#888;margin-bottom:4px">Full refresh every: <span id="setting-refresh-val">100</span> partials</div>
+<input type="range" id="setting-refresh" class="ch-slider" min="10" max="500" step="1" value="100" oninput="document.getElementById('setting-refresh-val').textContent=this.value">
 <div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>10 (less ghosting)</span><span>500 (less flicker)</span></div>
 </div>
 
@@ -1792,7 +1792,7 @@ function saveSettings() {
     body.display_rotation = parseInt(document.getElementById('setting-rotation').value) || 0;
     body.min_rssi = parseInt(document.getElementById('setting-rssi').value) || -100;
     body.ap_ttl_secs = parseInt(document.getElementById('setting-ttl').value) || 120;
-    body.display_refresh_interval = parseInt(document.getElementById('setting-refresh').value) || 10;
+    body.display_refresh_interval = parseInt(document.getElementById('setting-refresh').value) || 100;
     api('POST', '/api/settings', body).then(function(r) {
         if (r && r.ok) toast('Settings saved');
     });

@@ -322,7 +322,7 @@ impl DaemonState {
             ap_ttl_secs: 120,
             display_invert: true,
             display_rotation: 180,
-            display_refresh_interval: 10,
+            display_refresh_interval: 100,
             pending_display_reinit: false,
             bt_state: "Off".into(),
             bt_connected: false,
@@ -3019,7 +3019,7 @@ mod tests {
             display_rotation: 180,
             min_rssi: -100,
             ap_ttl_secs: 120,
-            display_refresh_interval: 10,
+            display_refresh_interval: 100,
         });
         assert_eq!(status.name, "oxi");
         assert_eq!(status.epoch, 42);
@@ -3046,7 +3046,7 @@ mod tests {
             display_rotation: 180,
             min_rssi: -100,
             ap_ttl_secs: 120,
-            display_refresh_interval: 10,
+            display_refresh_interval: 100,
         });
         let json = serde_json::to_string(&status).unwrap();
         assert!(json.contains("\"name\":\"oxi\""));

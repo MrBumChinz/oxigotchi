@@ -220,6 +220,7 @@ mod tests {
             display_type: "waveshare_4".into(),
             rotation: 0,
             invert: true,
+            full_refresh_interval: 100,
         }
     }
 

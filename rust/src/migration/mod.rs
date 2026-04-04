@@ -325,6 +325,7 @@ pub fn extract_rusty_config(pwn: &PwnagotchiConfig) -> crate::config::Config {
                 display_type: pwn.ui.display.display_type.clone(),
                 rotation: pwn.ui.display.rotation,
                 invert: pwn.ui.invert,
+                full_refresh_interval: 100,
             },
             font: crate::config::FontConfig {
                 name: pwn.ui.font.name.clone(),

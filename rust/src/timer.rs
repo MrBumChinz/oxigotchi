@@ -37,6 +37,12 @@ impl WallTimer {
             false
         }
     }
+
+    /// Reset the timer so the next firing is a full interval from now.
+    /// Useful for deferring a timer after a manual action.
+    pub fn reset(&mut self) {
+        self.last = Instant::now();
+    }
 }
 
 #[cfg(test)]
@@ -69,5 +75,13 @@ mod tests {
         let mut t = WallTimer::ready(Duration::from_secs(60));
         assert!(t.due()); // First call should fire
         assert!(!t.due()); // Second should not (60s hasn't passed)
+    }
+
+    #[test]
+    fn test_wall_timer_reset_defers() {
+        let mut t = WallTimer::ready(Duration::from_secs(60));
+        assert!(t.due()); // fires immediately (ready constructor)
+        t.reset(); // defer next firing by a full interval
+        assert!(!t.due()); // should not fire (60s hasn't passed since reset)
     }
 }

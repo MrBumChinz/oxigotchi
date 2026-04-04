@@ -437,6 +437,9 @@ sudo rm -rf "$PI/usr/share/man/"* 2>/dev/null
 # Clear bash/shell history
 sudo rm -f "$PI/home/pi/.bash_history" 2>/dev/null
 sudo rm -f "$PI/root/.bash_history" 2>/dev/null
+# Clear runtime state (forces fresh defaults on first boot)
+sudo rm -f "$PI/var/lib/oxigotchi/state.json" 2>/dev/null
+sudo rm -f "$PI/var/lib/angryoxide/state" 2>/dev/null
 echo "  Bloat cleaned"
 
 # ─── 17. Create sentinel ───

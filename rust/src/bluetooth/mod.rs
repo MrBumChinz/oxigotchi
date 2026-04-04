@@ -69,6 +69,15 @@ const BACKOFF_SCHEDULE: &[u64] = &[30, 60, 120, 300];
 /// Max backoff interval (seconds).
 const BACKOFF_CAP: u64 = 300;
 
+/// How long to poll for NAP UUID after pairing (seconds).
+const NAP_WAIT_SECS: u64 = 15;
+
+/// How many times to retry ConnectProfile on PhoneBusy.
+const BUSY_RETRIES: u32 = 3;
+
+/// Delay between PhoneBusy retries (seconds).
+const BUSY_RETRY_DELAY_SECS: u64 = 3;
+
 // ---------------------------------------------------------------------------
 // Command builders (pure functions, testable on any platform)
 // ---------------------------------------------------------------------------
@@ -267,26 +276,23 @@ impl BtTether {
         self.dbus.is_some()
     }
 
-    /// Initialize D-Bus connection and attempt PAN tethering.
-    pub fn setup(&mut self) -> Result<(), String> {
-        if !self.config.enabled {
+    /// Ensure D-Bus + Agent1 are initialized (ignores config.enabled).
+    /// Used by web pair requests that need D-Bus even when auto-tether is off.
+    pub fn ensure_dbus(&mut self) -> Result<(), String> {
+        if self.dbus.is_some() {
             return Ok(());
         }
-
-        // Initialize D-Bus connection (long-lived)
         match dbus::DbusBluez::new() {
             Ok(conn) => {
                 self.dbus = Some(conn);
-                info!("BT: D-Bus connection established");
+                info!("BT: D-Bus connection established (on-demand)");
             }
             Err(e) => {
                 warn!("BT: D-Bus init failed: {e}");
-                self.state = BtState::Error;
                 return Err(e);
             }
         }
-
-        // Register Agent1 for pairing + set up crossroads handler
+        // Register Agent1 for pairing
         if let Some(ref dbus) = self.dbus {
             if let Err(e) = dbus.register_agent() {
                 warn!("BT: Agent1 registration failed: {e}");
@@ -298,26 +304,58 @@ impl BtTether {
                 self.pairing_rx = Some(rx);
             }
         }
-
-        // Power on adapter
         #[cfg(unix)]
         {
             let _ = run_bluetoothctl(&["power".into(), "on".into()]);
         }
-        self.state = BtState::Disconnected;
+        if self.state == BtState::Off {
+            self.state = BtState::Disconnected;
+        }
+        Ok(())
+    }
+
+    /// Initialize D-Bus connection and attempt PAN tethering.
+    pub fn setup(&mut self) -> Result<(), String> {
+        if !self.config.enabled {
+            return Ok(());
+        }
+
+        self.ensure_dbus()?;
 
         // Try to connect to a paired device
         if self.config.auto_connect {
+            // If no paired devices, make discoverable so phone can find us
+            let has_paired = self.dbus.as_ref()
+                .and_then(|d| d.list_paired_devices().ok())
+                .map_or(false, |devs| !devs.is_empty());
+            if !has_paired {
+                info!("BT: no paired devices — making discoverable for phone pairing");
+                self.show();
+            }
             let _ = self.connect();
         }
 
         Ok(())
     }
 
-    /// Attempt PAN connection via D-Bus Network1.
+    /// Attempt PAN connection via D-Bus Network1.Connect("nap").
     pub fn connect(&mut self) -> Result<(), String> {
         self.last_attempt = Some(Instant::now());
         self.state = BtState::Connecting;
+
+        // Check if a bnep interface already exists (from prior session/script)
+        if let Some(iface) = Self::find_existing_bnep() {
+            info!("BT: adopting existing PAN interface {iface}");
+            self.pan_interface = Some(iface.clone());
+            self.state = BtState::Connected;
+            self.retry_count = 0;
+            self.user_disconnected = false;
+            self.refresh_ip();
+            if self.config.hide_after_connect {
+                self.hide();
+            }
+            return Ok(());
+        }
 
         // Re-initialize D-Bus if it was dropped (bus death recovery)
         if self.dbus.is_none() {
@@ -353,27 +391,14 @@ impl BtTether {
 
         info!("BT: connecting to {} ({})", device.name, device.mac);
 
-        let dbus = self.dbus.as_mut().unwrap();
-        match dbus.connect_pan(&device.path) {
-            Ok(pan) => {
-                info!("BT: PAN connected on {}", pan.interface);
-                self.pan_interface = Some(pan.interface.clone());
-                self.state = BtState::Connected;
-                self.retry_count = 0;
-                self.user_disconnected = false;
-                self.run_dhcp(&pan.interface);
-                self.refresh_ip();
-                if self.config.hide_after_connect {
-                    self.hide();
-                }
-                Ok(())
-            }
-            Err(e) => {
-                warn!("BT: PAN connect failed: {e}");
-                self.on_error();
-                Err(e)
-            }
+        // Wait for NAP UUID before ConnectProfile (like bt-tether plugin)
+        if !self.wait_for_nap_uuid(&device.path) {
+            warn!("BT: NAP UUID not found on {}", device.name);
+            self.on_error();
+            return Err("NAP profile not available on device".into());
         }
+
+        self.do_connect_profile(&device.path)
     }
 
     /// Find the best device to connect to.
@@ -399,7 +424,7 @@ impl BtTether {
         devices.first()
     }
 
-    /// Disconnect PAN via Network1.Disconnect (PAN-only).
+    /// Disconnect PAN via Network1.Disconnect.
     pub fn disconnect(&mut self) {
         if let Some(ref mut dbus) = self.dbus {
             let _ = dbus.disconnect_pan();
@@ -547,31 +572,127 @@ impl BtTether {
         let dbus = self.dbus.as_ref().ok_or("D-Bus not initialized")?;
 
         info!("BT: pairing {device_path}");
-        dbus.pair_device(device_path)?;
+        match dbus.pair_device(device_path) {
+            Ok(()) => {}
+            Err(e) if e.contains("Already Exists") => {
+                info!("BT: device already paired, skipping to trust+connect");
+            }
+            Err(e) => return Err(e),
+        }
         dbus.trust_device(device_path)?;
         info!("BT: device trusted");
 
+        self.connect_after_pair(device_path)
+    }
+
+    /// Connect PAN after pair+trust completed. Waits for NAP UUID,
+    /// then calls ConnectProfile with retry on PhoneBusy.
+    pub fn connect_after_pair(&mut self, device_path: &str) -> Result<(), String> {
         self.state = BtState::Connecting;
-        let dbus = self.dbus.as_mut().ok_or("D-Bus not initialized")?;
-        match dbus.connect_pan(device_path) {
-            Ok(pan) => {
-                self.pan_interface = Some(pan.interface.clone());
-                self.state = BtState::Connected;
-                self.retry_count = 0;
-                self.user_disconnected = false;
-                self.run_dhcp(&pan.interface);
-                self.refresh_ip();
-                if self.config.hide_after_connect {
-                    self.hide();
+
+        // Wait for NAP UUID to appear (phone needs time to expose services)
+        if !self.wait_for_nap_uuid(device_path) {
+            warn!("BT: NAP UUID not found after pairing");
+            self.state = BtState::Disconnected;
+            return Err("NAP profile not available on device".into());
+        }
+
+        self.do_connect_profile(device_path)
+    }
+
+    /// Internal: call Network1.Connect with retry logic for PhoneBusy errors.
+    fn do_connect_profile(&mut self, device_path: &str) -> Result<(), String> {
+        self.state = BtState::Connecting;
+
+        for attempt in 0..BUSY_RETRIES {
+            let dbus = self.dbus.as_mut().ok_or("D-Bus not initialized")?;
+            match dbus.connect_pan(device_path) {
+                Ok(pan) => {
+                    info!("BT: PAN connected on {}", pan.interface);
+                    self.pan_interface = Some(pan.interface.clone());
+                    self.state = BtState::Connected;
+                    self.retry_count = 0;
+                    self.user_disconnected = false;
+                    self.run_dhcp(&pan.interface);
+                    self.refresh_ip();
+                    if self.config.hide_after_connect {
+                        self.hide();
+                    }
+                    return Ok(());
                 }
-                Ok(())
-            }
-            Err(e) => {
-                warn!("BT: post-pair PAN connect failed: {e}");
-                self.state = BtState::Disconnected;
-                Err(e)
+                Err(dbus::PanConnectError::PhoneBusy) => {
+                    // Check if bnep is already up (connection exists from outside)
+                    if let Some(iface) = Self::find_existing_bnep() {
+                        info!("BT: adopting existing PAN interface {iface}");
+                        self.pan_interface = Some(iface.clone());
+                        self.state = BtState::Connected;
+                        self.retry_count = 0;
+                        self.user_disconnected = false;
+                        self.refresh_ip();
+                        if self.config.hide_after_connect {
+                            self.hide();
+                        }
+                        return Ok(());
+                    }
+                    if attempt + 1 < BUSY_RETRIES {
+                        info!("BT: connection busy, retry {}/{BUSY_RETRIES}...", attempt + 1);
+                        std::thread::sleep(std::time::Duration::from_secs(BUSY_RETRY_DELAY_SECS));
+                        continue;
+                    }
+                }
+                Err(dbus::PanConnectError::PhoneUnpaired) => {
+                    warn!("BT: phone unpaired us — removing stale bond");
+                    if let Some(ref d) = self.dbus {
+                        let _ = d.remove_device(device_path);
+                    }
+                    self.on_error();
+                    return Err("Phone unpaired Pi — removed stale bond, will re-pair".into());
+                }
+                Err(e) => {
+                    warn!("BT: Network1.Connect failed: {e}");
+                    self.on_error();
+                    return Err(e.to_string());
+                }
             }
         }
+        self.on_error();
+        Err("Network1.Connect: max retries exhausted".into())
+    }
+
+    /// Check if a bnep interface already exists (e.g. from a previous session).
+    fn find_existing_bnep() -> Option<String> {
+        #[cfg(unix)]
+        {
+            let net_dir = std::path::Path::new("/sys/class/net");
+            if let Ok(entries) = std::fs::read_dir(net_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("bnep") || name.starts_with("bt-pan") {
+                        return Some(name);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Poll for NAP UUID on the device (up to NAP_WAIT_SECS).
+    /// Returns true if NAP is available.
+    fn wait_for_nap_uuid(&self, device_path: &str) -> bool {
+        let dbus = match &self.dbus {
+            Some(d) => d,
+            None => return false,
+        };
+        for i in 0..NAP_WAIT_SECS {
+            if dbus.has_nap_uuid(device_path) {
+                if i > 0 {
+                    info!("BT: NAP UUID found after {i}s");
+                }
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        false
     }
 
     /// Remove a device from BlueZ (untrust + remove).

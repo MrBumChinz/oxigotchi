@@ -50,3 +50,6 @@ pi_config.toml
 # Private announcements
 discord_announcement.md
 docs/superpowers/
+
+# Private debug scripts (contain hardcoded MACs/paths)
+tools/bt_tether.py

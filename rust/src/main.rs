@@ -1255,8 +1255,8 @@ impl Daemon {
 
     /// Update face variety engine, XP, battery overrides, and AO crash recovery.
     fn update_face_and_personality(&mut self, result: &epoch::EpochResult) {
-        // Tick countdowns (milestones, friend, upload, capture face)
-        self.epoch_loop.personality.variety.tick_countdowns();
+        // Reset per-epoch transient state (capture face, capture count)
+        self.epoch_loop.personality.variety.tick_epoch();
 
         // Expire mode transition override if countdown reached zero
         self.epoch_loop.personality.tick_transition_override();
@@ -1279,9 +1279,10 @@ impl Daemon {
             self.epoch_loop.personality.variety.morning_greeted = true;
         }
 
-        // Mood tick (30s wall-clock)
+        // Mood tick + variety countdowns (30s wall-clock)
         if self.mood_timer.due() {
             self.epoch_loop.personality.mood_tick();
+            self.epoch_loop.personality.variety.tick_countdowns();
         }
 
         // Passive XP (30s wall-clock)
@@ -1740,7 +1741,7 @@ impl Daemon {
             }
             info!("web: BT pair+trust spawning background thread for {mac}");
             let path_clone = path.clone();
-            let _ = std::thread::Builder::new()
+            match std::thread::Builder::new()
                 .name("bt-pair".into())
                 .spawn(move || {
                     // Create a separate D-Bus connection just for the blocking Pair call.
@@ -1771,7 +1772,15 @@ impl Daemon {
                     let mut s = shared.lock().unwrap();
                     s.bt_pair_in_progress = false;
                     s.bt_pair_result = Some(result);
-                });
+                }) {
+                Ok(_handle) => {}
+                Err(e) => {
+                    log::error!("failed to spawn bt-pair thread: {e}");
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.bt_pair_in_progress = false;
+                    s.bt_pair_result = Some(Err(format!("thread spawn failed: {e}")));
+                }
+            }
         }
 
         // Check for completed background pair+trust and run connect_pan on main thread
@@ -1784,7 +1793,6 @@ impl Daemon {
             match result {
                 Ok(device_path) => {
                     info!("web: BT pair+trust completed, connecting PAN to {device_path}");
-                    self.bluetooth.state = bluetooth::BtState::Connecting;
                     match self.bluetooth.connect_after_pair(&device_path) {
                         Ok(()) => info!("web: BT paired+connected to {device_path}"),
                         Err(e) => log::warn!("web: BT PAN connect failed: {e}"),
@@ -3111,7 +3119,7 @@ impl Daemon {
         }
 
         self.mode = OperatingMode::Safe;
-        self.epoch_loop.personality.set_transition_override(face, 60);
+        self.epoch_loop.personality.set_transition_override(face, 90);
         // Radio transition disrupts SPI bus — force display reinit so next flush doesn't BUSY-timeout
         display::driver::request_reinit();
     }
@@ -3133,7 +3141,7 @@ impl Daemon {
                 info!("radio: transition to BT attack complete");
                 self.mode = OperatingMode::Bt;
                 self.bt_feature.set_mode(bluetooth::model::config::BtMode::Attack);
-                self.epoch_loop.personality.set_transition_override(face, 60);
+                self.epoch_loop.personality.set_transition_override(face, 90);
                 // Open raw HCI socket for attack dispatch
                 match bluetooth::attacks::hci::HciSocket::open(0) {
                     Ok(sock) => {

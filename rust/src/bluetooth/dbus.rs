@@ -7,11 +7,74 @@
 
 // ─── Shared types (not platform-gated) ───────────────────────────────────────
 
+/// NAP (Network Access Point) profile UUID for BT PAN tethering.
+pub const NAP_UUID: &str = "00001116-0000-1000-8000-00805f9b34fb";
+
 /// Represents an active PAN (Personal Area Network) connection.
 #[derive(Debug, Clone)]
 pub struct PanConnection {
     /// The network interface name (e.g. "bnep0").
     pub interface: String,
+}
+
+/// Actionable PAN connection errors (mapped from D-Bus error strings).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PanConnectError {
+    /// BT tethering not enabled on the phone.
+    TetherNotEnabled,
+    /// Phone unpaired the Pi — need to remove and re-pair.
+    PhoneUnpaired,
+    /// Phone out of range or BT off.
+    PhoneOutOfRange,
+    /// Connection already in progress — retry after short delay.
+    PhoneBusy,
+    /// Phone not responding (timeout / no reply).
+    PhoneNotResponding,
+    /// NAP UUID not found on device after waiting.
+    NapNotReady,
+    /// Other / unknown error.
+    Other(String),
+}
+
+impl std::fmt::Display for PanConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TetherNotEnabled => write!(f, "BT tethering not enabled on phone"),
+            Self::PhoneUnpaired => write!(f, "Phone unpaired Pi — remove and re-pair"),
+            Self::PhoneOutOfRange => write!(f, "Phone out of range or BT off"),
+            Self::PhoneBusy => write!(f, "Connection busy — retry shortly"),
+            Self::PhoneNotResponding => write!(f, "Phone not responding (timeout)"),
+            Self::NapNotReady => write!(f, "NAP profile not available on device"),
+            Self::Other(s) => write!(f, "{s}"),
+        }
+    }
+}
+
+/// Classify a D-Bus PAN connect error string into an actionable error type.
+pub fn classify_pan_error(err: &str) -> PanConnectError {
+    let lower = err.to_lowercase();
+    if lower.contains("create-socket")
+        || lower.contains("profile-unavailable")
+        || lower.contains("does not exist")
+    {
+        PanConnectError::TetherNotEnabled
+    } else if lower.contains("authentication")
+        || lower.contains("rejected")
+        || lower.contains("refused")
+    {
+        PanConnectError::PhoneUnpaired
+    } else if lower.contains("page-timeout")
+        || lower.contains("host is down")
+        || lower.contains("no route")
+    {
+        PanConnectError::PhoneOutOfRange
+    } else if lower.contains("busy") || lower.contains("inprogress") || lower.contains("in progress") {
+        PanConnectError::PhoneBusy
+    } else if lower.contains("noreply") || lower.contains("timed out") || lower.contains("timeout") {
+        PanConnectError::PhoneNotResponding
+    } else {
+        PanConnectError::Other(err.to_string())
+    }
 }
 
 /// A BlueZ device discovered or paired via D-Bus.
@@ -49,7 +112,7 @@ pub enum PairingEvent {
 #[cfg(target_os = "linux")]
 mod inner {
     use super::*;
-    use dbus::arg::{RefArg, Variant};
+    use dbus::arg::{RefArg, Variant}; // Variant used in prop_bool/prop_str for reading property maps
     use dbus::blocking::Connection;
     use dbus::channel::MatchingReceiver;
     use dbus_crossroads::Crossroads;
@@ -154,8 +217,13 @@ mod inner {
             Ok(devices)
         }
 
-        /// Connect to a device's PAN Network (NAP profile) with 30s timeout.
-        pub fn connect_pan(&mut self, device_path: &str) -> Result<PanConnection, String> {
+        /// Connect to a device's PAN via Network1.Connect("nap").
+        ///
+        /// Network1.Connect is the correct BlueZ API for PAN tethering — it
+        /// internally sets up the BNEP bridge and returns the interface name.
+        /// ConnectProfile requires a registered profile handler which BlueZ
+        /// doesn't provide for PANU/NAP by default.
+        pub fn connect_pan(&mut self, device_path: &str) -> Result<PanConnection, PanConnectError> {
             let proxy = self.conn.with_proxy(
                 "org.bluez",
                 device_path,
@@ -163,7 +231,11 @@ mod inner {
             );
             let (iface_name,): (String,) = proxy
                 .method_call("org.bluez.Network1", "Connect", ("nap",))
-                .map_err(|e| format!("PAN Connect: {e}"))?;
+                .map_err(|e| {
+                    let err_str = format!("{e}");
+                    info!("[dbus] Network1.Connect error: {err_str}");
+                    classify_pan_error(&err_str)
+                })?;
 
             info!("[dbus] PAN connected on {iface_name} via {device_path}");
             let pc = PanConnection {
@@ -189,6 +261,42 @@ mod inner {
             Ok(())
         }
 
+        /// Discover a bnep* interface by reading /sys/class/net/.
+        fn find_bnep_interface() -> Option<String> {
+            let net_dir = std::path::Path::new("/sys/class/net");
+            if let Ok(entries) = std::fs::read_dir(net_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("bnep") || name.starts_with("bt-pan") {
+                        return Some(name);
+                    }
+                }
+            }
+            None
+        }
+
+        /// Read the UUIDs property from a Device1 to check for NAP support.
+        pub fn get_device_uuids(&self, device_path: &str) -> Result<Vec<String>, String> {
+            let proxy = self.conn.with_proxy(
+                "org.bluez",
+                device_path,
+                Duration::from_secs(5),
+            );
+            use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+            let uuids: Vec<String> = proxy
+                .get("org.bluez.Device1", "UUIDs")
+                .map_err(|e| format!("Get UUIDs: {e}"))?;
+            Ok(uuids)
+        }
+
+        /// Check if NAP UUID is present in a device's service list.
+        pub fn has_nap_uuid(&self, device_path: &str) -> bool {
+            match self.get_device_uuids(device_path) {
+                Ok(uuids) => uuids.iter().any(|u| u.contains("1116")),
+                Err(_) => false,
+            }
+        }
+
         /// Return the PAN interface name if connected (e.g. "bnep0").
         pub fn pan_interface(&self) -> Option<&str> {
             self.pan.as_ref().map(|p| p.interface.as_str())
@@ -199,7 +307,7 @@ mod inner {
             let proxy = self.conn.with_proxy(
                 "org.bluez",
                 device_path,
-                Duration::from_secs(30),
+                Duration::from_secs(90),
             );
             let _: () = proxy
                 .method_call("org.bluez.Device1", "Pair", ())
@@ -217,7 +325,7 @@ mod inner {
             );
             use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
             proxy
-                .set("org.bluez.Device1", "Trusted", Variant(true))
+                .set("org.bluez.Device1", "Trusted", true)
                 .map_err(|e| format!("Trust: {e}"))?;
             info!("[dbus] Trusted {device_path}");
             Ok(())
@@ -292,8 +400,8 @@ mod inner {
                 Duration::from_secs(5),
             );
             use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
-            let _ = proxy.set("org.bluez.Adapter1", "Discoverable", Variant(true));
-            let _ = proxy.set("org.bluez.Adapter1", "Pairable", Variant(true));
+            let _ = proxy.set("org.bluez.Adapter1", "Discoverable", true);
+            let _ = proxy.set("org.bluez.Adapter1", "Pairable", true);
             let _: () = proxy
                 .method_call("org.bluez.Adapter1", "StartDiscovery", ())
                 .map_err(|e| format!("StartDiscovery: {e}"))?;
@@ -312,8 +420,8 @@ mod inner {
                 .method_call("org.bluez.Adapter1", "StopDiscovery", ())
                 .map_err(|e| format!("StopDiscovery: {e}"))?;
             use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
-            let _ = proxy.set("org.bluez.Adapter1", "Discoverable", Variant(false));
-            let _ = proxy.set("org.bluez.Adapter1", "Pairable", Variant(false));
+            let _ = proxy.set("org.bluez.Adapter1", "Discoverable", false);
+            let _ = proxy.set("org.bluez.Adapter1", "Pairable", false);
             info!("[dbus] Scan stopped on {ADAPTER_PATH}");
             Ok(())
         }
@@ -483,12 +591,20 @@ mod inner {
             Ok(vec![])
         }
 
-        pub fn connect_pan(&mut self, _device_path: &str) -> Result<PanConnection, String> {
-            Err("not supported on this platform".to_string())
+        pub fn connect_pan(&mut self, _device_path: &str) -> Result<PanConnection, PanConnectError> {
+            Err(PanConnectError::Other("not supported on this platform".to_string()))
         }
 
         pub fn disconnect_pan(&mut self) -> Result<(), String> {
             Ok(())
+        }
+
+        pub fn get_device_uuids(&self, _device_path: &str) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+
+        pub fn has_nap_uuid(&self, _device_path: &str) -> bool {
+            false
         }
 
         pub fn pan_interface(&self) -> Option<&str> {
@@ -593,5 +709,59 @@ mod tests {
         assert!(dbus.pan_interface().is_none());
         assert!(!dbus.is_connected());
         assert!(dbus.connect_pan("/org/bluez/hci0/dev_AA").is_err());
+        assert!(dbus.get_device_uuids("/org/bluez/hci0/dev_AA").unwrap().is_empty());
+        assert!(!dbus.has_nap_uuid("/org/bluez/hci0/dev_AA"));
+    }
+
+    #[test]
+    fn test_classify_pan_error() {
+        assert_eq!(
+            classify_pan_error("br-connection-create-socket"),
+            PanConnectError::TetherNotEnabled
+        );
+        assert_eq!(
+            classify_pan_error("br-connection-profile-unavailable"),
+            PanConnectError::TetherNotEnabled
+        );
+        assert_eq!(
+            classify_pan_error("Authentication Rejected"),
+            PanConnectError::PhoneUnpaired
+        );
+        assert_eq!(
+            classify_pan_error("Connection refused"),
+            PanConnectError::PhoneUnpaired
+        );
+        assert_eq!(
+            classify_pan_error("br-connection-page-timeout"),
+            PanConnectError::PhoneOutOfRange
+        );
+        assert_eq!(
+            classify_pan_error("Host is down"),
+            PanConnectError::PhoneOutOfRange
+        );
+        assert_eq!(
+            classify_pan_error("br-connection-busy"),
+            PanConnectError::PhoneBusy
+        );
+        assert_eq!(
+            classify_pan_error("org.freedesktop.DBus.Error.NoReply"),
+            PanConnectError::PhoneNotResponding
+        );
+        matches!(
+            classify_pan_error("something unknown"),
+            PanConnectError::Other(_)
+        );
+    }
+
+    #[test]
+    fn test_pan_connect_error_display() {
+        assert_eq!(
+            PanConnectError::TetherNotEnabled.to_string(),
+            "BT tethering not enabled on phone"
+        );
+        assert_eq!(
+            PanConnectError::PhoneUnpaired.to_string(),
+            "Phone unpaired Pi — remove and re-pair"
+        );
     }
 }

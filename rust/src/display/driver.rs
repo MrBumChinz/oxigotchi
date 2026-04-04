@@ -311,9 +311,6 @@ impl Ssd1680Hal for RppalHal {
 ///
 /// Generic over the HAL backend so tests can use `MockHal` while the Pi
 /// uses `RppalHal`.
-/// Number of partial refreshes before forcing a full refresh to clear ghosting.
-pub const FULL_REFRESH_INTERVAL: u32 = 10;
-
 pub struct Ssd1680Driver<H: Ssd1680Hal> {
     pub hal: H,
     /// Display width in the logical coordinate system (after rotation).
@@ -623,6 +620,10 @@ static CONSECUTIVE_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::A
 /// Epochs remaining to skip before retrying display after repeated failures.
 static BACKOFF_REMAINING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// Minimum seconds between full (flicker) refreshes. The e-ink datasheet
+/// recommends at least 180s between full refreshes to avoid panel damage.
+const MIN_FULL_REFRESH_SECS: u64 = 180;
+
 /// Request a full display reinit on the next flush cycle.
 /// Used when display settings (invert, rotation) change at runtime.
 pub fn request_reinit() {
@@ -638,15 +639,17 @@ pub fn request_reinit() {
 /// - **Exponential backoff**: After 3 consecutive failures, skips display for
 ///   2^(n-3) epochs (1, 2, 4, 8) to avoid rapid reinit→timeout→reinit loops
 ///   that cause the black border flash crash loop.
-/// - **Periodic full refresh**: Every `FULL_REFRESH_INTERVAL` (10) partial
-///   refreshes, forces a full init+clear+base to clear accumulated ghosting
-///   that can trigger BUSY lockup.
+/// - **Periodic full refresh**: Every `full_refresh_interval` (default 100)
+///   partial refreshes, forces a full init+clear+base to clear accumulated
+///   ghosting that can trigger BUSY lockup. Configurable via web UI.
 #[cfg(target_arch = "aarch64")]
 pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(), String> {
     use std::sync::Mutex;
     use std::time::Instant;
 
     static DRIVER: Mutex<Option<Ssd1680Driver<RppalHal>>> = Mutex::new(None);
+    /// Wall-clock time of the last full (flicker) refresh.
+    static LAST_FULL_REFRESH: Mutex<Option<Instant>> = Mutex::new(None);
 
     // ── Backoff gate: skip display if cooling down after repeated failures ──
     let remaining = BACKOFF_REMAINING.load(Ordering::Relaxed);
@@ -690,6 +693,10 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
                 Ok(()) => {
                     log::info!("display: init OK ({:.0}ms)", start.elapsed().as_millis());
                     CONSECUTIVE_FAILURES.store(0, Ordering::Relaxed);
+                    // Record this full refresh time
+                    if let Ok(mut ts) = LAST_FULL_REFRESH.lock() {
+                        *ts = Some(Instant::now());
+                    }
                     *guard = Some(driver);
                 }
                 Err(e) => {
@@ -709,10 +716,19 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
             }
         }
         Some(driver) => {
-            // Periodic full refresh to clear ghosting buildup
-            if driver.partial_count > 0
-                && driver.partial_count % FULL_REFRESH_INTERVAL == 0
-            {
+            // Periodic full refresh to clear ghosting buildup.
+            // Gated by BOTH partial count AND wall-clock time (min 180s)
+            // to protect the e-ink panel regardless of epoch frequency.
+            let interval = config.full_refresh_interval.max(1);
+            let count_due = driver.partial_count > 0
+                && driver.partial_count % interval == 0;
+            let time_ok = LAST_FULL_REFRESH
+                .lock()
+                .map(|ts| {
+                    ts.map_or(true, |t| t.elapsed().as_secs() >= MIN_FULL_REFRESH_SECS)
+                })
+                .unwrap_or(true);
+            if count_due && time_ok {
                 log::info!(
                     "display: periodic full refresh after {} partials",
                     driver.partial_count
@@ -722,6 +738,10 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
                 drop(guard);
                 // Recurse once — will hit the None arm above
                 return flush_to_hardware(fb, config);
+            } else if count_due {
+                // Count says refresh, but too soon — leave partial_count so
+                // we retry on the very next epoch once the wall-clock gate opens.
+                log::debug!("display: full refresh deferred (< {}s since last)", MIN_FULL_REFRESH_SECS);
             }
 
             if let Err(e) = driver.flush_partial(fb) {
@@ -781,6 +801,7 @@ mod tests {
             display_type: "waveshare_4".into(),
             rotation,
             invert: true,
+            full_refresh_interval: 10,
         }
     }
 

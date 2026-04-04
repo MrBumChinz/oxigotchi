@@ -92,6 +92,15 @@ pub struct DisplayConfig {
     /// Whether to invert display colors (white-on-black).
     #[serde(default = "default_true")]
     pub invert: bool,
+    /// Number of partial refreshes before a full refresh clears ghosting.
+    /// Higher values = less flicker but more ghosting. Default 100.
+    /// Also protected by a 180s minimum wall-clock time between full refreshes.
+    #[serde(default = "default_full_refresh_interval")]
+    pub full_refresh_interval: u32,
+}
+
+fn default_full_refresh_interval() -> u32 {
+    100
 }
 
 impl Default for DisplayConfig {
@@ -101,6 +110,7 @@ impl Default for DisplayConfig {
             display_type: "waveshare_4".into(),
             rotation: 180,
             invert: true,
+            full_refresh_interval: 100,
         }
     }
 }

@@ -40,7 +40,7 @@ ssh pi@<RNDIS_IP> "sudo cp /home/pi/oxigotchi /usr/local/bin/rusty-oxigotchi && 
 ### Daemon Main Loop (`rust/src/main.rs`)
 The `Daemon` struct owns all subsystem state (~47 fields). On startup: `main()` runs migration, loads config, spawns the axum web server on a tokio task, then runs `Daemon::boot()` followed by an infinite `run_epoch()` loop in a blocking thread.
 
-Each epoch (~0-30s configurable) runs phases in sequence: **Scan -> Attack -> Capture -> Display -> Sleep**. BT mode has its own `run_bt_epoch()` path.
+Each epoch runs phases in sequence: **Scan -> Attack -> Capture -> Display** (no sleep — epochs chain immediately). BT mode has its own `run_bt_epoch()` path. Wall-clock `WallTimer`s gate time-sensitive actions (mood ticks every 30s, passive XP every 30s, display refresh, BT reconnect) independently of epoch frequency.
 
 ### Three Operating Modes (`OperatingMode`)
 - **RAGE** — WiFi attacks via AngryOxide, channel hopping, handshake capture
@@ -56,13 +56,13 @@ Mode transitions are atomic via `RadioManager` (`radio.rs`), which manages a loc
 | `ao` | AngryOxide process lifecycle (start/stop/crash recovery) |
 | `attacks` | WiFi attack scheduler (deauth, association) |
 | `bluetooth/` | BT tethering, HCI scanning, GATT discovery, BT attacks, firmware loading |
-| `bluetooth/dbus.rs` | D-Bus BlueZ PAN: Network1 connect/disconnect, ObjectManager device enumeration, Agent1 pairing |
+| `bluetooth/dbus.rs` | D-Bus BlueZ PAN: Network1 connect/disconnect, ObjectManager device enumeration, Agent1 pairing. Uses `ensure_dbus()` for on-demand init |
 | `bluetooth/attacks/` | BT attack implementations: ATT fuzz, BLE adv, KNOB, L2CAP fuzz/flood, SMP (8 files) |
 | `bluetooth/adapter/` | BlueZ adapter management, btmon integration, WiFi-BT coexistence |
 | `bluetooth/ui/` | BT-specific dashboard and e-ink display integration |
 | `capture` | Capture pipeline: tmpfs staging -> validation -> SD card, wpa-sec upload |
 | `config` | TOML config loading from `/etc/oxigotchi/config.toml` (nested sections: main, ui, bluetooth, bt_feature, bt_attacks, gpu, qpu) |
-| `display` | E-ink driver (SPI via rppal), framebuffer, fonts, face rendering |
+| `display` | E-ink driver (SPI via rppal), framebuffer, fonts, face rendering. Full refresh protected by count + 180s wall-clock gate |
 | `epoch` | Epoch result tracking (APs, handshakes, attacks) |
 | `firmware` | WiFi firmware health monitoring |
 | `gpu/` | VideoCore IV GPU: runtime telemetry, snapshot optimization, QPU offload, trace infrastructure |
@@ -70,7 +70,7 @@ Mode transitions are atomic via `RadioManager` (`radio.rs`), which manages a loc
 | `lua` | Lua 5.4 plugin runtime (mlua): loads plugins, exposes `register_indicator`/`set_indicator` |
 | `migration` | First-boot pwnagotchi -> oxigotchi config/capture migration |
 | `network` | Network state: interface detection, IP tracking, internet checks |
-| `personality` | Face/mood state machine, XP system, message variety engine |
+| `personality` | Face/mood state machine, XP system (quadratic curve), message variety engine |
 | `pisugar` | PiSugar battery HAT: level, charging, voltage, shutdown |
 | `qpu/` | QPU compute engine: mailbox interface, shader programs, ring buffers, RF classifier (7 files) |
 | `radio` | Radio lock manager: atomic WiFi<->BT mode transitions |

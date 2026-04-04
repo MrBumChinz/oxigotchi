@@ -2,6 +2,7 @@
 Description=Rusty Oxigotchi - WiFi capture daemon
 After=network.target NetworkManager.service wlan-keepalive.service
 Wants=network.target wlan-keepalive.service
+Conflicts=bt-agent.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
