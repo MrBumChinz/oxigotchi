@@ -297,6 +297,14 @@ echo "  SSH: password auth, no authorized_keys, fresh host keys"
 echo ""
 echo "=== 12. NetworkManager config ==="
 NM_DIR="$PI/etc/NetworkManager/system-connections"
+# Remove ALL existing NM connections (may contain personal BT tether profiles)
+sudo rm -f "$NM_DIR"/*.nmconnection 2>/dev/null
+# Clean NM internal state (caches device names, connection history)
+sudo rm -rf "$PI/var/lib/NetworkManager/internal-"* 2>/dev/null
+sudo rm -f "$PI/var/lib/NetworkManager/seen-bssids" 2>/dev/null
+sudo rm -f "$PI/var/lib/NetworkManager/timestamps" 2>/dev/null
+sudo rm -f "$PI/var/lib/NetworkManager/NetworkManager-intern.conf" 2>/dev/null
+sudo rm -f "$PI/var/lib/NetworkManager/NetworkManager.state" 2>/dev/null
 sudo mkdir -p "$NM_DIR"
 
 cat > /tmp/nm-usb0.conf <<'NM_USB'
@@ -430,7 +438,13 @@ sudo rm -rf "$PI/root/.rustup" 2>/dev/null
 sudo rm -rf "$PI/root/go" 2>/dev/null
 sudo rm -f "$PI/home/pi/swapfile" 2>/dev/null
 sudo rm -rf "$PI/home/pi/.vscode-server" 2>/dev/null
-sudo rm -rf "$PI/var/log/journal/"* 2>/dev/null
+# Nuke ALL logs (journal contains NM/BT connection names and device MACs)
+sudo rm -rf "$PI/var/log/journal" 2>/dev/null
+sudo mkdir -p "$PI/var/log/journal"
+sudo rm -f "$PI/var/log/syslog"* "$PI/var/log/daemon.log"* "$PI/var/log/messages"* 2>/dev/null
+sudo rm -f "$PI/var/log/auth.log"* "$PI/var/log/kern.log"* 2>/dev/null
+sudo rm -rf "$PI/var/log/cloud-init"* 2>/dev/null
+sudo rm -f "$PI/var/log/btmp"* "$PI/var/log/wtmp"* "$PI/var/log/lastlog" 2>/dev/null
 sudo rm -rf "$PI/var/cache/apt/archives/"*.deb 2>/dev/null
 sudo rm -rf "$PI/usr/share/doc/"* 2>/dev/null
 sudo rm -rf "$PI/usr/share/man/"* 2>/dev/null
@@ -440,6 +454,11 @@ sudo rm -f "$PI/root/.bash_history" 2>/dev/null
 # Clear runtime state (forces fresh defaults on first boot)
 sudo rm -f "$PI/var/lib/oxigotchi/state.json" 2>/dev/null
 sudo rm -f "$PI/var/lib/angryoxide/state" 2>/dev/null
+# Clear Bluetooth bonds (may contain paired phone MACs)
+sudo rm -rf "$PI/var/lib/bluetooth/"*/cache 2>/dev/null
+for btdir in "$PI/var/lib/bluetooth/"*/; do
+    [ -d "$btdir" ] && sudo find "$btdir" -maxdepth 1 -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null
+done
 echo "  Bloat cleaned"
 
 # ─── 17. Create sentinel ───
@@ -600,6 +619,25 @@ if [ "$ERRORS" -gt 0 ]; then
     echo ""
     echo "Fix errors and re-run. Image NOT shrunk/zipped."
     exit 1
+fi
+
+# ─── Scrub deleted data from raw blocks ───
+echo ""
+echo "=== Scrub: zeroing unused blocks + journal ==="
+sudo losetup -fP "$RELEASE_IMG"
+LOOPDEV2=$(losetup -j "$RELEASE_IMG" | head -1 | cut -d: -f1)
+if [ -n "$LOOPDEV2" ]; then
+    # Strip ext4 journal (contains cached copies of deleted data)
+    sudo tune2fs -O ^has_journal "${LOOPDEV2}p2" 2>&1 | tail -2
+    sudo e2fsck -fy "${LOOPDEV2}p2" 2>&1 | tail -3
+    # Zero all unused blocks (including freed journal blocks)
+    sudo zerofree -v "${LOOPDEV2}p2" 2>&1 | tail -3
+    # Recreate a fresh empty journal
+    sudo tune2fs -j "${LOOPDEV2}p2" 2>&1 | tail -2
+    sudo losetup -D
+    echo "  Journal stripped, blocks zeroed, fresh journal created"
+else
+    echo "  WARNING: Could not set up loop device for scrub"
 fi
 
 # ─── Shrink image ───
