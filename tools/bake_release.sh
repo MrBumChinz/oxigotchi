@@ -21,7 +21,7 @@ REPO=/mnt/c/msys64/home/gelum/oxigotchi
 BASE_IMG="${1:-/mnt/d/oxigotchi-release.img}"
 RELEASE_IMG="/mnt/d/oxigotchi-release.img"
 BINARY="$REPO/rust/target/aarch64-unknown-linux-gnu/release/oxigotchi"
-VERSION="3.3"
+VERSION="3.2.1"
 
 if [ ! -f "$BASE_IMG" ]; then
     echo "ERROR: Base image not found at $BASE_IMG"
@@ -443,8 +443,12 @@ echo ""
 echo "=== 16. Clean disk bloat ==="
 sudo rm -rf "$PI/root/.rustup" 2>/dev/null
 sudo rm -rf "$PI/root/go" 2>/dev/null
-sudo rm -f "$PI/home/pi/swapfile" 2>/dev/null
-sudo rm -rf "$PI/home/pi/.vscode-server" 2>/dev/null
+# Scrub ALL of /home/pi — wipe everything, then recreate the clean skeleton.
+# This prevents dev artifacts (dumps, HCD files, scripts, keys) from leaking into releases.
+sudo find "$PI/home/pi" -mindepth 1 -delete 2>/dev/null
+sudo mkdir -p "$PI/home/pi/.ssh"
+sudo chmod 700 "$PI/home/pi/.ssh"
+echo "  /home/pi fully scrubbed (clean skeleton restored)"
 # Nuke ALL logs (journal contains NM/BT connection names and device MACs)
 sudo rm -rf "$PI/var/log/journal" 2>/dev/null
 sudo mkdir -p "$PI/var/log/journal"
@@ -597,6 +601,17 @@ if grep -rq "userind\|user@" "$PI/etc/oxigotchi/" 2>/dev/null; then
 fi
 if [ -f "$PI/home/pi/.ssh/authorized_keys" ]; then
     echo "  BAD: authorized_keys present"
+    PERSONAL=$((PERSONAL+1))
+fi
+# Check /home/pi for dev artifacts (dumps, HCD files, scripts, etc.)
+HOMEFILE_COUNT=$(sudo find "$PI/home/pi" -mindepth 1 \
+    ! -path "$PI/home/pi/.ssh" ! -path "$PI/home/pi/.ssh/*" \
+    2>/dev/null | wc -l)
+if [ "$HOMEFILE_COUNT" -gt 0 ]; then
+    echo "  BAD: /home/pi contains $HOMEFILE_COUNT unexpected file(s):"
+    sudo find "$PI/home/pi" -mindepth 1 \
+        ! -path "$PI/home/pi/.ssh" ! -path "$PI/home/pi/.ssh/*" \
+        2>/dev/null | head -10 | sed 's/^/    /'
     PERSONAL=$((PERSONAL+1))
 fi
 if [ "$PERSONAL" -eq 0 ]; then
