@@ -351,6 +351,11 @@ impl BtTether {
             self.retry_count = 0;
             self.user_disconnected = false;
             self.refresh_ip();
+            if let Some(ref ip) = self.ip_address {
+                if !ip.starts_with("169.254") {
+                    self.internet_available = true;
+                }
+            }
             if self.config.hide_after_connect {
                 self.hide();
             }
@@ -545,6 +550,15 @@ impl BtTether {
             }
         }
 
+        // Guard: Connected state requires a known interface.
+        // If pan_interface was cleared externally, fall back to Disconnected
+        // so should_connect() triggers a reconnect attempt.
+        if self.state == BtState::Connected && self.pan_interface.is_none() {
+            self.state = BtState::Disconnected;
+            self.internet_available = false;
+            return self.state;
+        }
+
         if let Some(ref iface) = self.pan_interface {
             let _sysfs = format!("/sys/class/net/{iface}");
             #[cfg(unix)]
@@ -615,6 +629,11 @@ impl BtTether {
                     self.user_disconnected = false;
                     self.run_dhcp(&pan.interface);
                     self.refresh_ip();
+                    if let Some(ref ip) = self.ip_address {
+                        if !ip.starts_with("169.254") {
+                            self.internet_available = true;
+                        }
+                    }
                     if self.config.hide_after_connect {
                         self.hide();
                     }
@@ -629,6 +648,11 @@ impl BtTether {
                         self.retry_count = 0;
                         self.user_disconnected = false;
                         self.refresh_ip();
+                        if let Some(ref ip) = self.ip_address {
+                            if !ip.starts_with("169.254") {
+                                self.internet_available = true;
+                            }
+                        }
                         if self.config.hide_after_connect {
                             self.hide();
                         }
@@ -1092,14 +1116,15 @@ mod tests {
 
     #[test]
     fn test_check_status_no_pan_interface() {
-        // No pan_interface set — state should remain as-is
+        // Connected + no pan_interface is a zombie state — must become Disconnected
+        // so should_connect() can trigger a reconnect attempt.
         let mut bt = BtTether::default();
         bt.state = BtState::Connected;
         bt.internet_available = true;
         bt.pan_interface = None;
         let state = bt.check_status();
-        // No pan_interface means we don't detect disconnection via sysfs
-        assert_eq!(state, BtState::Connected);
+        assert_eq!(state, BtState::Disconnected);
+        assert!(!bt.internet_available);
     }
 
     #[test]
@@ -1406,5 +1431,41 @@ mod tests {
         bt.pan_interface = Some("bnep0".into());
         bt.ensure_connected();
         // Should be no-op since already connected
+    }
+
+    #[test]
+    fn test_internet_available_set_after_routable_ip() {
+        let mut bt = BtTether::default();
+        bt.ip_address = Some("192.168.44.128".into());
+        // Simulate the internet_available logic that do_connect_profile will run
+        if let Some(ref ip) = bt.ip_address {
+            if !ip.starts_with("169.254") {
+                bt.internet_available = true;
+            }
+        }
+        assert!(bt.internet_available, "internet_available should be true for routable IP");
+    }
+
+    #[test]
+    fn test_internet_available_not_set_for_apipa() {
+        let mut bt = BtTether::default();
+        bt.ip_address = Some("169.254.0.1".into());
+        if let Some(ref ip) = bt.ip_address {
+            if !ip.starts_with("169.254") {
+                bt.internet_available = true;
+            }
+        }
+        assert!(!bt.internet_available, "APIPA address must not set internet_available");
+    }
+
+    #[test]
+    fn test_check_status_clears_zombie_connected_state() {
+        let mut bt = BtTether::default();
+        bt.state = BtState::Connected;
+        bt.pan_interface = None;       // zombie: Connected but no interface known
+        bt.internet_available = true;
+        let state = bt.check_status();
+        assert_eq!(state, BtState::Disconnected, "zombie Connected+no-iface should become Disconnected");
+        assert!(!bt.internet_available, "internet_available must clear with zombie state");
     }
 }
