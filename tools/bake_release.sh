@@ -338,7 +338,7 @@ echo "  Dual-IP: 10.0.0.2 + 192.168.137.2 on usb0"
 # BT PAN unmanaged-devices config — prevents NM from hijacking bnep0
 CONF_D="$PI/etc/NetworkManager/conf.d"
 sudo mkdir -p "$CONF_D"
-sudo cp "$(dirname "$0")/../config/99-bt-pan.conf" "$CONF_D/99-bt-pan.conf"
+sudo cp "$REPO/config/99-bt-pan.conf" "$CONF_D/99-bt-pan.conf"
 sudo chmod 644 "$CONF_D/99-bt-pan.conf"
 echo "  NM: bnep* and bt-pan* marked unmanaged (conf.d/99-bt-pan.conf)"
 
@@ -575,6 +575,7 @@ fi
 echo ""
 echo "--- NetworkManager ---"
 ls "$NM_DIR/"*.nmconnection 2>/dev/null | sed 's/^/  /'
+verify "99-bt-pan.conf" "$CONF_D/99-bt-pan.conf"
 
 echo ""
 echo "--- First-boot auto-expand ---"
