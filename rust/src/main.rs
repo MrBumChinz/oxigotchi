@@ -519,20 +519,6 @@ impl Daemon {
             }
         }
 
-        // ---- Bluetooth health (all modes) ----
-        // check_status detects PAN disconnection; should_connect returns false when Off (BT attack mode)
-        self.bluetooth.check_status();
-        if self.bluetooth.should_connect() {
-            info!("BT: auto-reconnecting...");
-            match self.bluetooth.connect() {
-                Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
-                Err(e) => {
-                    log::warn!("bluetooth reconnect failed: {e}");
-                    self.bluetooth.on_error();
-                }
-            }
-        }
-
         // ---- BT mode: run BT epoch instead of WiFi phases ----
         if self.mode == OperatingMode::Bt {
             self.run_bt_epoch();
@@ -562,7 +548,6 @@ impl Daemon {
                         Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
                         Err(e) => {
                             log::warn!("bluetooth reconnect failed: {e}");
-                            self.bluetooth.on_error();
                         }
                     }
                 }
