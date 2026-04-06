@@ -449,6 +449,14 @@ sudo find "$PI/home/pi" -mindepth 1 -delete 2>/dev/null
 sudo mkdir -p "$PI/home/pi/.ssh"
 sudo chmod 700 "$PI/home/pi/.ssh"
 echo "  /home/pi fully scrubbed (clean skeleton restored)"
+# Add navigation symlinks and README for easy post-flash orientation
+sudo ln -sfn /etc/oxigotchi          "$PI/home/pi/config"
+sudo ln -sfn /etc/oxigotchi/plugins  "$PI/home/pi/plugins"
+sudo ln -sfn /etc/oxigotchi/faces    "$PI/home/pi/faces"
+sudo ln -sfn /usr/local/bin/rusty-oxigotchi "$PI/home/pi/rusty-oxigotchi"
+sudo ln -sfn /etc/systemd/system     "$PI/home/pi/services"
+sudo cp "$REPO/tools/README-pi.md"   "$PI/home/pi/README.md"
+echo "  navigation symlinks and README deployed to /home/pi"
 # Nuke ALL logs (journal contains NM/BT connection names and device MACs)
 sudo rm -rf "$PI/var/log/journal" 2>/dev/null
 sudo mkdir -p "$PI/var/log/journal"
@@ -606,11 +614,17 @@ fi
 # Check /home/pi for dev artifacts (dumps, HCD files, scripts, etc.)
 HOMEFILE_COUNT=$(sudo find "$PI/home/pi" -mindepth 1 \
     ! -path "$PI/home/pi/.ssh" ! -path "$PI/home/pi/.ssh/*" \
+    ! -name "README.md" \
+    ! -name "config" ! -name "plugins" ! -name "faces" \
+    ! -name "rusty-oxigotchi" ! -name "services" \
     2>/dev/null | wc -l)
 if [ "$HOMEFILE_COUNT" -gt 0 ]; then
     echo "  BAD: /home/pi contains $HOMEFILE_COUNT unexpected file(s):"
     sudo find "$PI/home/pi" -mindepth 1 \
         ! -path "$PI/home/pi/.ssh" ! -path "$PI/home/pi/.ssh/*" \
+        ! -name "README.md" \
+        ! -name "config" ! -name "plugins" ! -name "faces" \
+        ! -name "rusty-oxigotchi" ! -name "services" \
         2>/dev/null | head -10 | sed 's/^/    /'
     PERSONAL=$((PERSONAL+1))
 fi
