@@ -71,6 +71,18 @@ echo "=== 1. Mount image ==="
 sudo losetup -fP "$RELEASE_IMG"
 LOOPDEV=$(losetup -j "$RELEASE_IMG" | head -1 | cut -d: -f1)
 echo "Loop device: $LOOPDEV"
+# Give kernel time to create partition devices; use partprobe if needed
+sleep 2
+if [ ! -b "${LOOPDEV}p2" ]; then
+    echo "  Partition devices missing — running partprobe..."
+    sudo partprobe "$LOOPDEV"
+    sleep 2
+fi
+if [ ! -b "${LOOPDEV}p2" ]; then
+    echo "ERROR: Partition devices still missing after partprobe"
+    sudo losetup -D
+    exit 1
+fi
 sudo mkdir -p /mnt/piboot /mnt/piroot
 sudo mount "${LOOPDEV}p2" /mnt/piroot
 sudo mount "${LOOPDEV}p1" /mnt/piboot
