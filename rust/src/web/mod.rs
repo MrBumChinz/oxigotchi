@@ -4450,7 +4450,7 @@ mod tests {
     #[tokio::test]
     async fn test_rage_preset_immediately_updates_rate_channels_dwell() {
         let (router, state) = test_router();
-        // Level 4 = Hunt: rate 2, dwell 2000ms, all 13 channels
+        // Level 4 = Hunt: rate 2, dwell 2000ms, channels 1-11
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":4}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
@@ -4461,8 +4461,8 @@ mod tests {
         );
         assert_eq!(
             s.wifi_channels.len(),
-            13,
-            "rage preset should set all 13 channels immediately"
+            11,
+            "rage preset should set all 11 channels immediately"
         );
         assert!(
             !s.autohunt_enabled,

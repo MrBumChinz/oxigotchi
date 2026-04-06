@@ -3899,12 +3899,12 @@ mod tests {
             s.pending_rage_change = Some(Some(4));
         }
         daemon.process_web_commands();
-        // Level 4 = Hunt: rate 2, dwell 2000ms, all 13 channels
+        // Level 4 = Hunt: rate 2, dwell 2000ms, channels 1-11
         assert_eq!(daemon.ao.config.rate, 2);
         assert_eq!(daemon.wifi.channel_config.dwell_ms, 2000);
         assert_eq!(
             daemon.wifi.channel_config.channels,
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+            vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         );
         assert!(!daemon.autohunt);
         let s = daemon.shared_state.lock().unwrap();

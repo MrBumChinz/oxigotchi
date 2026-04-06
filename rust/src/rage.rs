@@ -13,8 +13,8 @@ pub struct RagePreset {
     pub channels: &'static [u8],
 }
 
-const ALL_13: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 const SAFE_3: &[u8] = &[1, 6, 11];
+const STANDARD_11: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 /// Stress-test-validated presets (2026-03-26).
 /// Each step changes exactly one variable from the previous level.
@@ -38,35 +38,35 @@ pub const PRESETS: [RagePreset; 7] = [
         name: "Prowl",
         rate: 1,
         dwell_ms: 2000,
-        channels: ALL_13,
+        channels: STANDARD_11,
     },
     RagePreset {
         level: 4,
         name: "Hunt",
         rate: 2,
         dwell_ms: 2000,
-        channels: ALL_13,
+        channels: STANDARD_11,
     },
     RagePreset {
         level: 5,
         name: "RAGE",
         rate: 2,
         dwell_ms: 1000,
-        channels: ALL_13,
+        channels: STANDARD_11,
     },
     RagePreset {
         level: 6,
         name: "FURY",
         rate: 3,
         dwell_ms: 1000,
-        channels: ALL_13,
+        channels: STANDARD_11,
     },
     RagePreset {
         level: 7,
         name: "YOLO",
         rate: 3,
         dwell_ms: 500,
-        channels: ALL_13,
+        channels: STANDARD_11,
     },
 ];
 
@@ -104,7 +104,20 @@ mod tests {
         assert_eq!(p.name, "YOLO");
         assert_eq!(p.rate, 3);
         assert_eq!(p.dwell_ms, 500);
-        assert_eq!(p.channels, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+        assert_eq!(p.channels, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    }
+
+    #[test]
+    fn test_standard_11_used_at_rage_3_plus() {
+        let expected = &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        for level in 3..=7u8 {
+            let p = preset(level).unwrap();
+            assert_eq!(
+                p.channels, expected,
+                "level {} should use STANDARD_11 (no ch 12/13), got {:?}",
+                level, p.channels
+            );
+        }
     }
 
     #[test]
