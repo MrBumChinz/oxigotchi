@@ -335,6 +335,13 @@ sudo cp /tmp/nm-usb0.conf "$NM_DIR/USB Gadget.nmconnection"
 sudo chmod 600 "$NM_DIR/USB Gadget.nmconnection"
 echo "  Dual-IP: 10.0.0.2 + 192.168.137.2 on usb0"
 
+# BT PAN unmanaged-devices config — prevents NM from hijacking bnep0
+CONF_D="$PI/etc/NetworkManager/conf.d"
+sudo mkdir -p "$CONF_D"
+sudo cp "$(dirname "$0")/../config/99-bt-pan.conf" "$CONF_D/99-bt-pan.conf"
+sudo chmod 644 "$CONF_D/99-bt-pan.conf"
+echo "  NM: bnep* and bt-pan* marked unmanaged (conf.d/99-bt-pan.conf)"
+
 # ─── 13. System configuration ───
 echo ""
 echo "=== 13. System configuration ==="
