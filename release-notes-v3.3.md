@@ -35,7 +35,7 @@ Levels 1-6 are validated stable with BT tethering active. YOLO pushes past the t
 ### WiFi + BT Coexistence
 
 - **BT carrier-lost backoff** — when `bnep0` disappears, uses exponential backoff (30/60/120/300s) instead of instant retry, which was hammering the combo chip's coexistence arbiter and causing firmware crashes
-- **Firmware health monitor fixed** — crash counter addresses were TODO stubs (0x0), now reading real counters at 0x03C094/0x03C098 via SDIO RAMRW
+- **Firmware health monitor fixed** — crash counter addresses were TODO stubs, now reading real counters for preemptive crash detection
 - **Rate cap removed** — rate 3 with BT PAN active is stable once the flapping fix is in; the coexistence rate cap was unnecessary dead code
 - **Dashboard channel fix** — preset display showed 13 channels, now correctly shows 11
 
