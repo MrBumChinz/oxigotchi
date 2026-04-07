@@ -1,7 +1,7 @@
 //! Two-part bull jokes keyed by face name.
 //!
 //! Ported from Python angryoxide.py v2.3.0 BULL_JOKES dict.
-//! Question shows for 1 epoch (~10s), punchline for 1 epoch (~5s).
+//! Question shows for ~10s, punchline for ~5s.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;

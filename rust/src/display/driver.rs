@@ -45,8 +45,9 @@ pub const UPDATE_PARTIAL: u8 = 0xFF;
 
 /// Maximum time (in milliseconds) to wait for BUSY pin to go low.
 /// Python driver has no timeout at all — full refresh can take 2-3s,
-/// cold start can take longer. 15s is generous but safe.
-pub const BUSY_TIMEOUT_MS: u64 = 15_000;
+/// cold start can take longer. 30s covers panels that linger after a full
+/// refresh (observed: busy pin stays HIGH 18-22s on some units).
+pub const BUSY_TIMEOUT_MS: u64 = 30_000;
 
 // ── Refresh mode ────────────────────────────────────────────────────
 
@@ -686,7 +687,9 @@ pub fn flush_to_hardware(fb: &FrameBuffer, config: &DisplayConfig) -> Result<(),
             let mut driver = Ssd1680Driver::with_invert(hal, config.rotation, config.invert);
             match (|| -> Result<(), String> {
                 driver.init()?;
-                driver.clear()?;
+                // flush_base writes all pixels to both BW and RED RAM before a
+                // full refresh, so a separate clear() (which triggers an extra
+                // full-white flash) is not needed here.
                 driver.flush_base(fb)?;
                 Ok(())
             })() {

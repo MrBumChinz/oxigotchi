@@ -55,7 +55,7 @@ pub struct MainConfig {
     /// Language code (e.g. "en").
     #[serde(default = "default_lang")]
     pub lang: String,
-    /// Default operating mode at boot: "RAGE", "SAFE", or "BT". Defaults to "SAFE".
+    /// Default operating mode at boot: "RAGE", "SAFE", or "BT". Defaults to "RAGE".
     #[serde(default = "default_mode")]
     pub default_mode: String,
 }
@@ -173,7 +173,7 @@ fn default_lang() -> String {
 }
 
 fn default_mode() -> String {
-    "SAFE".into()
+    "RAGE".into()
 }
 
 fn deserialize_fps<'de, D>(deserializer: D) -> Result<u32, D::Error>

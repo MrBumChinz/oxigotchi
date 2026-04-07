@@ -678,16 +678,21 @@ impl Personality {
         // next generate_status() — without it, current_status would be empty or
         // stale from the previous face, triggering the static mood fallback.
         if self.joke_face != face_name {
-            self.joke_phase = 0;
-            self.joke_display_until = None;
-            self.joke_index = None;
-            self.joke_face_lock = None; // release stale lock
-            self.joke_face = face_name.clone();
-            self.status_display_until = None; // force new message pick below
-            let msgs = messages::messages_for_face(&face_name);
-            if !msgs.is_empty() {
-                let mut rng = rand::thread_rng();
-                self.current_status = msgs[rng.gen_range(0..msgs.len())].to_string();
+            // Don't reset joke state while a joke is in progress — mood
+            // fluctuations change the underlying face, but the punchline
+            // still needs to display. joke_face_lock keeps the display
+            // stable; we'll pick up the face change after the joke ends.
+            if self.joke_index.is_none() {
+                self.joke_phase = 0;
+                self.joke_display_until = None;
+                self.joke_face_lock = None; // release stale lock
+                self.joke_face = face_name.clone();
+                self.status_display_until = None; // force new message pick below
+                let msgs = messages::messages_for_face(&face_name);
+                if !msgs.is_empty() {
+                    let mut rng = rand::thread_rng();
+                    self.current_status = msgs[rng.gen_range(0..msgs.len())].to_string();
+                }
             }
         }
 
@@ -713,8 +718,8 @@ impl Personality {
         // Question phase just ended — switch to punchline
         if self.joke_phase == 0 && self.joke_index.is_some() && joke_expired {
             self.joke_phase = 1;
-            self.joke_display_until = Some(now + Duration::from_secs(60)); // punchline displays for ~60s
-            self.status_display_until = Some(now + Duration::from_secs(60)); // reset so slow-cycling doesn't interfere
+            self.joke_display_until = Some(now + Duration::from_secs(5)); // punchline displays for ~5s
+            self.status_display_until = Some(now + Duration::from_secs(5)); // reset so slow-cycling doesn't interfere
             if let Some(idx) = self.joke_index {
                 let joke_list = jokes::jokes_for_face(&self.joke_face);
                 if idx < joke_list.len() {
@@ -750,11 +755,11 @@ impl Personality {
                 let question = joke_list[idx].0.to_string();
                 self.joke_index = Some(idx);
                 self.joke_phase = 0;
-                self.joke_display_until = Some(now + Duration::from_secs(30));
+                self.joke_display_until = Some(now + Duration::from_secs(10));
                 self.joke_face_lock = Some(face);
                 self.joke_face = face_name;
                 self.current_status = question;
-                self.status_display_until = Some(now + Duration::from_secs(45));
+                self.status_display_until = Some(now + Duration::from_secs(15));
                 // mood boost already applied in mood_tick() — don't double-boost here
                 return;
             }
@@ -769,12 +774,13 @@ impl Personality {
                 let question = joke_list[idx].0.to_string();
                 self.joke_index = Some(idx);
                 self.joke_phase = 0;
-                self.joke_display_until = Some(now + Duration::from_secs(30)); // question displays for ~30s
+                self.joke_display_until = Some(now + Duration::from_secs(10)); // question displays for ~10s
                 self.joke_face_lock = Some(face); // lock face for joke duration
                 self.joke_face = face_name;
                 self.current_status = question;
-                self.status_display_until = Some(now + Duration::from_secs(45));
-                self.mood.adjust(mood_deltas::JOKE);
+                self.status_display_until = Some(now + Duration::from_secs(15));
+                // No mood boost here — mood_tick()'s joke self-healing handles
+                // the mood-joke relationship with proper sadness scaling.
                 return;
             }
         }
@@ -2312,16 +2318,21 @@ mod tests {
             !p.current_status.is_empty(),
             "face transition should pick new message, not clear to empty"
         );
-        // Should be from sad face pool, not the mood fallback
-        let sad_msgs = messages::messages_for_face("sad");
-        let jokes = jokes::jokes_for_face("sad");
-        let is_sad_msg = sad_msgs.iter().any(|m| *m == p.current_status);
-        let is_joke = jokes.iter().any(|j| j.0 == p.current_status || j.1 == p.current_status);
-        assert!(
-            is_sad_msg || is_joke,
-            "message '{}' should be from sad face pool or jokes",
-            p.current_status
-        );
+        // If a joke was active from the previous face, it persists (joke_face_lock).
+        // Otherwise, message should be from the new face's pool.
+        if p.joke_index.is_none() {
+            let sad_msgs = messages::messages_for_face("sad");
+            let sad_jokes = jokes::jokes_for_face("sad");
+            let is_sad_msg = sad_msgs.iter().any(|m| *m == p.current_status);
+            let is_joke = sad_jokes
+                .iter()
+                .any(|j| j.0 == p.current_status || j.1 == p.current_status);
+            assert!(
+                is_sad_msg || is_joke,
+                "message '{}' should be from sad face pool or jokes",
+                p.current_status
+            );
+        }
     }
 
     #[test]
@@ -2360,8 +2371,9 @@ mod tests {
     }
 
     #[test]
-    fn test_joke_selection_boosts_mood() {
-        // Run until a joke is selected (may take a few tries due to randomness)
+    fn test_joke_selection_does_not_boost_mood() {
+        // Random jokes no longer boost mood — mood_tick() handles all boosts
+        // to prevent the boost from canceling natural decay.
         for _ in 0..100 {
             let mut p = Personality::new();
             p.mood = Mood { value: 0.15 };
@@ -2370,16 +2382,11 @@ mod tests {
             let before = p.mood.value();
             p.generate_status();
             if p.joke_index.is_some() {
-                // Joke was selected — mood should have increased
                 assert!(
-                    p.mood.value() > before,
-                    "joke should boost mood: before={}, after={}",
+                    (p.mood.value() - before).abs() < 0.001,
+                    "random joke should NOT boost mood: before={}, after={}",
                     before,
                     p.mood.value()
-                );
-                assert!(
-                    (p.mood.value() - (before + mood_deltas::JOKE)).abs() < 0.001,
-                    "joke boost should be exactly JOKE constant"
                 );
                 return;
             }

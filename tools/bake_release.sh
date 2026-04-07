@@ -181,6 +181,13 @@ sudo cp "$REPO/scripts/buffer-cleaner.sh" "$PI/usr/local/bin/buffer-cleaner.sh"
 sudo cp "$REPO/scripts/pisugar-watchdog.sh" "$PI/usr/local/bin/pisugar-watchdog.sh"
 # Safe shutdown
 sudo cp "$REPO/scripts/safe-shutdown.sh" "$PI/usr/local/bin/safe-shutdown.sh"
+# PiSugar button scripts (toggle mode/BT/restart)
+sudo cp "$REPO/tools/toggle-bt.sh" "$PI/usr/local/bin/toggle-bt.sh"
+sudo cp "$REPO/tools/toggle-mode.sh" "$PI/usr/local/bin/toggle-mode.sh"
+sudo cp "$REPO/tools/toggle-ao-pwn.sh" "$PI/usr/local/bin/toggle-ao-pwn.sh"
+# PiSugar button config
+sudo mkdir -p "$PI/etc/pisugar-server"
+sudo cp "$REPO/config/pisugar-config.json" "$PI/etc/pisugar-server/config.json"
 # wlan_keepalive binary
 sudo cp /tmp/wlan_keepalive "$PI/usr/local/bin/wlan_keepalive"
 
@@ -577,7 +584,8 @@ ls "$PI/etc/systemd/system/timers.target.wants/" 2>/dev/null | sort | sed 's/^/ 
 echo ""
 echo "--- Helper scripts ---"
 for f in wifi-recovery.sh bootlog.sh usb0-fallback.sh fix_ndev_on_boot.sh bt-keepalive.sh \
-         buffer-cleaner.sh pisugar-watchdog.sh safe-shutdown.sh wlan_keepalive; do
+         buffer-cleaner.sh pisugar-watchdog.sh safe-shutdown.sh wlan_keepalive \
+         toggle-bt.sh toggle-mode.sh toggle-ao-pwn.sh; do
     verify "$f" "$PI/usr/local/bin/$f"
 done
 

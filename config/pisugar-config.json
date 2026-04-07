@@ -1,0 +1,11 @@
+{
+    "model": "PiSugar3",
+    "auto_power_on": true,
+    "tap_enable": true,
+    "tap_duration": 130,
+    "single_tap_shell": "/usr/local/bin/toggle-bt.sh",
+    "double_tap_shell": "/usr/local/bin/toggle-mode.sh",
+    "long_tap_shell": "/usr/local/bin/toggle-ao-pwn.sh",
+    "soft_poweroff": false,
+    "soft_poweroff_shell": ""
+}

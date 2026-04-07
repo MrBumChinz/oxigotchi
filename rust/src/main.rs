@@ -114,8 +114,8 @@ struct Daemon {
     gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer,
     qpu_engine: Option<qpu::engine::QpuEngine>,
     mode: OperatingMode,
-    /// Set by load_runtime_state() when persisted mode != RAGE.
-    /// boot() checks this to skip WiFi and queue a BT transition.
+    /// Set in new() from config.main.default_mode when that mode is not RAGE.
+    /// boot() uses this to skip WiFi setup and queue the mode transition.
     boot_target_mode: Option<String>,
     shared_state: web::SharedState,
     ws_tx: tokio::sync::broadcast::Sender<String>,
@@ -234,7 +234,11 @@ impl Daemon {
             gpu_optimizer: gpu::optimize::snapshot::SnapshotOptimizer::new(),
             qpu_engine: None, // initialized in boot()
             mode: boot_mode,
-            boot_target_mode: None,
+            boot_target_mode: if boot_mode != OperatingMode::Rage {
+                Some(boot_mode.as_str().to_string())
+            } else {
+                None
+            },
             shared_state,
             ws_tx,
             prev_cpu_sample: None,
@@ -341,8 +345,8 @@ impl Daemon {
         self.load_runtime_state();
 
         // Start WiFi monitor mode — but only if booting into a WiFi mode.
-        // If the persisted mode is BT/SAFE, skip WiFi and queue a mode switch
-        // so the first epoch transitions the radio.
+        // If config.main.default_mode is BT/SAFE, skip WiFi and queue a mode
+        // switch so the first epoch transitions the radio.
         if let Some(ref target) = self.boot_target_mode {
             info!("target mode is {target} — skipping WiFi, will transition in first epoch");
             let mut s = self.shared_state.lock().unwrap();
@@ -2237,7 +2241,6 @@ impl Daemon {
             "display_refresh_interval": self.screen.config.full_refresh_interval,
             "min_rssi": s.min_rssi,
             "ap_ttl_secs": s.ap_ttl_secs,
-            "operating_mode": self.mode.as_str(),
             "bt_scan_mode": self.config.bt_attacks.scan_mode.as_str(),
             "state_version": 2,
         });
@@ -2436,24 +2439,6 @@ impl Daemon {
             let mut s = self.shared_state.lock().unwrap();
             s.ap_ttl_secs = ttl.clamp(30, 600);
         }
-        // Restore operating mode — boot() checks self.mode to decide
-        // whether to start WiFi or BT. We set a separate flag so boot()
-        // knows to skip WiFi, but keep self.mode as Rage so enter_bt_mode()
-        // guard (`self.mode != Bt`) doesn't skip the transition.
-        if let Some(mode_str) = state.get("operating_mode").and_then(|v| v.as_str()) {
-            if mode_str != "RAGE" {
-                self.boot_target_mode = Some(mode_str.to_string());
-                info!("state: will restore operating mode {mode_str} after boot");
-            }
-        }
-
-        // Migration: pre-v3.2 state files lack state_version and defaulted
-        // to RAGE due to a bug. Reset to SAFE so users aren't stuck.
-        if state.get("state_version").is_none() {
-            self.boot_target_mode = Some("SAFE".to_string());
-            info!("migrating pre-v3.2 state — defaulting to SAFE mode");
-        }
-
         if let Some(mode_str) = state.get("bt_scan_mode").and_then(|v| v.as_str()) {
             if let Some(mode) = crate::bluetooth::attacks::BtScanMode::from_str(mode_str) {
                 self.config.bt_attacks.scan_mode = mode;
@@ -3871,9 +3856,9 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_starts_in_safe_mode_by_default() {
+    fn test_daemon_starts_in_rage_mode_by_default() {
         let daemon = make_daemon();
-        assert_eq!(daemon.mode, OperatingMode::Safe);
+        assert_eq!(daemon.mode, OperatingMode::Rage);
     }
 
     #[test]
