@@ -524,7 +524,7 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
 
         self.set_ram_cursor(0, 0)?;
 
-        // Write BW RAM only (partial doesn't touch RED RAM)
+        // Write new image to BW RAM
         self.hal.send_command(CMD_WRITE_RAM_BW)?;
         self.hal.send_data(&spi_data)?;
 
@@ -534,6 +534,14 @@ impl<H: Ssd1680Hal> Ssd1680Driver<H> {
         self.hal.send_command(CMD_MASTER_ACTIVATION)?;
 
         self.hal.wait_busy()?;
+
+        // After the partial update completes, write the same data to RED RAM
+        // so the NEXT partial refresh has the correct "old" reference.
+        // Writing after wait_busy avoids interfering with the border waveform
+        // during the current refresh cycle.
+        self.set_ram_cursor(0, 0)?;
+        self.hal.send_command(CMD_WRITE_RAM_RED)?;
+        self.hal.send_data(&spi_data)?;
 
         Ok(())
     }
@@ -1477,7 +1485,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flush_partial_writes_bw_ram_only() {
+    fn test_flush_partial_writes_both_rams() {
         let mut drv = Ssd1680Driver::new(MockHal::new(), 0);
         drv.init().unwrap();
         let pre_len = drv.hal.snapshot().len();
@@ -1495,8 +1503,8 @@ mod tests {
             "flush_partial must write BW RAM"
         );
         assert!(
-            !flush_cmds.contains(&CMD_WRITE_RAM_RED),
-            "flush_partial must NOT write RED RAM"
+            flush_cmds.contains(&CMD_WRITE_RAM_RED),
+            "flush_partial must also write RED RAM (old reference for next partial)"
         );
     }
 

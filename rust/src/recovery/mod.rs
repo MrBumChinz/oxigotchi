@@ -444,14 +444,10 @@ pub enum GpioStep {
 /// Execution is separate so the sequence is testable without hardware.
 pub fn build_gpio_recovery_sequence(delay_ms: u64) -> Vec<GpioStep> {
     vec![
-        // Stop services that use WiFi
-        GpioStep::StopService("pwnagotchi".into()),
-        GpioStep::StopService("bettercap".into()),
-        GpioStep::StopService("wlan-keepalive".into()),
         // Unload driver
         GpioStep::ModprobeRemove("brcmfmac".into()),
         GpioStep::Sleep(Duration::from_secs(1)),
-        // Unbind MMC controller
+        // Unbind MMC controller (may already be unbound after crash)
         GpioStep::MmcUnbind,
         GpioStep::Sleep(Duration::from_secs(1)),
         // Pull WL_REG_ON low (power off WiFi chip)
@@ -468,11 +464,6 @@ pub fn build_gpio_recovery_sequence(delay_ms: u64) -> Vec<GpioStep> {
         GpioStep::Sleep(Duration::from_secs(5)),
         // Verify recovery
         GpioStep::Verify,
-        // Restart services
-        GpioStep::StartService("wlan-keepalive".into()),
-        GpioStep::StartService("bettercap".into()),
-        GpioStep::Sleep(Duration::from_secs(3)),
-        GpioStep::StartService("pwnagotchi".into()),
     ]
 }
 
@@ -492,7 +483,10 @@ pub fn execute_gpio_recovery(delay_ms: u64) -> Result<bool, String> {
                 run_modprobe_remove(module)?;
             }
             GpioStep::MmcUnbind => {
-                write_sysfs(&format!("{MMC_DRIVER_PATH}/unbind"), MMC_DEVICE)?;
+                // Non-fatal: device may already be unbound after firmware crash
+                if let Err(e) = write_sysfs(&format!("{MMC_DRIVER_PATH}/unbind"), MMC_DEVICE) {
+                    log::warn!("MMC unbind failed (may already be unbound): {e}");
+                }
             }
             GpioStep::GpioPinLow(pin) => {
                 gpio_set_pin(*pin, false)?;
@@ -504,7 +498,10 @@ pub fn execute_gpio_recovery(delay_ms: u64) -> Result<bool, String> {
                 gpio_set_pin(*pin, true)?;
             }
             GpioStep::MmcRebind => {
-                write_sysfs(&format!("{MMC_DRIVER_PATH}/bind"), MMC_DEVICE)?;
+                // Non-fatal: bind may fail if device is already bound
+                if let Err(e) = write_sysfs(&format!("{MMC_DRIVER_PATH}/bind"), MMC_DEVICE) {
+                    log::warn!("MMC rebind failed (may already be bound): {e}");
+                }
             }
             GpioStep::ModprobeLoad(module) => {
                 run_modprobe_load(module)?;
@@ -1246,37 +1243,19 @@ mod tests {
     }
 
     #[test]
-    fn test_gpio_sequence_services_stopped_before_modprobe() {
+    fn test_gpio_sequence_no_legacy_services() {
+        // Daemon handles AO lifecycle directly — no legacy services to stop/start.
         let steps = build_gpio_recovery_sequence(3000);
-        let modprobe_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::ModprobeRemove(_)))
-            .unwrap();
-        let stop_services: Vec<_> = steps[..modprobe_idx]
+        let stop_services: Vec<_> = steps
             .iter()
             .filter(|s| matches!(s, GpioStep::StopService(_)))
             .collect();
-        assert!(
-            stop_services.len() >= 2,
-            "services must be stopped before modprobe -r"
-        );
-    }
-
-    #[test]
-    fn test_gpio_sequence_services_restarted_after_verify() {
-        let steps = build_gpio_recovery_sequence(3000);
-        let verify_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::Verify))
-            .unwrap();
-        let start_services: Vec<_> = steps[verify_idx..]
+        let start_services: Vec<_> = steps
             .iter()
             .filter(|s| matches!(s, GpioStep::StartService(_)))
             .collect();
-        assert!(
-            start_services.len() >= 2,
-            "services must be restarted after verify"
-        );
+        assert_eq!(stop_services.len(), 0, "no legacy services to stop");
+        assert_eq!(start_services.len(), 0, "no legacy services to start");
     }
 
     #[test]

@@ -610,11 +610,15 @@ impl Personality {
 
     /// Set an override face (e.g., for hardware warnings).
     pub fn set_override(&mut self, face: Face) {
+        log::info!("face override SET: {:?} (was {:?})", face, self.override_face);
         self.override_face = Some(face);
     }
 
     /// Clear any face override.
     pub fn clear_override(&mut self) {
+        if self.override_face.is_some() {
+            log::info!("face override CLEARED (was {:?})", self.override_face);
+        }
         self.override_face = None;
         self.transition_face = None;
         self.transition_until = None;

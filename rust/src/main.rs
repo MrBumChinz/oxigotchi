@@ -155,6 +155,7 @@ struct Daemon {
     autohunt_warmed_up: bool,
     bt_scan_use_le: bool,
     epoch_start: Instant,
+    last_drawn_face: Option<personality::Face>,
 }
 
 impl Daemon {
@@ -270,6 +271,7 @@ impl Daemon {
             autohunt_warmed_up: false,
             bt_scan_use_le: true,
             epoch_start: Instant::now(),
+            last_drawn_face: None,
         }
     }
 
@@ -2910,6 +2912,17 @@ impl Daemon {
             self.screen.draw_face(&face);
         } else {
             let face = self.epoch_loop.current_face();
+            if self.last_drawn_face != Some(face) {
+                log::info!(
+                    "face changed: {:?} -> {:?} (override={:?}, variety={:?}, mood={:.2})",
+                    self.last_drawn_face,
+                    face,
+                    self.epoch_loop.personality.override_face,
+                    self.epoch_loop.personality.variety.current_override(),
+                    self.epoch_loop.personality.mood.value(),
+                );
+                self.last_drawn_face = Some(face);
+            }
             self.screen.draw_face(&face);
         }
 
