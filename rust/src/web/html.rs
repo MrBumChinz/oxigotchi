@@ -61,6 +61,8 @@ input:checked+.slider:before{transform:translateX(22px)}
 .mode-btn{flex:1;padding:14px 0;border:2px solid #0f3460;border-radius:10px;background:transparent;color:#e0e0e0;font-size:16px;font-weight:bold;font-family:inherit;cursor:pointer;text-align:center;transition:.2s}
 .mode-btn.active{background:#00d4aa;color:#1a1a2e;border-color:#00d4aa}
 .mode-btn:active{transform:scale(0.95)}
+.exp-badge{font-size:9px;background:#e67e22;color:#fff;padding:1px 4px;border-radius:4px;vertical-align:top;margin-left:2px;font-weight:bold;letter-spacing:.5px}
+.bt-warn-always{color:#e67e22;font-size:11px;padding:6px 8px;background:#5a300033;border-radius:6px;margin-top:8px}
 .action-btns{display:flex;flex-wrap:wrap;gap:8px}
 .action-btn{flex:1;min-width:100px;padding:14px 8px;border:none;border-radius:10px;font-family:inherit;font-size:13px;font-weight:bold;cursor:pointer;text-align:center;transition:.2s}
 .action-btn:active{transform:scale(0.95)}
@@ -180,10 +182,10 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="sub">RAGE = all attacks max aggression. BT = Bluetooth offensive. SAFE = passive scanning only.</div>
 <div class="mode-btns">
 <button class="mode-btn active" id="mode-rage" onclick="switchMode('RAGE')">RAGE</button>
-<button class="mode-btn" id="mode-bt" onclick="switchMode('BT')">BT</button>
+<button class="mode-btn" id="mode-bt" onclick="confirmBT()">BT <span class="exp-badge">EXP</span></button>
 <button class="mode-btn" id="mode-safe" onclick="switchMode('SAFE')">SAFE</button>
 </div>
-<div class="rage-disclaimer" id="bt-tether-warn">&#9888; BT mode disconnects phone tethering. You will lose remote access until switching back to RAGE or SAFE.</div>
+<div class="bt-warn-always">&#9888; <b>BT mode is experimental</b> and incompatible with BT tethering &mdash; switching will drop your phone connection and remote access.</div>
 </div>
 
 <!-- 3. Core stats -->
@@ -823,7 +825,6 @@ function syncModeUi(rawMode) {
     }
     document.getElementById('mode-rage').classList.toggle('active', rawMode === 'RAGE' || rawMode === 'AO');
     document.getElementById('mode-bt').classList.toggle('active', rawMode === 'BT');
-    document.getElementById('bt-tether-warn').style.display = rawMode === 'BT' ? 'block' : 'none';
     document.getElementById('mode-safe').classList.toggle('active', rawMode === 'SAFE' || rawMode === 'PWN');
     applyModeVisibility(rawMode);
 }
@@ -1421,8 +1422,11 @@ function setRate(r) {
         toast('Rate set to ' + r);
     });
 }
+function confirmBT() {
+    if (!confirm('BT mode is experimental and will disconnect BT tethering. You will lose remote access. Continue?')) return;
+    switchMode('BT');
+}
 function switchMode(mode) {
-    document.getElementById('bt-tether-warn').style.display = mode === 'BT' ? 'block' : 'none';
     toast('Switching to ' + mode + '...');
     api('POST', '/api/mode', {mode: mode}).then(function(r) {
         if (r && r.ok) toast(r.message);

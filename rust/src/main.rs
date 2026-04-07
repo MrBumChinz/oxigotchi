@@ -682,8 +682,10 @@ impl Daemon {
                     &ao_bssids,
                 );
 
-                // Feed RF environment into personality
-                self.epoch_loop.personality.apply_rf_environment(&rf);
+                // Feed RF environment into personality (RAGE only — stale in BT mode)
+                if self.mode != OperatingMode::Bt {
+                    self.epoch_loop.personality.apply_rf_environment(&rf);
+                }
 
                 // Store RF stats for web API
                 {
@@ -703,16 +705,23 @@ impl Daemon {
         self.epoch_loop.next_phase(); // -> Display
 
         if self.mode == OperatingMode::Bt {
-            // BT mode: personality was already updated in run_bt_epoch().
-            // Don't record a WiFi result (would poison mood with blind epochs)
-            // and don't overwrite the BT status text.
-            self.epoch_loop.personality.variety.tick_idle();
+            // BT mode: status text set in run_bt_epoch().
+            // Don't record a WiFi result (would poison mood with blind epochs).
+            // Reset per-epoch variety state so stale capture faces don't leak.
+            self.epoch_loop.personality.variety.tick_epoch();
+            // Don't tick_idle — BT has no captures to reset the counter,
+            // inflating it causes sad faces when switching back to RAGE.
         } else {
             self.epoch_loop.record_result(&result);
 
             // ---- Face & personality ----
             self.update_face_and_personality(&result);
         }
+
+        // ---- Mode-independent timers (mood, XP, battery) ----
+        // These must run in ALL modes so mood drifts, XP saves, and
+        // battery warnings work during BT and SAFE mode.
+        self.tick_shared_timers();
 
         // ---- Lua plugins (gated to every 5s) + display ----
         if self.lua_tick_timer.due() {
@@ -1244,37 +1253,17 @@ impl Daemon {
         // Discord posting requires curl (Unix only)
     }
 
-    /// Update face variety engine, XP, battery overrides, and AO crash recovery.
-    fn update_face_and_personality(&mut self, result: &epoch::EpochResult) {
-        // Reset per-epoch transient state (capture face, capture count)
-        self.epoch_loop.personality.variety.tick_epoch();
-
-        // Expire mode transition override if countdown reached zero
-        self.epoch_loop.personality.tick_transition_override();
-
-        // Wire captures into variety engine for milestones + face cycling
-        if result.handshakes_captured > 0 {
-            let total = self.epoch_loop.personality.total_handshakes;
-            self.epoch_loop.personality.variety.on_capture(total);
-        } else {
-            self.epoch_loop.personality.variety.tick_idle();
-        }
-
-        // Set time-of-day state for variety engine
-        let hour = chrono::Local::now().hour();
-        self.epoch_loop.personality.variety.current_hour = hour;
-        if (6..=8).contains(&hour)
-            && !self.epoch_loop.personality.variety.morning_greeted
-            && self.epoch_loop.personality.variety.current_override() == Some("motivated")
-        {
-            self.epoch_loop.personality.variety.morning_greeted = true;
-        }
-
+    /// Tick mode-independent timers: mood drift, XP, battery, variety countdowns.
+    /// Runs every epoch in ALL modes so mood/battery/XP work during BT and SAFE.
+    fn tick_shared_timers(&mut self) {
         // Mood tick + variety countdowns (30s wall-clock)
         if self.mood_timer.due() {
             self.epoch_loop.personality.mood_tick();
             self.epoch_loop.personality.variety.tick_countdowns();
         }
+
+        // Keep variety engine's mood in sync for mood-aware idle faces
+        self.epoch_loop.personality.variety.mood = self.epoch_loop.personality.mood.value();
 
         // Passive XP (30s wall-clock)
         if self.xp_passive_timer.due() {
@@ -1289,8 +1278,42 @@ impl Daemon {
             }
         }
 
-        // Battery face overrides
+        // Battery face overrides (critical in all modes)
         self.check_battery_overrides();
+    }
+
+    /// Update face variety engine, overrides, and AO crash recovery (RAGE/SAFE only).
+    fn update_face_and_personality(&mut self, result: &epoch::EpochResult) {
+        // Reset per-epoch transient context flags (level_up, scan_channels, etc.)
+        self.epoch_loop.personality.reset_epoch_context();
+
+        // Reset per-epoch variety state (capture face, capture count)
+        self.epoch_loop.personality.variety.tick_epoch();
+
+        // Expire mode transition override if countdown reached zero
+        self.epoch_loop.personality.tick_transition_override();
+
+        // Wire captures into variety engine for milestones + face cycling.
+        // Call on_capture per handshake with intermediate totals so milestones
+        // at exact counts (1, 10, 25, 50, 100) are never skipped.
+        if result.handshakes_captured > 0 {
+            let base = self.epoch_loop.personality.total_handshakes
+                - result.handshakes_captured;
+            for i in 1..=result.handshakes_captured {
+                self.epoch_loop.personality.variety.on_capture(base + i);
+            }
+        } else {
+            self.epoch_loop.personality.variety.tick_idle();
+        }
+
+        // Set time-of-day state for variety engine
+        let hour = chrono::Local::now().hour();
+        self.epoch_loop.personality.variety.current_hour = hour;
+        // Mark morning greeting shown when in the 6-8am window, regardless of
+        // which face is currently active (so milestones don't block it forever).
+        if (6..=8).contains(&hour) && !self.epoch_loop.personality.variety.morning_greeted {
+            self.epoch_loop.personality.variety.morning_greeted = true;
+        }
 
         // Clear AO crash face if AO recovered
         if self.ao.state == ao::AoState::Running

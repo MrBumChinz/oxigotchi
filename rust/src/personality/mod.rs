@@ -608,20 +608,47 @@ impl Personality {
         }
     }
 
+    /// Whether the current override is a safety-critical hardware face that
+    /// RF-driven overrides (Raging, Lonely) should not clobber.
+    fn is_hardware_override(&self) -> bool {
+        matches!(
+            self.override_face,
+            Some(Face::BatteryCritical)
+                | Some(Face::BatteryLow)
+                | Some(Face::Shutdown)
+                | Some(Face::AoCrashed)
+                | Some(Face::FwCrash)
+                | Some(Face::WifiDown)
+        )
+    }
+
     /// Set an override face (e.g., for hardware warnings).
     pub fn set_override(&mut self, face: Face) {
         log::info!("face override SET: {:?} (was {:?})", face, self.override_face);
         self.override_face = Some(face);
     }
 
-    /// Clear any face override.
+    /// Clear a specific face override (e.g., battery recovered, AO recovered).
+    /// Only clears transition state if the current override IS the transition face,
+    /// so that e.g. battery recovery doesn't destroy an active mode-transition override.
     pub fn clear_override(&mut self) {
-        if self.override_face.is_some() {
-            log::info!("face override CLEARED (was {:?})", self.override_face);
+        if self.override_face.is_none() {
+            return;
         }
+        log::info!("face override CLEARED (was {:?})", self.override_face);
+        // Only destroy transition state if the override being cleared IS the transition
+        let is_transition = self.transition_face.is_some()
+            && self.override_face == self.transition_face;
         self.override_face = None;
-        self.transition_face = None;
-        self.transition_until = None;
+        if is_transition {
+            self.transition_face = None;
+            self.transition_until = None;
+        } else if self.transition_face.is_some() {
+            // Restore the transition face — it's still active and wasn't
+            // the override being cleared (e.g., battery warning interrupted
+            // a mode-transition Raging face, now battery recovered).
+            self.override_face = self.transition_face;
+        }
     }
 
     /// Set a transition override face for a fixed duration in seconds.
@@ -835,7 +862,10 @@ impl Personality {
 
         if rf.deauth_rate > rf::DEAUTH_STORM_RATE {
             self.mood.adjust(mood_deltas::RF_DEAUTH_STORM);
-            self.override_face = Some(Face::Raging);
+            // Only set RF face if no higher-priority hardware override is active
+            if !self.is_hardware_override() {
+                self.override_face = Some(Face::Raging);
+            }
         }
 
         if rf.probe_rate > rf::PROBE_FLOOD_RATE {
@@ -845,7 +875,7 @@ impl Personality {
         // Lonely: APs exist but nobody's talking
         let lonely_condition =
             rf.beacon_rate > 0.0 && rf.data_rate == 0.0 && rf.probe_rate == 0.0 && rf.total_frames > 0;
-        if lonely_condition {
+        if lonely_condition && !self.is_hardware_override() {
             self.override_face = Some(Face::Lonely);
         }
 
@@ -2474,6 +2504,34 @@ mod tests {
 
         p.tick_transition_override();
         assert_eq!(p.override_face, Some(Face::BatteryCritical));
+    }
+
+    #[test]
+    fn test_clear_override_preserves_and_restores_transition() {
+        let mut p = Personality::new();
+        // Active transition override (e.g., entering BT mode → Raging for 90s)
+        p.set_transition_override(Face::Raging, 90);
+        assert_eq!(p.override_face, Some(Face::Raging));
+        // Battery critical interrupts the transition
+        p.set_override(Face::BatteryCritical);
+        assert_eq!(p.override_face, Some(Face::BatteryCritical));
+        // Battery recovers → clear override should restore the transition face
+        p.clear_override();
+        assert_eq!(p.override_face, Some(Face::Raging), "transition face should be restored");
+        assert!(p.transition_face.is_some());
+        assert!(p.transition_until.is_some());
+    }
+
+    #[test]
+    fn test_clear_override_destroys_transition_when_same_face() {
+        let mut p = Personality::new();
+        p.set_transition_override(Face::Raging, 90);
+        assert_eq!(p.override_face, Some(Face::Raging));
+        // Clearing the transition face itself should destroy transition state
+        p.clear_override();
+        assert_eq!(p.override_face, None);
+        assert!(p.transition_face.is_none());
+        assert!(p.transition_until.is_none());
     }
 
     #[test]

@@ -73,6 +73,10 @@ pub struct FaceVariety {
     /// Whether morning greeting was shown (once per boot).
     pub morning_greeted: bool,
 
+    // -- Mood (set from main loop for mood-aware idle faces) --
+    /// Current mood value (0.0-1.0), updated each epoch.
+    pub mood: f32,
+
     // -- Rare face --
     /// Rare face (rolled every 30s in tick_countdowns).
     pub rare_face: Option<&'static str>,
@@ -94,6 +98,7 @@ impl FaceVariety {
             capture_face: None,
             current_hour: 12,
             morning_greeted: false,
+            mood: 1.0,
             rare_face: None,
         }
     }
@@ -147,26 +152,34 @@ impl FaceVariety {
     /// Uses modulo 30 cycle: 1-5=bored, 6-10=cool, 11-15=lonely,
     /// 16-20=demotivated, 21-25=angry, 26-30=sad.
     /// Cool slot breaks up the all-negative idle loop.
+    ///
+    /// Mood-aware: when mood ≥ 0.7, suppresses negative idle faces
+    /// (lonely, demotivated, angry, sad) and falls through to mood-based face.
     pub fn idle_face(&self) -> Option<&'static str> {
         if self.idle_epochs == 0 {
             return None;
         }
         let cycle = self.idle_epochs % 30;
-        match cycle {
-            0..=5 => Some("bored"),
-            6..=10 => Some("cool"),
-            11..=15 => Some("lonely"),
-            16..=20 => Some("demotivated"),
-            21..=25 => Some("angry"),
-            _ => Some("sad"),
+        let face = match cycle {
+            0..=5 => "bored",
+            6..=10 => "cool",
+            11..=15 => "lonely",
+            16..=20 => "demotivated",
+            21..=25 => "angry",
+            _ => "sad",
+        };
+        // Don't show negative idle faces when mood is good — let mood face shine
+        if self.mood >= 0.7 && matches!(face, "lonely" | "demotivated" | "angry" | "sad") {
+            return None;
         }
+        Some(face)
     }
 
     /// Get the boot face (debug face shown once on startup).
     pub fn boot_face(&mut self) -> &'static str {
         if !self.debug_shown {
             self.debug_shown = true;
-            self.debug_until = Some(Instant::now() + Duration::from_secs(60));
+            self.debug_until = Some(Instant::now() + Duration::from_secs(5));
             return "debug";
         }
         "awake"
@@ -375,6 +388,7 @@ mod tests {
     #[test]
     fn test_idle_rotation_modulo_30() {
         let mut fv = FaceVariety::new();
+        fv.mood = 0.3; // low mood — all idle faces show
 
         // No idle face at 0
         assert_eq!(fv.idle_face(), None);
@@ -410,6 +424,33 @@ mod tests {
         // 38 = 38%30=8 = cool
         fv.idle_epochs = 38;
         assert_eq!(fv.idle_face(), Some("cool"));
+    }
+
+    #[test]
+    fn test_idle_suppresses_negative_faces_when_happy() {
+        let mut fv = FaceVariety::new();
+        fv.mood = 0.85; // happy — negative idle faces suppressed
+
+        // Neutral faces still show
+        fv.idle_epochs = 3;
+        assert_eq!(fv.idle_face(), Some("bored"));
+        fv.idle_epochs = 8;
+        assert_eq!(fv.idle_face(), Some("cool"));
+
+        // Negative faces suppressed → None (falls through to mood face)
+        fv.idle_epochs = 13;
+        assert_eq!(fv.idle_face(), None, "lonely suppressed at high mood");
+        fv.idle_epochs = 18;
+        assert_eq!(fv.idle_face(), None, "demotivated suppressed at high mood");
+        fv.idle_epochs = 23;
+        assert_eq!(fv.idle_face(), None, "angry suppressed at high mood");
+        fv.idle_epochs = 28;
+        assert_eq!(fv.idle_face(), None, "sad suppressed at high mood");
+
+        // Drop mood below threshold — negative faces return
+        fv.mood = 0.5;
+        fv.idle_epochs = 13;
+        assert_eq!(fv.idle_face(), Some("lonely"));
     }
 
     #[test]
