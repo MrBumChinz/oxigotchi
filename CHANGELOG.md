@@ -65,7 +65,7 @@ See [docs/RUST_REWRITE_PLAN.md](docs/RUST_REWRITE_PLAN.md) for the full sprint p
 - **Bull faces in PWN mode boot**: splash service now checks for AO overlay before rendering bull face — PWN mode gets clean Korean faces from start
 - **[unknown] in PWND counter**: removed last-captured AP hostname from display in AO mode (AO indicator shows capture count instead)
 - **Misleading attack messages**: `associate()` and `deauth()` now early-return in AO mode — no more "Associating to AP_NAME" when AO handles attacks
-- **Rate descriptions**: dashboard updated — rate 2 no longer marked as risky (v6 firmware patch resolved 0x204CA crash)
+- **Rate descriptions**: dashboard updated — rate 2 no longer marked as risky (v6 firmware patch resolved the crash)
 - **Blind epoch hack**: `mon_max_blind_epochs` can stay at default 5 instead of 9999 — synthetic AP heartbeat keeps pwnagotchi alive in AO mode
 - **Agent.py idempotency**: patch script now checks for all sub-patches (`ao_active` + `AO handles attacks`) before skipping
 

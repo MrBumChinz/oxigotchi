@@ -126,7 +126,7 @@ Source art (any size)          process_for_eink.py          eink/
 
 **Steps** (`process_for_eink.py`):
 
-1. **Source**: High-res black & white bull art from ChatGPT (any size)
+1. **Source**: High-res black & white bull art (any size)
 2. **Auto-crop**: Remove whitespace around the bull
 3. **Resize**: Fit to 120x66 maintaining aspect ratio (LANCZOS)
 4. **Center**: Pad to exactly 120x66 on white canvas
@@ -135,7 +135,7 @@ Source art (any size)          process_for_eink.py          eink/
 
 Metadata is stripped as a side effect of the 1-bit conversion pipeline -- Pillow's `point()` to
 mode `'1'` discards all EXIF/ICC/metadata from the source. The output PNGs contain only raw
-pixel data. This prevents leaking ChatGPT generation metadata or GPS coordinates.
+pixel data. This prevents leaking source metadata or GPS coordinates.
 
 ## Config Integration
 

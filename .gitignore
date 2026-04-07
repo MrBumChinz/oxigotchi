@@ -68,4 +68,4 @@ tools/deploy_pwnoxide.py
 release-notes-*.md
 
 # Mangled path directory (created by path conversion bug)
-C:msys64homegelumoxigotchidocssuperpowersplans/
+C:msys64home*oxigotchidocssuperpowersplans/

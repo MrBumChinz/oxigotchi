@@ -942,7 +942,7 @@ the positions documented in the master element table above are the actual active
 ### `/ui` Endpoint
 
 ```
-GET http://10.12.194.1:8080/ui
+GET http://10.0.0.2:8080/ui
 ```
 
 Returns the current e-ink display as a **PNG image** (250×122, 1-bit).
