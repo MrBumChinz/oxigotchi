@@ -195,8 +195,10 @@ pub fn sdio_write(_addr: u32, _data: &[u8]) -> Result<(), String> {
 }
 
 /// Firmware RAM addresses for crash counters — must be provided via firmware config.
-pub const ADDR_CRASH_SUPPRESS: u32 = 0; // TODO: load from firmware config
-pub const ADDR_HARDFAULT: u32 = 0;      // TODO: load from firmware config
+/// Layer 2 fatal_error_wrapper suppression counter (firmware_analysis/18_oxigotchi_patches/)
+pub const ADDR_CRASH_SUPPRESS: u32 = 0x03C094;
+/// Layer 3 hardfault_recovery counter
+pub const ADDR_HARDFAULT: u32 = 0x03C098;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FirmwareHealth {
@@ -216,7 +218,7 @@ pub struct FirmwareMonitor {
     pub crash_suppress: u32,
     pub hardfault: u32,
     health: FirmwareHealth,
-    initialized: bool,
+    pub initialized: bool,
 }
 
 impl FirmwareMonitor {

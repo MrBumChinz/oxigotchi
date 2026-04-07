@@ -16,14 +16,16 @@ pub struct RagePreset {
 const SAFE_3: &[u8] = &[1, 6, 11];
 const STANDARD_11: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
-/// Stress-test-validated presets (2026-03-26).
+/// Stress-test-validated presets (2026-04-07).
 /// Each step changes exactly one variable from the previous level.
+/// Levels 1-6 are stable with BT PAN active on BCM43436B0.
+/// YOLO (7) deliberately exceeds the tested-stable envelope.
 pub const PRESETS: [RagePreset; 7] = [
     RagePreset {
         level: 1,
         name: "Chill",
         rate: 1,
-        dwell_ms: 5000,
+        dwell_ms: 2000,
         channels: SAFE_3,
     },
     RagePreset {
@@ -31,12 +33,12 @@ pub const PRESETS: [RagePreset; 7] = [
         name: "Lurk",
         rate: 1,
         dwell_ms: 2000,
-        channels: SAFE_3,
+        channels: STANDARD_11,
     },
     RagePreset {
         level: 3,
         name: "Prowl",
-        rate: 1,
+        rate: 2,
         dwell_ms: 2000,
         channels: STANDARD_11,
     },
@@ -44,13 +46,13 @@ pub const PRESETS: [RagePreset; 7] = [
         level: 4,
         name: "Hunt",
         rate: 2,
-        dwell_ms: 2000,
+        dwell_ms: 1000,
         channels: STANDARD_11,
     },
     RagePreset {
         level: 5,
         name: "RAGE",
-        rate: 2,
+        rate: 3,
         dwell_ms: 1000,
         channels: STANDARD_11,
     },
@@ -58,13 +60,13 @@ pub const PRESETS: [RagePreset; 7] = [
         level: 6,
         name: "FURY",
         rate: 3,
-        dwell_ms: 1000,
+        dwell_ms: 500,
         channels: STANDARD_11,
     },
     RagePreset {
         level: 7,
         name: "YOLO",
-        rate: 3,
+        rate: 5,
         dwell_ms: 500,
         channels: STANDARD_11,
     },
@@ -97,12 +99,12 @@ mod tests {
         let p = preset(1).unwrap();
         assert_eq!(p.name, "Chill");
         assert_eq!(p.rate, 1);
-        assert_eq!(p.dwell_ms, 5000);
+        assert_eq!(p.dwell_ms, 2000);
         assert_eq!(p.channels, &[1, 6, 11]);
 
         let p = preset(7).unwrap();
         assert_eq!(p.name, "YOLO");
-        assert_eq!(p.rate, 3);
+        assert_eq!(p.rate, 5);
         assert_eq!(p.dwell_ms, 500);
         assert_eq!(p.channels, &[1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     }

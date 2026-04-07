@@ -34,15 +34,10 @@ Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use differe
 Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
 
 **Can I change the attack rate?**
-The dashboard has a **RAGE Slider** with 3 levels:
-- **1 (Chill)** — Low rate, conservative dwell, 3 channels. Quiet and stable.
-- **2 (Hunt)** — Medium rate, moderate dwell, more channels. The daily driver.
-- **3 (RAGE)** — Maximum rate, fast dwell, all 13 channels. Full offensive.
-
-All levels are stress-test-validated stable with the v6 firmware patches. In BT mode, an equivalent **BT aggression level** (BT:1/BT:2/BT:3) controls scanning and attack intensity.
+The dashboard has a **RAGE Slider** with 7 levels (Chill through YOLO). Each level changes exactly one variable from the previous. Levels 1-6 are stress-test-validated stable, even with BT PAN active. Level 7 (YOLO) deliberately pushes past the tested-stable envelope — the daemon auto-recovers if AO crashes. In BT mode, an equivalent **BT aggression level** (BT:1/BT:2/BT:3) controls scanning and attack intensity.
 
 **Does scanning more channels help?**
-Yes. With the v6 firmware patches, scanning all 13 channels is fully stable — even at rate 2 with 500ms dwell time. The old advice to "stick to 1, 6, 11" was based on pre-patch firmware behavior. Channels 1, 6, and 11 are still where 95% of 2.4 GHz APs live, so they remain the best default for efficiency, but scanning all 13 no longer risks a crash. Autohunt mode (which scans all channels then locks onto active ones) is now the recommended approach.
+Yes. We use channels 1-11 (the legal 2.4 GHz set). Channels 1, 6, and 11 are where 95% of APs live, so they remain the best default for efficiency, but scanning all 11 is fully stable even at rate 3 with BT active. Autohunt mode (which scans all channels then locks onto active ones) is the recommended approach.
 
 **How long does the battery last?**
 With PiSugar 3 (1200mAh): 3-4 hours active. The bull face warns at 20% and 15%.

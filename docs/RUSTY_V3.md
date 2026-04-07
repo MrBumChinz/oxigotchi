@@ -82,21 +82,21 @@ The dashboard has 23 live cards:
 
 | Level | Name | Rate | Dwell | Channels | Notes |
 |-------|------|------|-------|----------|-------|
-| 1 | Chill | 1 | 5000ms | 1,6,11 | Battery saver |
-| 2 | Lurk | 1 | 2000ms | 1,6,11 | Faster hopping |
-| 3 | Prowl | 1 | 2000ms | All 13 | Full channel coverage |
-| 4 | Hunt | 2 | 2000ms | All 13 | Double attack rate |
-| 5 | RAGE | 2 | 1000ms | All 13 | Faster hopping at rate 2 |
-| 6 | FURY | 3 | 1000ms | All 13 | Max attack rate |
-| 7 | YOLO | 3 | 500ms | All 13 | Only known crash combo |
+| 1 | Chill | 1 | 2000ms | 1,6,11 | Battery saver |
+| 2 | Lurk | 1 | 2000ms | All 11 | Full channel coverage |
+| 3 | Prowl | 2 | 2000ms | All 11 | Double attack rate |
+| 4 | Hunt | 2 | 1000ms | All 11 | Faster hopping at rate 2 |
+| 5 | RAGE | 3 | 1000ms | All 11 | Triple attack rate |
+| 6 | FURY | 3 | 500ms | All 11 | Max validated combo |
+| 7 | YOLO | 5 | 500ms | All 11 | Beyond tested-stable envelope |
 
-All levels except YOLO are stress-test-validated stable (BCM43436B0, v6 firmware, 2 min each). YOLO crashed AO at 50 seconds — the daemon auto-recovered. An orange disclaimer appears at level 7.
+Levels 1-6 are stress-test-validated stable with BT PAN active on the BCM43436B0 combo chip (v6 firmware). YOLO deliberately exceeds the tested-stable envelope — the daemon auto-recovers if AO crashes. An orange disclaimer appears at level 7.
 
 Touching any individual control (rate buttons, channel toggles, dwell slider, autohunt) breaks out to Custom mode — the RAGE toggle flips off and those controls take over. Flip RAGE back on anytime to snap to the slider's current level. The active level persists across reboots.
 
 **Attack types:** All 6 attack types are on by default. They complement each other — leaving them all enabled gives the best capture rate. You can toggle individual types off if you want to reduce your footprint.
 
-**Attack rate:** Rate 1 is the safe default. Rates 2 and 3 are stable with the v6 firmware patch. Use the RAGE Slider for validated rate/dwell/channel combos, or set rates manually.
+**Attack rate:** Rate 1 is the safe default. Rates 2 and 3 are stable even with BT PAN active. Use the RAGE Slider for validated rate/dwell/channel combos, or set rates manually.
 
 **Mode switch:** Tap RAGE, BT, or SAFE. The switch happens at the next epoch boundary (up to ~30 seconds). The face and indicators will update when the switch completes. Switching to BT attack mode shows a warning that phone tethering will disconnect.
 

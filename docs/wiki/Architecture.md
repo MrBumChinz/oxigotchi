@@ -45,7 +45,7 @@ src/
     mailbox.rs      VideoCore IV mailbox interface (/dev/vcio, GPU memory)
     rf.rs           Per-epoch RF environment statistics
     ringbuf.rs      SPSC ring buffer in GPU memory, FrameEntry extraction
-  rage/mod.rs       Rage level presets (1-3: Chill/Hunt/RAGE)
+  rage/mod.rs       Rage level presets (7 levels: Chill through YOLO)
   radio/mod.rs      Radio lock manager: atomic WiFi<->BT mode transitions
   web/mod.rs        REST API types, embedded HTML dashboard
   migration/mod.rs  Import legacy pwnagotchi config and captures

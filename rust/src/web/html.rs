@@ -1339,13 +1339,13 @@ function toggleAttack(name, val) {
 }
 var _rageNames = {1:'Chill',2:'Lurk',3:'Prowl',4:'Hunt',5:'RAGE',6:'FURY',7:'YOLO'};
 var _ragePresets = {
-    1:{rate:1,dwell:5000,ch:[1,6,11]},
-    2:{rate:1,dwell:2000,ch:[1,6,11]},
-    3:{rate:1,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
-    4:{rate:2,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
-    5:{rate:2,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
-    6:{rate:3,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]},
-    7:{rate:3,dwell:500,ch:[1,2,3,4,5,6,7,8,9,10,11,12,13]}
+    1:{rate:1,dwell:2000,ch:[1,6,11]},
+    2:{rate:1,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11]},
+    3:{rate:2,dwell:2000,ch:[1,2,3,4,5,6,7,8,9,10,11]},
+    4:{rate:2,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11]},
+    5:{rate:3,dwell:1000,ch:[1,2,3,4,5,6,7,8,9,10,11]},
+    6:{rate:3,dwell:500,ch:[1,2,3,4,5,6,7,8,9,10,11]},
+    7:{rate:5,dwell:500,ch:[1,2,3,4,5,6,7,8,9,10,11]}
 };
 
 function updateRageLabel(level, enabled) {

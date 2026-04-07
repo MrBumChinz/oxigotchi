@@ -4450,13 +4450,13 @@ mod tests {
     #[tokio::test]
     async fn test_rage_preset_immediately_updates_rate_channels_dwell() {
         let (router, state) = test_router();
-        // Level 4 = Hunt: rate 2, dwell 2000ms, channels 1-11
+        // Level 4 = Hunt: rate 2, dwell 1000ms, channels 1-11
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":4}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
         assert_eq!(s.attack_rate, 2, "rage preset should set rate immediately");
         assert_eq!(
-            s.wifi_dwell_ms, 2000,
+            s.wifi_dwell_ms, 1000,
             "rage preset should set dwell immediately"
         );
         assert_eq!(
@@ -4473,7 +4473,7 @@ mod tests {
     #[tokio::test]
     async fn test_rage_level6_immediately_updates_rate_to_3() {
         let (router, state) = test_router();
-        // Level 6 = FURY: rate 3, dwell 1000ms
+        // Level 6 = FURY: rate 3, dwell 500ms
         let (status, _) = post_json(&router, "/api/rage", r#"{"level":6}"#).await;
         assert_eq!(status, 200);
         let s = state.lock().unwrap();
@@ -4481,7 +4481,7 @@ mod tests {
             s.attack_rate, 3,
             "FURY preset should set rate 3 immediately"
         );
-        assert_eq!(s.wifi_dwell_ms, 1000);
+        assert_eq!(s.wifi_dwell_ms, 500);
     }
 
     // === Settings panel tests (display invert, rotation, min_rssi, ap_ttl) ===

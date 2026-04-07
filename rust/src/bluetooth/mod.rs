@@ -573,11 +573,12 @@ impl BtTether {
                     }
                     return self.state;
                 }
-                // Interface gone — disconnected
+                // Interface gone — use backoff to avoid hammering the combo chip
+                warn!("BT: PAN interface {iface} disappeared (carrier lost)");
                 self.pan_interface = None;
                 self.ip_address = None;
                 self.internet_available = false;
-                self.state = BtState::Disconnected;
+                self.on_error();
             }
         }
         self.state
@@ -688,7 +689,7 @@ impl BtTether {
     }
 
     /// Check if a bnep interface already exists (e.g. from a previous session).
-    fn find_existing_bnep() -> Option<String> {
+    pub fn find_existing_bnep() -> Option<String> {
         #[cfg(unix)]
         {
             let net_dir = std::path::Path::new("/sys/class/net");

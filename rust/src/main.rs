@@ -449,6 +449,7 @@ impl Daemon {
             // BT tether setup is deferred to the first epoch — hardware may
             // not be ready during early boot (hciattach, UART settle).
 
+
             // Start AngryOxide subprocess
             match self.ao.start() {
                 Ok(()) => info!("AO started: PID {}", self.ao.pid),
@@ -541,11 +542,9 @@ impl Daemon {
             self.ao.try_auto_restart();
         }
 
-        // ---- Scan phase ----
-        self.run_scan_phase(&mut result);
-
         // ---- Bluetooth health (SAFE and RAGE modes) ----
         // Deferred setup: first epoch initializes BT (hardware not ready at boot).
+        // Runs BEFORE scan so BT coexistence rate cap can protect the combo chip.
         if self.mode == OperatingMode::Safe || self.mode == OperatingMode::Rage {
             if self.bluetooth.dbus_ready() {
                 self.bluetooth.check_status();
@@ -564,6 +563,9 @@ impl Daemon {
                 }
             }
         }
+
+        // ---- Scan phase ----
+        self.run_scan_phase(&mut result);
 
         // ---- Network health ----
         self.network.health_check();
@@ -587,7 +589,12 @@ impl Daemon {
                         self.firmware_monitor.hardfault
                     );
                 }
-                _ => {}
+                firmware::FirmwareHealth::Healthy => {}
+                firmware::FirmwareHealth::Unknown => {
+                    if self.firmware_monitor.initialized {
+                        log::warn!("firmware: health monitor lost SDIO RAMRW — was working, now failing");
+                    }
+                }
             }
         }
 
@@ -3905,9 +3912,9 @@ mod tests {
             s.pending_rage_change = Some(Some(4));
         }
         daemon.process_web_commands();
-        // Level 4 = Hunt: rate 2, dwell 2000ms, channels 1-11
+        // Level 4 = Hunt: rate 2, dwell 1000ms, channels 1-11
         assert_eq!(daemon.ao.config.rate, 2);
-        assert_eq!(daemon.wifi.channel_config.dwell_ms, 2000);
+        assert_eq!(daemon.wifi.channel_config.dwell_ms, 1000);
         assert_eq!(
             daemon.wifi.channel_config.channels,
             vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]

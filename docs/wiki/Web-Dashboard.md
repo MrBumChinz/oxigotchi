@@ -24,7 +24,7 @@ The dashboard has 23 live cards organized by user journey:
 | **Phone Tethering** | Scan for phones, pair via D-Bus, disconnect, forget devices, passkey display |
 | **WiFi** | Monitor mode status, current channel, interface state |
 | **Attack Toggles** | Per-attack-type enable/disable (deauth, PMKID, CSA, disassoc, anon reassoc, rogue M2) |
-| **RAGE Slider** | 3-level aggression preset (Chill/Hunt/RAGE) — one slider controls rate, dwell, and channels |
+| **RAGE Slider** | 7-level aggression preset (Chill through YOLO) — one slider controls rate, dwell, and channels |
 | **Smart Skip** | Toggle to skip APs you already have handshakes for |
 | **Recent Captures** | Latest handshakes with timestamps and AP names |
 | **Per-File Downloads** | Download individual .pcapng or .22000 files |
