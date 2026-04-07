@@ -10,7 +10,7 @@ The Pi Zero 2W uses a BCM43436B0 (also identified as BCM43430B0) combo chip shar
 
 - **Single radio**: WiFi and BT cannot operate simultaneously. Mode switching (RAGE/BT/SAFE) swaps the radio between WiFi monitor mode and BT HCI.
 - **Single BT adapter**: The chip provides one BT controller. Attacks requiring two adapters (relay/MITM) are hardware-impossible.
-- **Limited patchram**: The BT firmware has only **1,393 bytes** of contiguous free space at `0x212A77`. Attacks needing large firmware patches (>5KB) cannot fit.
+- **Limited patchram**: The BT firmware has very limited contiguous free RAM. Attacks needing large firmware patches (>5KB) cannot fit.
 
 ## Attack Status
 
@@ -22,15 +22,15 @@ The Pi Zero 2W uses a BCM43436B0 (also identified as BCM43430B0) combo chip shar
 | **BLE Adv Injection** | BLE | Medium+ | Clones target's BT address via vendor Write_BDADDR command, then broadcasts connectable advertisements impersonating the target. Can trick nearby devices into connecting to the oxigotchi instead. |
 | **L2CAP Fuzz** | Classic | Medium+ | Opens L2CAP signaling channel to target, sends 4 malformed packets (oversized echo, invalid info type, reserved PSM, bad MTU). Detects crashes and captures triggering payload. |
 | **ATT/GATT Fuzz** | BLE | Medium+ | Opens ATT fixed channel, sends 5 malformed PDUs (invalid handle ranges, empty writes, oversized offsets). Detects crashes and captures trigger. |
-| **Vendor Cmd Unlock** | Local | Low+ | Reads the LOCAL controller's firmware state — sends READ_LOCAL_VERSION, READ_VERBOSE_CONFIG, and reads patchram base (0x211700). Diagnostics tool, not an attack on external devices. Requires attack patchram loaded. |
-| **KNOB** | Classic | Low+ | Key Negotiation of Bluetooth attack. Patches the BCM43430B0 firmware's key-size validation global at RAM 0x205F7C via BCM vendor Write_RAM (0xFC4C) to force `key_size=1`, then initiates a BR/EDR connection. The target negotiates minimum encryption key entropy via LMP, making the session key trivially crackable. Original global value is always restored after the attack completes. Also scans ROM for the LMP dispatch table as a diagnostic fallback. |
+| **Vendor Cmd Unlock** | Local | Low+ | Reads the LOCAL controller's firmware state via standard HCI and BCM vendor commands. Diagnostics tool, not an attack on external devices. Requires attack patchram loaded. |
+| **KNOB** | Classic | Low+ | Key Negotiation of Bluetooth attack (CVE-2019-9506). Patches the local firmware to force `key_size=1`, then initiates a BR/EDR connection. The target negotiates minimum encryption key entropy via LMP, making the session key trivially crackable. Original firmware state is always restored after the attack completes. |
 
 ### Not Implemented — Hardware Limitations
 
 Two attack types were considered but cannot work on the BCM43436B0 and have been removed from the UI and codebase:
 
 - **SMP MITM**: Man-in-the-middle of BLE pairing requires two BT adapters — one to impersonate each endpoint. The Pi Zero 2W has a single adapter. Would need an external USB BT dongle (CSR8510 or similar).
-- **BLE Conn Hijack**: Hijacking an active BLE connection requires Link Layer hooks in firmware, needing >5KB of patchram space. The BCM43436B0 has only 1,393 bytes of contiguous free space. No path forward on this hardware.
+- **BLE Conn Hijack**: Hijacking an active BLE connection requires Link Layer hooks in firmware, needing more patchram space than is available on this chip. No path forward on this hardware.
 
 ## Rage Levels
 
@@ -76,4 +76,4 @@ The WiFi attack surface is fundamentally larger because the 802.11 standard was 
 ## Future Work
 
 - **Manual targeting**: Wire `pending_bt_target` through to `TargetSelector` so the dashboard "Target" button actually works
-- **KNOB LMP dispatch patch**: The current KNOB approach patches a RAM global. A more targeted approach would patch the LMP dispatch table entry for opcode 0x10 directly — ROM scan infrastructure is in place but the dispatch table hook is not yet implemented
+- **KNOB LMP dispatch patch**: The current KNOB approach patches a firmware global. A more targeted approach would patch the LMP dispatch directly — infrastructure is in place but the hook is not yet implemented
