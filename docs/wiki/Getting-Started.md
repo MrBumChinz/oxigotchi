@@ -119,6 +119,22 @@ The default RAGE level is 1 (Chill) — safe and quiet. Once you're comfortable,
 
 Levels 1-6 are all stable, even with BT phone tethering active.
 
+## PiSugar3 Buttons
+
+The PiSugar 3 has two buttons on the edge and a reset button near the magnets. The **power button** handles power on/off. The **custom button** is mapped to quick-access actions:
+
+| Gesture | Action | Details |
+|---------|--------|---------|
+| **Single tap** | Cycle rage level | Rotates through levels 1-6 (Chill → FURY). Skips level 7 (YOLO) for stability. |
+| **Double tap** | Toggle BT tethering | Connect or disconnect Bluetooth PAN to your phone. |
+| **Long press** | Toggle RAGE ↔ SAFE | Switch between attack mode and safe/upload mode. |
+
+**Power button** (the other edge button):
+- **Long press** — Clean shutdown with e-ink confirmation. Hardware cuts power after 30 seconds as a safety net.
+- **Plugging in USB-C** — Auto-boots the Pi (even from fully off).
+
+All actions are also available from the web dashboard.
+
 ## Next Steps
 
 - **[Web Dashboard](Web-Dashboard)** — Full guide to all 26 dashboard cards
