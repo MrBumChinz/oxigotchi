@@ -177,17 +177,6 @@ sudo cp "$REPO/scripts/fix_ndev_on_boot.sh" "$PI/usr/local/bin/fix_ndev_on_boot.
 sudo cp "$REPO/scripts/bt-keepalive.sh" "$PI/usr/local/bin/bt-keepalive.sh"
 # Buffer cleaner
 sudo cp "$REPO/scripts/buffer-cleaner.sh" "$PI/usr/local/bin/buffer-cleaner.sh"
-# PiSugar watchdog
-sudo cp "$REPO/scripts/pisugar-watchdog.sh" "$PI/usr/local/bin/pisugar-watchdog.sh"
-# Safe shutdown
-sudo cp "$REPO/scripts/safe-shutdown.sh" "$PI/usr/local/bin/safe-shutdown.sh"
-# PiSugar button scripts (toggle mode/BT/restart)
-sudo cp "$REPO/tools/toggle-bt.sh" "$PI/usr/local/bin/toggle-bt.sh"
-sudo cp "$REPO/tools/toggle-mode.sh" "$PI/usr/local/bin/toggle-mode.sh"
-sudo cp "$REPO/tools/toggle-ao-pwn.sh" "$PI/usr/local/bin/toggle-ao-pwn.sh"
-# PiSugar button config
-sudo mkdir -p "$PI/etc/pisugar-server"
-sudo cp "$REPO/config/pisugar-config.json" "$PI/etc/pisugar-server/config.json"
 # wlan_keepalive binary
 sudo cp /tmp/wlan_keepalive "$PI/usr/local/bin/wlan_keepalive"
 
@@ -208,7 +197,7 @@ SVC_DIR="$PI/etc/systemd/system"
 # Copy service files from repo
 for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepalive \
            bootlog usb0-fallback fix-ndev nm-watchdog bt-agent bt-keepalive \
-           buffer-cleaner epd-startup pisugar-watchdog wifi-watchdog; do
+           buffer-cleaner epd-startup wifi-watchdog; do
     if [ -f "$REPO/services/${svc}.service" ]; then
         sudo cp "$REPO/services/${svc}.service" "$SVC_DIR/${svc}.service"
         sudo sed -i 's/\r$//' "$SVC_DIR/${svc}.service"
@@ -218,7 +207,7 @@ for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepal
 done
 
 # Timer units
-for timer in bt-keepalive buffer-cleaner nm-watchdog pisugar-watchdog; do
+for timer in bt-keepalive buffer-cleaner nm-watchdog; do
     if [ -f "$REPO/services/${timer}.timer" ]; then
         sudo cp "$REPO/services/${timer}.timer" "$SVC_DIR/${timer}.timer"
         sudo sed -i 's/\r$//' "$SVC_DIR/${timer}.timer"
@@ -252,12 +241,35 @@ for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepal
 done
 
 # Timers
-for timer in bt-keepalive buffer-cleaner nm-watchdog pisugar-watchdog; do
+for timer in bt-keepalive buffer-cleaner nm-watchdog; do
     if [ -f "$SVC_DIR/${timer}.timer" ]; then
         sudo ln -sf "/etc/systemd/system/${timer}.timer" "$SVC_DIR/timers.target.wants/${timer}.timer"
         echo "  Enabled timer: $timer"
     fi
 done
+
+# Mask pisugar-server — oxigotchi manages PiSugar directly via I2C
+sudo chroot "$PI" systemctl mask pisugar-server 2>/dev/null || true
+sudo chroot "$PI" systemctl mask pisugar-watchdog.timer 2>/dev/null || true
+echo "  Masked pisugar-server and pisugar-watchdog.timer"
+
+# PiSugar 3 runtime detection — disables pisugar-server if PiSugar detected on I2C
+cat > "$PI/usr/local/bin/disable-pisugar-server.sh" << 'PSEOF'
+#!/bin/bash
+# Detect PiSugar 3 on I2C and disable pisugar-server if present.
+if python3 -c "
+import fcntl, os
+bus = os.open('/dev/i2c-1', os.O_RDWR)
+fcntl.ioctl(bus, 0x0703, 0x57)
+os.read(bus, 1)
+os.close(bus)
+" 2>/dev/null; then
+    logger "oxigotchi: PiSugar 3 detected, disabling pisugar-server"
+    systemctl disable --now pisugar-server 2>/dev/null
+    systemctl disable --now pisugar-watchdog.timer 2>/dev/null
+fi
+PSEOF
+sudo chmod +x "$PI/usr/local/bin/disable-pisugar-server.sh"
 
 # ─── 9. Hostname ───
 echo ""
@@ -584,8 +596,7 @@ ls "$PI/etc/systemd/system/timers.target.wants/" 2>/dev/null | sort | sed 's/^/ 
 echo ""
 echo "--- Helper scripts ---"
 for f in wifi-recovery.sh bootlog.sh usb0-fallback.sh fix_ndev_on_boot.sh bt-keepalive.sh \
-         buffer-cleaner.sh pisugar-watchdog.sh safe-shutdown.sh wlan_keepalive \
-         toggle-bt.sh toggle-mode.sh toggle-ao-pwn.sh; do
+         buffer-cleaner.sh wlan_keepalive; do
     verify "$f" "$PI/usr/local/bin/$f"
 done
 
