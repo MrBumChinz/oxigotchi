@@ -12,7 +12,7 @@ Full control from your phone or laptop. Auto-refreshes every 5-30 seconds. Dark 
 
 ## Dashboard Cards
 
-The dashboard has 23 live cards organized by user journey:
+The dashboard has 26 live cards organized by user journey:
 
 | Card | Description |
 |------|-------------|
@@ -37,7 +37,7 @@ The dashboard has 23 live cards organized by user journey:
 | **Plugins** | Installed Lua plugins, enable/disable toggle |
 | **Nearby Networks** | APs currently visible to AngryOxide |
 | **Whitelist** | Managed list of networks to skip during attacks |
-| **Channel Config** | 13 toggleable channel buttons, dwell slider, autohunt mode |
+| **Channel Config** | 11 toggleable channel buttons, dwell slider, autohunt mode |
 | **WPA-SEC** | API key input, upload status, auto-upload toggle |
 | **Discord** | Webhook URL, notification settings |
 | **Live Logs** | Real-time daemon and AO log output |

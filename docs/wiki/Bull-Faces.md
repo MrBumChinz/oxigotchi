@@ -32,6 +32,8 @@ Every mood has its own bull. Here are 28 faces:
 | ![ao_crashed](faces/eink/ao_crashed.png) | **AO Crashed** | AngryOxide process died, restarting |
 | ![battery_low](faces/eink/battery_low.png) | **Battery Low** | Battery below 20% |
 | ![battery_critical](faces/eink/battery_critical.png) | **Battery Critical** | Battery below 15%, shutdown soon |
+| ![raging](faces/eink/raging.png) | **Raging** | Entering BT attack mode or deauth storm detected |
+| ![grazing](faces/eink/grazing.png) | **Grazing** | Calm idle, low activity in SAFE mode |
 | ![debug](faces/eink/debug.png) | **Debug** | Debug mode active |
 | ![shutdown](faces/eink/shutdown.png) | **Shutdown** | Clean power off |
 

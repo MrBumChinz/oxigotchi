@@ -26,10 +26,10 @@ src/
     mod.rs          High-level Screen API (draw_face, draw_name, etc.)
     buffer.rs       1-bit packed framebuffer with embedded-graphics DrawTarget
     driver.rs       SPI e-ink driver for Waveshare 2.13" V4 (aarch64-only)
-  epoch.rs          Epoch state machine: Scan -> Attack -> Capture -> Display -> Sleep
+  epoch.rs          Epoch state machine: Scan -> Attack -> Capture -> Display
   personality/
-    mod.rs          Mood, Face (26 variants), XP/leveling, SystemInfo
-  attacks/mod.rs    Attack scheduler, rate limiter (BCM43436B0 safe at rate 1)
+    mod.rs          Mood, Face (26 variants + 2 display), XP/leveling, SystemInfo
+  attacks/mod.rs    Attack scheduler, rate limiter
   capture/mod.rs    Capture file management, WPA-SEC upload queue, auto-backup
   wifi/mod.rs       WiFi monitor mode, channel hopping, AP tracker, whitelist
   pisugar/mod.rs    PiSugar 3 battery I2C, button debouncer, action mapping
@@ -67,7 +67,7 @@ EpochLoop  Screen  WifiMgr  Attacks  Captures  QpuEngine
 Personality  <── RF mood deltas ──  RfEnvironment
 (personality/)                      (qpu/rf.rs)
      |
-Mood + Face (26 variants)
+Mood + Face (26 variants + 2 display)
 
   Hardware layer (aarch64 only):
     SPI e-ink driver    (display/driver.rs)
@@ -83,13 +83,13 @@ The `Daemon` struct owns all subsystem state. Each epoch cycles through five pha
 
 1. **Scan** — Channel hop, discover APs. AO scans across configured channels (default: 1, 6, 11) with configurable dwell time. New APs are added to the tracker.
 
-2. **Attack** — Rate-limited deauths and other attacks against discovered APs. The attack scheduler respects per-type toggles and the Smart Skip setting. Rate is configurable (1-3) via dashboard or RAGE Slider.
+2. **Attack** — Rate-limited deauths and other attacks against discovered APs. The attack scheduler respects per-type toggles and the Smart Skip setting. Rate is configurable (1-5) via dashboard or RAGE Slider.
 
 3. **Capture** — Check `/tmp/ao_captures/` for new pcapng files. Validate via hcxpcapngtool, convert to .22000, move proven handshakes to SD card. Delete junk from tmpfs.
 
 4. **Display** — Update e-ink with current face, stats, channel. The personality engine selects a face based on mood score (influenced by captures, blind epochs, RF environment).
 
-5. **Sleep** — Watchdog ping, PSM counter reset (every 15 min), wait for next epoch (~30 seconds).
+Epochs chain immediately with no sleep — wall-clock `WallTimer`s gate time-sensitive actions (mood ticks, passive XP, display refresh, BT reconnect) independently of epoch frequency.
 
 ## Self-Healing Stack
 

@@ -23,7 +23,7 @@ The bull is hunting. All WiFi attack types active, monitor mode on wlan0mon. BT 
 The bull goes Bluetooth hunting. WiFi is fully released, the UART is reclaimed for BT, and a custom patchram is loaded to enable attack-capable firmware. The daemon:
 
 1. Stops AngryOxide and releases wlan0mon
-2. Loads the BT patchram via `hciattach` (BCM43430B0 HCD with attack extensions)
+2. Loads the BT patchram (BCM43436B0 HCD with attack extensions)
 3. Runs HCI scanning to discover nearby BT devices
 4. Resolves GATT services on discoverable targets
 5. Identifies vendor/model via BT device class and manufacturer data
