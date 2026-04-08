@@ -8,34 +8,36 @@ Every mood has its own bull. Here are 28 faces:
 
 | Face | Name | What's Happening |
 |---|---|---|
-| ![awake](faces/eink/awake.png) | **Awake** | System booting or starting a new epoch |
-| ![look_r](faces/eink/look_r.png) | **Scanning** | Sweeping channels, looking for targets |
-| ![look_r_happy](faces/eink/look_r_happy.png) | **Scanning (happy)** | Sweeping channels, good capture rate |
-| ![intense](faces/eink/intense.png) | **Intense** | Sending PMKID association frames |
-| ![cool](faces/eink/cool.png) | **Cool** | Sending deauthentication frames |
-| ![happy](faces/eink/happy.png) | **Happy** | Just captured a handshake |
-| ![excited](faces/eink/excited.png) | **Excited** | On a capture streak |
-| ![smart](faces/eink/smart.png) | **Smart** | Found optimal channel or processing logs |
-| ![motivated](faces/eink/motivated.png) | **Motivated** | High capture rate |
-| ![sad](faces/eink/sad.png) | **Sad** | Long dry spell, no captures |
-| ![bored](faces/eink/bored.png) | **Bored** | Nothing happening for a while |
-| ![demotivated](faces/eink/demotivated.png) | **Demotivated** | Low success rate |
-| ![angry](faces/eink/angry.png) | **Angry** | Very long inactivity or many failed attacks |
-| ![lonely](faces/eink/lonely.png) | **Lonely** | No other pwnagotchis nearby |
-| ![grateful](faces/eink/grateful.png) | **Grateful** | Active captures + good peer network |
-| ![friend](faces/eink/friend.png) | **Friend** | Met another pwnagotchi |
-| ![sleep](faces/eink/sleep.png) | **Sleep** | Idle between epochs |
-| ![broken](faces/eink/broken.png) | **Broken** | Crash recovery, forced restart |
-| ![upload](faces/eink/upload.png) | **Upload** | Sending captures to wpa-sec/wigle |
-| ![wifi_down](faces/eink/wifi_down.png) | **WiFi Down** | Monitor interface lost |
-| ![fw_crash](faces/eink/fw_crash.png) | **FW Crash** | WiFi firmware crashed, recovering |
-| ![ao_crashed](faces/eink/ao_crashed.png) | **AO Crashed** | AngryOxide process died, restarting |
-| ![battery_low](faces/eink/battery_low.png) | **Battery Low** | Battery below 20% |
-| ![battery_critical](faces/eink/battery_critical.png) | **Battery Critical** | Battery below 15%, shutdown soon |
-| ![raging](faces/eink/raging.png) | **Raging** | Entering BT attack mode or deauth storm detected |
-| ![grazing](faces/eink/grazing.png) | **Grazing** | Calm idle, low activity in SAFE mode |
-| ![debug](faces/eink/debug.png) | **Debug** | Debug mode active |
-| ![shutdown](faces/eink/shutdown.png) | **Shutdown** | Clean power off |
+| ![awake](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/awake.png) | **Awake** | System booting or starting a new epoch |
+| ![look_r](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r.png) | **Scanning** | Sweeping channels, looking for targets |
+| ![look_r_happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r_happy.png) | **Scanning (happy)** | Sweeping channels, good capture rate |
+| ![look_l](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_l.png) | **Scanning (left)** | Sweeping channels, alternate direction |
+| ![look_l_happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_l_happy.png) | **Scanning (left, happy)** | Sweeping channels left, good capture rate |
+| ![intense](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/intense.png) | **Intense** | Sending PMKID association frames |
+| ![cool](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/cool.png) | **Cool** | Sending deauthentication frames |
+| ![happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/happy.png) | **Happy** | Just captured a handshake |
+| ![excited](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/excited.png) | **Excited** | On a capture streak |
+| ![smart](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/smart.png) | **Smart** | Found optimal channel or processing logs |
+| ![motivated](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/motivated.png) | **Motivated** | High capture rate |
+| ![sad](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/sad.png) | **Sad** | Long dry spell, no captures |
+| ![bored](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/bored.png) | **Bored** | Nothing happening for a while |
+| ![demotivated](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/demotivated.png) | **Demotivated** | Low success rate |
+| ![angry](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/angry.png) | **Angry** | Very long inactivity or many failed attacks |
+| ![lonely](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/lonely.png) | **Lonely** | No other pwnagotchis nearby |
+| ![grateful](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/grateful.png) | **Grateful** | Active captures + good peer network |
+| ![friend](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/friend.png) | **Friend** | Met another pwnagotchi |
+| ![sleep](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/sleep.png) | **Sleep** | Idle between epochs |
+| ![broken](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/broken.png) | **Broken** | Crash recovery, forced restart |
+| ![upload](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/upload.png) | **Upload** | Sending captures to wpa-sec/wigle |
+| ![wifi_down](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/wifi_down.png) | **WiFi Down** | Monitor interface lost |
+| ![fw_crash](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/fw_crash.png) | **FW Crash** | WiFi firmware crashed, recovering |
+| ![ao_crashed](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/ao_crashed.png) | **AO Crashed** | AngryOxide process died, restarting |
+| ![battery_low](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_low.png) | **Battery Low** | Battery below 20% |
+| ![battery_critical](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_critical.png) | **Battery Critical** | Battery below 15%, shutdown soon |
+| `(>_<)>` | **Raging** | Entering BT attack mode or deauth storm detected |
+| `(~u~)` | **Grazing** | Calm idle, low activity in SAFE mode |
+| ![debug](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/debug.png) | **Debug** | Debug mode active |
+| ![shutdown](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/shutdown.png) | **Shutdown** | Clean power off |
 
 ## Face Selection Logic
 
