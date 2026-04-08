@@ -18,7 +18,7 @@
 
 ## Deep Dives
 
-- **[Architecture & Self-Healing](Architecture)** — Daemon design, epoch loop, crash recovery, module overview
+- **[Architecture & Self-Healing](Architecture)** — Daemon design, main loop, crash recovery, module overview
 - **[Bluetooth Pentest Mode](Bluetooth)** — BT attacks, UART multiplexing, phone tethering
 - **[Capture Pipeline](Capture-Pipeline)** — tmpfs-based capture flow, hashcat conversion, SD card protection
 - **[WiFi Firmware Patches](WiFi-Firmware)** — The 8-layer BCM43436B0 firmware patch that eliminated WiFi crashes

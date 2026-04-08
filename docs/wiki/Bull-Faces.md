@@ -8,7 +8,7 @@ Every mood has its own bull. Here are 28 faces:
 
 | Face | Name | What's Happening |
 |---|---|---|
-| ![awake](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/awake.png) | **Awake** | System booting or starting a new epoch |
+| ![awake](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/awake.png) | **Awake** | System booting or starting a new loop cycle |
 | ![look_r](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r.png) | **Scanning** | Sweeping channels, looking for targets |
 | ![look_r_happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r_happy.png) | **Scanning (happy)** | Sweeping channels, good capture rate |
 | ![look_l](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_l.png) | **Scanning (left)** | Sweeping channels, alternate direction |
@@ -26,7 +26,7 @@ Every mood has its own bull. Here are 28 faces:
 | ![lonely](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/lonely.png) | **Lonely** | No other pwnagotchis nearby |
 | ![grateful](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/grateful.png) | **Grateful** | Active captures + good peer network |
 | ![friend](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/friend.png) | **Friend** | Met another pwnagotchi |
-| ![sleep](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/sleep.png) | **Sleep** | Idle between epochs |
+| ![sleep](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/sleep.png) | **Sleep** | Idle, nothing to do |
 | ![broken](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/broken.png) | **Broken** | Crash recovery, forced restart |
 | ![upload](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/upload.png) | **Upload** | Sending captures to wpa-sec/wigle |
 | ![wifi_down](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/wifi_down.png) | **WiFi Down** | Monitor interface lost |
@@ -43,12 +43,12 @@ Every mood has its own bull. Here are 28 faces:
 
 The personality engine picks faces based on a combination of factors:
 
-1. **Mood score** — A running score adjusted each epoch based on results:
+1. **Mood score** — A running score adjusted each loop cycle based on results:
    - Handshakes captured: big mood boost (+20)
    - Associations seen: moderate boost (+5)
    - Deauths sent: small boost (+2)
-   - Blind epoch (no activity): mood decay (-3)
-   - Consecutive blind epochs: increasing penalty
+   - Blind cycle (no activity): mood decay (-3)
+   - Consecutive blind cycles: increasing penalty
 
 2. **XP events** — Level-ups trigger the Excited face regardless of mood
 
@@ -81,4 +81,4 @@ The RF classification pipeline feeds real-time spectrum data into the personalit
 | **Rich BSSIDs** (many unique APs) | Curiosity boost — diverse environment | Smart, Scanning (happy) |
 | **Dense data traffic** | Moderate boost — active network | Cool, Motivated |
 
-The RF mood deltas are additive with the existing epoch-based mood system. A bull that captured a handshake in a busy RF environment gets a double mood boost — one from the capture, one from the spectrum richness.
+The RF mood deltas are additive with the existing mood system. A bull that captured a handshake in a busy RF environment gets a double mood boost — one from the capture, one from the spectrum richness.

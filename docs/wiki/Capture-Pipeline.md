@@ -11,7 +11,7 @@ AO (angryoxide)
  │  writes to /tmp/ao_captures/ (tmpfs, 150MB RAM)
  │  files: capture-TIMESTAMP.pcapng + capture.kismet
  ▼
-Daemon (every 30s epoch)
+Daemon (every loop cycle)
  │  1. Scans /tmp/ao_captures/ for new .pcapng files
  │  2. Converts to .22000 (hashcat-ready) via hcxpcapngtool
  │  3. Moves validated captures to /home/pi/captures/ (SD card)
@@ -25,7 +25,7 @@ SD card: /home/pi/captures/
 ## Key Details
 
 - `/tmp` is a 150MB tmpfs (RAM). AO's `.kismet` tracking file can grow to 20-60MB during long sessions, plus pcapng files at ~1-5MB each. The 150MB limit gives comfortable headroom.
-- Only the last 30 seconds of captures are at risk on a sudden reboot — everything processed in a prior epoch is safe on SD.
+- Only the last 30 seconds of captures are at risk on a sudden reboot — everything processed in a prior cycle is safe on SD.
 - The `.22000` companion file is hashcat-ready. Every capture on SD has one.
 - The dashboard's "Captures" card shows file count, handshake count, pending uploads, and total size. Individual files can be downloaded from the dashboard.
 

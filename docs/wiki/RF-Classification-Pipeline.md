@@ -22,7 +22,7 @@ QPU Engine (drains channel into GPU-mapped SPSC ring buffer)
  │  Deauth, AssocReq, AssocResp, Data, Control, Unknown
  │  256 frames in ~1ms
  ▼
-RF Environment (per-epoch statistics)
+RF Environment (per-cycle statistics)
  │  beacon_rate, probe_rate, deauth_rate, data_rate (frames/sec)
  │  unique_bssids, total_frames, dominant_class
  │  ao_target_ratio (fraction of frames from AO target set)

@@ -77,9 +77,9 @@ Mood + Face (26 variants + 2 display)
     libpcap/wlan0mon   (qpu/capture.rs)
 ```
 
-## Epoch Loop
+## Main Loop
 
-The `Daemon` struct owns all subsystem state. Each epoch cycles through five phases:
+The `Daemon` struct owns all subsystem state. Each iteration cycles through four phases:
 
 1. **Scan** — Channel hop, discover APs. AO scans across configured channels (default: 1, 6, 11) with configurable dwell time. New APs are added to the tracker.
 
@@ -87,9 +87,9 @@ The `Daemon` struct owns all subsystem state. Each epoch cycles through five pha
 
 3. **Capture** — Check `/tmp/ao_captures/` for new pcapng files. Validate via hcxpcapngtool, convert to .22000, move proven handshakes to SD card. Delete junk from tmpfs.
 
-4. **Display** — Update e-ink with current face, stats, channel. The personality engine selects a face based on mood score (influenced by captures, blind epochs, RF environment).
+4. **Display** — Update e-ink with current face, stats, channel. The personality engine selects a face based on mood score (influenced by captures, dry spells, RF environment).
 
-Epochs chain immediately with no sleep — wall-clock `WallTimer`s gate time-sensitive actions (mood ticks, passive XP, display refresh, BT reconnect) independently of epoch frequency.
+Iterations chain immediately with no sleep — wall-clock `WallTimer`s gate time-sensitive actions (mood ticks, passive XP, display refresh, BT reconnect) independently of loop frequency.
 
 ## Self-Healing Stack
 
@@ -117,7 +117,7 @@ First boot after flashing takes a few seconds extra (migration from pwnagotchi c
 
 ## State Persistence
 
-The daemon saves state to `/var/lib/oxigotchi/state.json` on every epoch:
+The daemon saves state to `/var/lib/oxigotchi/state.json` on every iteration:
 
 - Attack type toggles (which attacks are enabled/disabled)
 - Whitelist entries

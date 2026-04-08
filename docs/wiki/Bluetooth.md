@@ -12,7 +12,7 @@ The Pi Zero 2W's BCM43436B0 chip uses **two independent buses** — SDIO for WiF
 - **BT** — Bluetooth offensive: HCI scanning, GATT resolution, BT attacks. WiFi off, phone tether disconnected.
 - **SAFE** (default) — WiFi managed mode, BT tethered to phone for internet, no attacks.
 
-Switch via the **PiSugar3 button** (single tap) or the **web dashboard** mode buttons. Transitions happen at the next epoch boundary (~30 seconds) and are managed atomically by `RadioManager` — the lock file prevents partial states.
+Switch via the **PiSugar3 button** (single tap) or the **web dashboard** mode buttons. Transitions are managed atomically by `RadioManager` — the lock file prevents partial states.
 
 ### RAGE Mode
 
@@ -82,7 +82,7 @@ The `RadioManager` uses a lock file to prevent concurrent mode transitions and e
 BT tethering uses D-Bus BlueZ directly (`Network1.Connect("nap")`) and stays connected in RAGE and SAFE modes:
 
 1. At boot, powers on Bluetooth and connects to paired phone via D-Bus PAN **before** starting WiFi monitor mode
-2. Each epoch, checks BT connection health and auto-reconnects with exponential backoff (30s → 60s → 120s → 300s cap)
+2. Periodically checks BT connection health and auto-reconnects with exponential backoff (30s → 60s → 120s → 300s cap)
 3. Only BT attack mode disconnects phone tethering (web dashboard shows a warning)
 4. When returning from BT attack mode, tether auto-reconnects
 5. iOS/Android MAC randomization is handled transparently via BlueZ bonding (IRK exchange)

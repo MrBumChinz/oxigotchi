@@ -10,7 +10,7 @@
 No. The firmware patches are for the BCM43436B0 chip in the Pi Zero 2W only. Other Pi models have different chips. No workaround exists.
 
 **Can I write plugins?**
-Yes. Oxigotchi v3 uses Lua 5.4 plugins. Place `.lua` files in `/etc/oxigotchi/plugins/`. Plugins can register indicators on the e-ink display and react to epoch, handshake, crash, and BT events. See [docs/RUSTY_V3.md](https://github.com/CoderFX/oxigotchi/blob/main/docs/RUSTY_V3.md) for the full plugin API.
+Yes. Oxigotchi v3 uses Lua 5.4 plugins. Place `.lua` files in `/etc/oxigotchi/plugins/`. Plugins can register indicators on the e-ink display and react to loop, handshake, crash, and BT events. See [docs/RUSTY_V3.md](https://github.com/CoderFX/oxigotchi/blob/main/docs/RUSTY_V3.md) for the full plugin API.
 
 **Is `sudo apt update && sudo apt upgrade -y` safe?**
 Yes. The dangerous packages are held and won't upgrade. See the "Safe apt Upgrades" section below.
@@ -31,7 +31,7 @@ Get a free API key from [wpa-sec.stanev.org](https://wpa-sec.stanev.org), paste 
 Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use different drivers). Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i spi`
 
 **How does XP and leveling work?**
-Your bull earns XP passively (+1 per epoch, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
+Your bull earns XP passively (+1 per loop cycle, +1 per AP seen) and actively (+100 per handshake, +15 per association, +10 per deauth, +5 per new AP). The level formula is exponential: `XP needed = level^1.3 * 5`. Early levels fly by (Lv 1 needs 5 XP, Lv 10 needs 99 XP), but high levels are a serious grind (Lv 100 needs 1,990 XP, Lv 500 needs 16,129 XP, Lv 999 needs 39,664 XP per level). Max level is **999** — reaching it takes roughly **1 year** of daily use. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
 
 **Can I change the attack rate?**
 The dashboard has a **RAGE Slider** with 7 levels (Chill through YOLO). Each level changes exactly one variable from the previous. Levels 1-6 are stress-test-validated stable, even with BT PAN active. Level 7 (YOLO) deliberately pushes past the tested-stable envelope — the daemon auto-recovers if AO crashes. In BT mode, an equivalent **BT aggression level** (BT:1/BT:2/BT:3) controls scanning and attack intensity.
