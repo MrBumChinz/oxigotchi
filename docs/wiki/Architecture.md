@@ -12,7 +12,7 @@ The daemon operates in three modes:
 
 - **RAGE** — WiFi monitor mode, AngryOxide attacking, BT tether stays connected. The wardriving mode.
 - **BT** — Bluetooth offensive: HCI scanning, GATT resolution, BT attacks (ATT fuzz, KNOB, L2CAP fuzz/flood, SMP). WiFi off, phone tether disconnected.
-- **SAFE** (default) — WiFi managed mode, BT tethered to phone for internet, no attacks. Used for uploads and maintenance.
+- **SAFE** — WiFi managed mode, BT tethered to phone for internet, no attacks. Used for uploads and maintenance.
 
 Toggle between them with the **PiSugar3 button** (single tap) or the **web dashboard**. Mode transitions are atomic via `RadioManager`, which coordinates WiFi/BT hardware teardown and bringup including patchram loading for BT attack mode.
 
@@ -28,7 +28,7 @@ src/
     driver.rs       SPI e-ink driver for Waveshare 2.13" V4 (aarch64-only)
   epoch.rs          Epoch state machine: Scan -> Attack -> Capture -> Display
   personality/
-    mod.rs          Mood, Face (26 variants + 2 display), XP/leveling, SystemInfo
+    mod.rs          Mood, Face (26 variants), XP/leveling, SystemInfo
   attacks/mod.rs    Attack scheduler, rate limiter
   capture/mod.rs    Capture file management, WPA-SEC upload queue, auto-backup
   wifi/mod.rs       WiFi monitor mode, channel hopping, AP tracker, whitelist
@@ -67,7 +67,7 @@ EpochLoop  Screen  WifiMgr  Attacks  Captures  QpuEngine
 Personality  <── RF mood deltas ──  RfEnvironment
 (personality/)                      (qpu/rf.rs)
      |
-Mood + Face (26 variants + 2 display)
+Mood + Face (26 variants)
 
   Hardware layer (aarch64 only):
     SPI e-ink driver    (display/driver.rs)
@@ -126,6 +126,5 @@ The daemon saves state to `/var/lib/oxigotchi/state.json` on every iteration:
 - Channel configuration and autohunt state
 - RAGE Slider level
 - Smart Skip toggle
-- XP and level
 
-All settings survive reboots. The state file is small (~2KB) and written atomically (write to temp file, rename).
+XP and level are saved separately to `/home/pi/exp_stats.json`. All settings survive reboots.

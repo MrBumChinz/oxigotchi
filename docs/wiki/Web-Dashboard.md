@@ -8,7 +8,7 @@
 http://10.0.0.2:8080
 ```
 
-Full control from your phone or laptop. Auto-refreshes every 5-30 seconds. Dark theme, mobile-friendly, built with Tailwind CSS and served by the Rust daemon via axum.
+Full control from your phone or laptop. Auto-refreshes every 5-60 seconds depending on data volatility. Dark theme, mobile-friendly, served directly by the Rust daemon via axum.
 
 ## Dashboard Cards
 
@@ -44,12 +44,10 @@ The dashboard has 26 live cards organized by user journey:
 
 ## Features
 
-- **Auto-refresh** — Cards update every 5-30 seconds depending on data volatility
+- **Auto-refresh** — Cards update every 5-60 seconds depending on data volatility
 - **Dark theme** — Easy on the eyes, designed for field use
 - **Mobile-friendly** — Responsive layout works on phone screens
-- **Tailwind CSS** — Clean, consistent styling
 - **Embedded** — HTML/CSS/JS served directly from the Rust binary, no external dependencies
-- **Authentication** — Basic auth (default: `changeme`/`changeme`)
 
 ## API Endpoints
 

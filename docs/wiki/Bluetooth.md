@@ -10,7 +10,7 @@ The Pi Zero 2W's BCM43436B0 chip uses **two independent buses** — SDIO for WiF
 
 - **RAGE** — WiFi monitor mode, AngryOxide attacking, BT tether stays connected. The wardriving mode.
 - **BT** — Bluetooth offensive: HCI scanning, GATT resolution, BT attacks. WiFi off, phone tether disconnected.
-- **SAFE** (default) — WiFi managed mode, BT tethered to phone for internet, no attacks.
+- **SAFE** — WiFi managed mode, BT tethered to phone for internet, no attacks.
 
 Switch via the **PiSugar3 button** (single tap) or the **web dashboard** mode buttons. Transitions are managed atomically by `RadioManager` — the lock file prevents partial states.
 

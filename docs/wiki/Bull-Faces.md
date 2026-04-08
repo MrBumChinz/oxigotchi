@@ -4,15 +4,11 @@
 
 ---
 
-Every mood has its own bull. Here are 28 faces:
+The bull has 26 faces. The personality engine selects one based on mood, system state, and RF environment.
 
 | Face | Name | What's Happening |
 |---|---|---|
 | ![awake](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/awake.png) | **Awake** | System booting or starting a new loop cycle |
-| ![look_r](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r.png) | **Scanning** | Sweeping channels, looking for targets |
-| ![look_r_happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_r_happy.png) | **Scanning (happy)** | Sweeping channels, good capture rate |
-| ![look_l](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_l.png) | **Scanning (left)** | Sweeping channels, alternate direction |
-| ![look_l_happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/look_l_happy.png) | **Scanning (left, happy)** | Sweeping channels left, good capture rate |
 | ![intense](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/intense.png) | **Intense** | Sending PMKID association frames |
 | ![cool](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/cool.png) | **Cool** | Sending deauthentication frames |
 | ![happy](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/happy.png) | **Happy** | Just captured a handshake |
@@ -32,8 +28,8 @@ Every mood has its own bull. Here are 28 faces:
 | ![wifi_down](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/wifi_down.png) | **WiFi Down** | Monitor interface lost |
 | ![fw_crash](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/fw_crash.png) | **FW Crash** | WiFi firmware crashed, recovering |
 | ![ao_crashed](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/ao_crashed.png) | **AO Crashed** | AngryOxide process died, restarting |
-| ![battery_low](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_low.png) | **Battery Low** | Battery below 20% |
-| ![battery_critical](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_critical.png) | **Battery Critical** | Battery below 15%, shutdown soon |
+| ![battery_low](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_low.png) | **Battery Low** | Battery ≤ 20% |
+| ![battery_critical](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_critical.png) | **Battery Critical** | Battery ≤ 5%, shutdown imminent |
 | ![raging](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/raging.png) | **Raging** | Entering BT attack mode or deauth storm detected |
 | ![grazing](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/grazing.png) | **Grazing** | Calm idle, low activity in SAFE mode |
 | ![debug](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/debug.png) | **Debug** | Debug mode active |
@@ -43,20 +39,19 @@ Every mood has its own bull. Here are 28 faces:
 
 The personality engine picks faces based on a combination of factors:
 
-1. **Mood score** — A running score adjusted each loop cycle based on results:
-   - Handshakes captured: big mood boost (+20)
-   - Associations seen: moderate boost (+5)
-   - Deauths sent: small boost (+2)
-   - Blind cycle (no activity): mood decay (-3)
-   - Consecutive blind cycles: increasing penalty
+1. **Mood score** — A 0-100% score that shifts based on events:
+   - Handshake captured: +5% mood boost
+   - New AP discovered: +0.5% per AP (capped at 10 APs per cycle)
+   - AO or firmware crash: -3% mood penalty
+   - Idle time: gradual random-walk decay via 30-second mood ticks
 
-2. **XP events** — Level-ups trigger the Excited face regardless of mood
+2. **XP events** — Level-ups give a +8% mood boost (but don't force a specific face)
 
 3. **System state overrides** — These always take priority over mood:
    - WiFi firmware crash → FW Crash face
    - AO process crash → AO Crashed face
-   - Battery < 20% → Battery Low face
-   - Battery < 15% → Battery Critical face
+   - Battery ≤ 20% → Battery Low face
+   - Battery ≤ 5% → Battery Critical face
    - WiFi interface lost → WiFi Down face
    - Shutdown command → Shutdown face
    - Uploading captures → Upload face
@@ -65,7 +60,7 @@ The personality engine picks faces based on a combination of factors:
 4. **Mood-to-face mapping** — When no override is active, the mood score maps to a face:
    - Very high mood (streak) → Excited
    - High mood → Happy, Motivated
-   - Neutral → Scanning, Awake, Cool
+   - Neutral → Awake, Cool
    - Low mood → Sad, Bored
    - Very low mood → Demotivated, Angry, Lonely
 
@@ -78,7 +73,7 @@ The RF classification pipeline feeds real-time spectrum data into the personalit
 | **Busy spectrum** (many beacons, high frame rate) | Mood boost — lots of targets to hunt | Excited, Motivated |
 | **Deauth storm** (high deauth_rate) | Mood spike — aggressive environment | Angry, Intense |
 | **Silence** (near-zero frame rate) | Mood drain — nothing on the air | Lonely, Bored |
-| **Rich BSSIDs** (many unique APs) | Curiosity boost — diverse environment | Smart, Scanning (happy) |
+| **Rich BSSIDs** (many unique APs) | Curiosity boost — diverse environment | Smart |
 | **Dense data traffic** | Moderate boost — active network | Cool, Motivated |
 
-The RF mood deltas are additive with the existing mood system. A bull that captured a handshake in a busy RF environment gets a double mood boost — one from the capture, one from the spectrum richness.
+The RF mood deltas are additive with the base mood system. A bull that captured a handshake in a busy RF environment gets a double mood boost — one from the capture, one from the spectrum richness.

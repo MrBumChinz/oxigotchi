@@ -49,8 +49,6 @@ In your browser, go to:
 http://10.0.0.2:8080
 ```
 
-Default credentials: `changeme` / `changeme`
-
 You'll see the full dashboard with your bull's face, live stats, attack controls, and capture history. Everything auto-refreshes.
 
 ## 5. Configure Your Whitelist
@@ -111,7 +109,7 @@ The default RAGE level is 1 (Chill) — safe and quiet. Once you're comfortable,
 
 | Level | Name | What Changes |
 |-------|------|-------------|
-| 1 | Chill | Rate 1, 3 channels — passive |
+| 1 | Chill | Rate 1, 3 channels — minimal |
 | 2 | Lurk | Full 11 channels |
 | 3 | Prowl | Rate 2 — more deauths |
 | 4 | Hunt | Faster channel hopping |
