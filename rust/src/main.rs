@@ -317,8 +317,9 @@ impl Daemon {
 
         // Probe PiSugar battery
         if self.battery.probe() {
-            let status = self.battery.read_status();
-            info!("PiSugar detected: {}%", status.level);
+            self.battery.configure_registers();
+            let level = self.battery.read_status().level;
+            info!("PiSugar detected: {}%, board temp {}°C", level, self.battery.temperature_c);
         } else {
             info!("PiSugar not detected");
         }
@@ -500,6 +501,16 @@ impl Daemon {
 
         // ---- Web commands ----
         self.process_web_commands();
+
+        // ---- PiSugar button events ----
+        self.process_button();
+
+        // ---- PiSugar soft shutdown (power button) ----
+        if self.battery.check_soft_shutdown() {
+            self.show_transition(personality::Face::Shutdown, "Shutting down...");
+            self.battery.pisugar_shutdown();
+            return; // stop processing this epoch
+        }
 
         // ---- Bluetooth D-Bus message processing (all modes — Agent1 pairing events) ----
         self.bluetooth.process_dbus();
@@ -1339,6 +1350,62 @@ impl Daemon {
         }
     }
 
+    /// Process PiSugar custom button tap events.
+    fn process_button(&mut self) {
+        let Some(action) = self.battery.read_tap_event() else {
+            return;
+        };
+
+        match pisugar::map_button_action(action) {
+            pisugar::MappedAction::CycleRageLevel => {
+                // Cycle 1-6 only — level 7 (YOLO) crashes BCM43436B0 firmware
+                let current = {
+                    let s = self.shared_state.lock().unwrap();
+                    if s.rage_enabled { s.rage_level } else { 0 }
+                };
+                let next = if current >= 6 || current == 0 { 1 } else { current + 1 };
+                if let Some(p) = crate::rage::preset(next) {
+                    info!(
+                        "button: rage level {} ({}) — rate={} dwell={}ms",
+                        p.level, p.name, p.rate, p.dwell_ms
+                    );
+                    self.ao.set_rate(p.rate);
+                    self.wifi.channel_config.channels = p.channels.to_vec();
+                    self.wifi.channel_config.dwell_ms = p.dwell_ms;
+                    self.wifi.channel_config.current_index = 0;
+                    self.autohunt = false;
+                    self.ao.config.channels = p.channels.to_vec();
+                    self.ao.config.dwell = (p.dwell_ms / 1000).max(1) as u32;
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.rage_enabled = true;
+                    s.rage_level = next;
+                    s.autohunt_enabled = false;
+                    s.wifi_channels = p.channels.to_vec();
+                    s.wifi_dwell_ms = p.dwell_ms;
+                }
+                if let Err(e) = self.ao.restart() {
+                    log::error!("button: AO restart failed after rage change: {e}");
+                }
+            }
+            pisugar::MappedAction::ToggleBtTether => {
+                info!("button: toggling BT tethering");
+                self.bluetooth.toggle();
+            }
+            pisugar::MappedAction::ToggleRageSafe => {
+                match self.mode {
+                    OperatingMode::Rage => {
+                        info!("button: RAGE → SAFE");
+                        self.enter_safe_mode();
+                    }
+                    _ => {
+                        info!("button: {} → RAGE", self.mode.as_str());
+                        self.enter_rage_mode();
+                    }
+                }
+            }
+        }
+    }
+
     /// Process commands queued by the web server.
     fn process_web_commands(&mut self) {
         let mut any_command = false;
@@ -1445,12 +1512,8 @@ impl Daemon {
         if shutdown {
             any_command = true;
             info!("web: system shutdown requested");
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("sudo")
-                    .args(["shutdown", "-h", "now"])
-                    .spawn();
-            }
+            self.show_transition(personality::Face::Shutdown, "Shutting down...");
+            self.battery.pisugar_shutdown();
         }
 
         if let Some(visible) = bt_toggle {
@@ -3045,13 +3108,10 @@ impl Daemon {
             }
         }
 
-        if self.battery.should_shutdown() {
-            info!("battery critical, shutting down");
-            self.epoch_loop
-                .personality
-                .set_override(personality::Face::Shutdown);
-            self.update_display();
-            // Real implementation would call `shutdown -h now`
+        if self.battery.should_shutdown() && !self.battery.shutting_down {
+            info!("battery critical, initiating shutdown");
+            self.show_transition(personality::Face::Shutdown, "Battery critical!");
+            self.battery.pisugar_shutdown();
         }
     }
 
@@ -3540,11 +3600,13 @@ mod tests {
         daemon.battery.available = true;
         daemon.battery.set_level(3); // critical, auto_shutdown = true by default
         daemon.check_battery_overrides();
-        // Auto-shutdown overrides to Shutdown face
+        // Face override stays BatteryCritical (show_transition draws Shutdown to screen directly)
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
-            Some(personality::Face::Shutdown)
+            Some(personality::Face::BatteryCritical)
         );
+        // pisugar_shutdown() was called, setting shutting_down flag
+        assert!(daemon.battery.shutting_down);
     }
 
     #[test]
