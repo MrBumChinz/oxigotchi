@@ -16,7 +16,7 @@ Yes. Oxigotchi v3 uses Lua 5.4 plugins. Place `.lua` files in `/etc/oxigotchi/pl
 Yes. The dangerous packages are held and won't upgrade. See the "Safe apt Upgrades" section below.
 
 **Can I switch back to stock pwnagotchi?**
-The legacy pwnagotchi and bettercap services are disabled on first boot. You can re-enable them with `systemctl enable pwnagotchi bettercap`, but the Rust daemon is designed to fully replace them. To fully remove the firmware patch: `sudo pwnoxide-mode rollback-fw`.
+The legacy pwnagotchi and bettercap services are masked (not just disabled) in the release image — they cannot be re-enabled with `systemctl enable`. The Rust daemon fully replaces both. If you want stock pwnagotchi back, reflash a stock image.
 
 **Is this legal?**
 These are WiFi security auditing tools for testing your own networks or networks you have explicit permission to test. Use responsibly.
