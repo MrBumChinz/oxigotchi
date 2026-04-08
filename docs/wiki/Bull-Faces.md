@@ -34,8 +34,8 @@ Every mood has its own bull. Here are 28 faces:
 | ![ao_crashed](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/ao_crashed.png) | **AO Crashed** | AngryOxide process died, restarting |
 | ![battery_low](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_low.png) | **Battery Low** | Battery below 20% |
 | ![battery_critical](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/battery_critical.png) | **Battery Critical** | Battery below 15%, shutdown soon |
-| `(>_<)>` | **Raging** | Entering BT attack mode or deauth storm detected |
-| `(~u~)` | **Grazing** | Calm idle, low activity in SAFE mode |
+| ![raging](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/raging.png) | **Raging** | Entering BT attack mode or deauth storm detected |
+| ![grazing](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/grazing.png) | **Grazing** | Calm idle, low activity in SAFE mode |
 | ![debug](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/debug.png) | **Debug** | Debug mode active |
 | ![shutdown](https://raw.githubusercontent.com/CoderFX/oxigotchi/master/faces/eink/shutdown.png) | **Shutdown** | Clean power off |
 
