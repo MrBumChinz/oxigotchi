@@ -3,8 +3,6 @@
 //! Reads battery level, charging status, and handles button presses.
 //! On non-Pi platforms, provides a mock implementation.
 
-use std::time::Instant;
-
 // ---------------------------------------------------------------------------
 // I2C register constants for PiSugar 3
 // ---------------------------------------------------------------------------
@@ -100,21 +98,6 @@ pub fn parse_tap_event(value: u8) -> Option<ButtonAction> {
     }
 }
 
-/// Parse button event flags from register 0x04.
-/// Returns the highest-priority event (long > double > single).
-/// Deprecated: register 0x04 is actually temperature; use parse_tap_event with REG_TAP (0x08).
-pub fn parse_button_event(flags: u8) -> Option<ButtonAction> {
-    if flags & 0x04 != 0 {
-        Some(ButtonAction::LongPress)
-    } else if flags & 0x02 != 0 {
-        Some(ButtonAction::DoubleTap)
-    } else if flags & 0x01 != 0 {
-        Some(ButtonAction::SingleTap)
-    } else {
-        None
-    }
-}
-
 /// Battery charging state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChargeState {
@@ -189,83 +172,6 @@ impl Default for PiSugarConfig {
             auto_shutdown: true,
             auto_shutdown_level: 5,
         }
-    }
-}
-
-/// Button debouncer to distinguish tap types.
-#[derive(Debug)]
-pub struct ButtonDebouncer {
-    /// Last button press time.
-    last_press: Option<Instant>,
-    /// Number of presses in the current gesture.
-    press_count: u32,
-    /// Debounce window in milliseconds.
-    debounce_ms: u64,
-    /// Long press threshold in milliseconds.
-    long_press_ms: u64,
-}
-
-impl ButtonDebouncer {
-    /// Create a new button debouncer with default timing thresholds.
-    pub fn new() -> Self {
-        Self {
-            last_press: None,
-            press_count: 0,
-            debounce_ms: 300,
-            long_press_ms: 1000,
-        }
-    }
-
-    /// Record a button press. Returns the detected action if the gesture is complete.
-    pub fn on_press(&mut self) -> Option<ButtonAction> {
-        let now = Instant::now();
-
-        if let Some(last) = self.last_press {
-            let elapsed_ms = now.duration_since(last).as_millis() as u64;
-
-            if elapsed_ms >= self.long_press_ms {
-                // Long press
-                self.press_count = 0;
-                self.last_press = Some(now);
-                return Some(ButtonAction::LongPress);
-            }
-
-            if elapsed_ms <= self.debounce_ms {
-                self.press_count += 1;
-                self.last_press = Some(now);
-                if self.press_count >= 2 {
-                    self.press_count = 0;
-                    return Some(ButtonAction::DoubleTap);
-                }
-                return None;
-            }
-        }
-
-        // First press or new gesture
-        self.press_count = 1;
-        self.last_press = Some(now);
-        None
-    }
-
-    /// Check if a gesture has timed out (single tap resolved).
-    pub fn check_timeout(&mut self) -> Option<ButtonAction> {
-        if let Some(last) = self.last_press
-            && self.press_count == 1
-        {
-            let elapsed_ms = last.elapsed().as_millis() as u64;
-            if elapsed_ms > self.debounce_ms && elapsed_ms < self.long_press_ms {
-                self.press_count = 0;
-                self.last_press = None;
-                return Some(ButtonAction::SingleTap);
-            }
-        }
-        None
-    }
-}
-
-impl Default for ButtonDebouncer {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -354,8 +260,11 @@ fn i2c_probe(_bus: u8, _addr: u16) -> bool {
 pub struct PiSugar {
     pub config: PiSugarConfig,
     pub status: BatteryStatus,
-    pub debouncer: ButtonDebouncer,
     pub available: bool,
+    /// Board temperature in °C (register 0x04 value - 40).
+    pub temperature_c: i8,
+    /// Whether a shutdown sequence is in progress.
+    pub shutting_down: bool,
 }
 
 impl PiSugar {
@@ -364,8 +273,9 @@ impl PiSugar {
         Self {
             config,
             status: BatteryStatus::default(),
-            debouncer: ButtonDebouncer::new(),
             available: false,
+            temperature_c: 0,
+            shutting_down: false,
         }
     }
 
@@ -376,6 +286,47 @@ impl PiSugar {
             let _ = self.set_auto_shutdown_level(self.config.auto_shutdown_level);
         }
         self.available
+    }
+
+    /// Read-modify-write a register with write protection unlock/re-lock.
+    /// Always re-locks (0x0B=0x00) even on error.
+    fn write_protected(
+        &self, bus: u8, addr: u16, register: u8, modify: impl FnOnce(u8) -> u8,
+    ) -> Result<(), I2cError> {
+        i2c_write_register(bus, addr, REG_WRITE_PROTECT, 0x29)?;
+        let current = match i2c_read_register(bus, addr, register) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = i2c_write_register(bus, addr, REG_WRITE_PROTECT, 0x00);
+                return Err(e);
+            }
+        };
+        let new_val = modify(current);
+        let result = i2c_write_register(bus, addr, register, new_val);
+        let _ = i2c_write_register(bus, addr, REG_WRITE_PROTECT, 0x00);
+        result
+    }
+
+    /// Configure CTR1 and CTR2 control registers on boot.
+    /// Non-fatal: logs warnings on failure.
+    pub fn configure_registers(&mut self) {
+        if !self.available { return; }
+        let bus = self.config.i2c_bus;
+        let addr = self.config.i2c_addr;
+
+        if let Err(e) = self.write_protected(bus, addr, REG_CTR1, |val| {
+            (val & !CTR1_ANTI_MISTOUCH) | CTR1_AUTO_RESTORE
+        }) {
+            log::warn!("pisugar: CTR1 configure failed: {e}");
+        }
+
+        if let Err(e) = self.write_protected(bus, addr, REG_CTR2, |val| {
+            (val | CTR2_SOFT_SHUTDOWN_ENABLE) & !CTR2_AUTO_HIBERNATE
+        }) {
+            log::warn!("pisugar: CTR2 configure failed: {e}");
+        }
+
+        log::info!("pisugar: control registers configured");
     }
 
     /// Read battery status from I2C registers.
@@ -406,6 +357,12 @@ impl PiSugar {
             {
                 self.status.charge_state = parse_charge_state(flags);
             }
+
+            // Read board temperature (register 0x04, value - 40 = °C)
+            // Clamp to valid range to avoid i8 overflow on corrupted reads
+            if let Ok(raw) = i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_TEMPERATURE) {
+                self.temperature_c = (raw as i16 - 40).clamp(-40, 125) as i8;
+            }
         }
 
         // Apply thresholds
@@ -414,32 +371,55 @@ impl PiSugar {
         &self.status
     }
 
-    /// Read button tap event from I2C register REG_TAP (0x08).
-    pub fn read_button_event(&mut self) -> Option<ButtonAction> {
-        if !self.available {
-            return None;
+    /// Read and clear a tap event from the PiSugar MCU TAP register.
+    pub fn read_tap_event(&mut self) -> Option<ButtonAction> {
+        if !self.available { return None; }
+        let value = i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_TAP).ok()?;
+        let action = parse_tap_event(value)?;
+        // Clear the TAP register (requires write protection unlock)
+        if self.write_protected(self.config.i2c_bus, self.config.i2c_addr, REG_TAP, |_| 0x00).is_err() {
+            return None; // Clear failed — skip, retry next iteration
         }
-        let value =
-            i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_TAP).ok()?;
-        parse_tap_event(value)
+        Some(action)
     }
 
-    /// Poll button: read hardware events and feed through debouncer.
-    pub fn poll_button(&mut self) -> Option<ButtonAction> {
-        if let Some(hw_action) = self.read_button_event() {
-            return Some(hw_action);
+    /// Check if the PiSugar MCU has signaled a soft shutdown (power button long-press).
+    pub fn check_soft_shutdown(&mut self) -> bool {
+        if self.shutting_down || !self.available { return false; }
+        let ctr2 = match i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_CTR2) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if ctr2 & CTR2_SOFT_SHUTDOWN_STATE == 0 { return false; }
+        log::info!("pisugar: power button soft shutdown detected");
+        // Boot-loop guard: charging at low battery = skip shutdown
+        if self.status.level < 10 && self.status.charge_state == ChargeState::Charging {
+            log::info!("pisugar: charging at {}% — skipping shutdown (boot-loop guard)", self.status.level);
+            return false;
         }
-        self.debouncer.check_timeout()
+        true
+    }
+
+    /// Execute a graceful shutdown sequence via the PiSugar hardware.
+    pub fn pisugar_shutdown(&mut self) {
+        self.shutting_down = true;
+        // Write 15 × 2 = 30 second hardware safety net
+        if let Err(e) = self.write_protected(self.config.i2c_bus, self.config.i2c_addr, REG_DELAY_SHUTDOWN, |_| 15) {
+            log::warn!("pisugar: failed to write delay timer: {e}");
+        }
+        #[cfg(unix)]
+        {
+            log::info!("pisugar: executing shutdown -h now");
+            let _ = std::process::Command::new("sudo").args(["shutdown", "-h", "now"]).spawn();
+        }
     }
 
     /// Set the auto-shutdown battery level on the PiSugar hardware.
     pub fn set_auto_shutdown_level(&self, level: u8) -> Result<(), I2cError> {
-        i2c_write_register(
-            self.config.i2c_bus,
-            self.config.i2c_addr,
-            REG_AUTO_SHUTDOWN,
-            level,
-        )
+        i2c_write_register(self.config.i2c_bus, self.config.i2c_addr, REG_WRITE_PROTECT, 0x29)?;
+        let result = i2c_write_register(self.config.i2c_bus, self.config.i2c_addr, REG_AUTO_SHUTDOWN, level);
+        let _ = i2c_write_register(self.config.i2c_bus, self.config.i2c_addr, REG_WRITE_PROTECT, 0x00);
+        result
     }
 
     /// Update battery level (for testing or mock data).
@@ -665,55 +645,42 @@ mod tests {
         assert_eq!(parse_tap_event(0xFE), Some(ButtonAction::DoubleTap));
     }
 
-    // ===== Debouncer tests =====
+    // ===== New field defaults =====
 
     #[test]
-    fn test_button_debouncer_long_press() {
-        let mut db = ButtonDebouncer::new();
-        db.on_press();
-        db.last_press = Some(Instant::now() - std::time::Duration::from_millis(1500));
-        let action = db.on_press();
-        assert_eq!(action, Some(ButtonAction::LongPress));
+    fn test_pisugar_default_new_fields() {
+        let ps = PiSugar::default();
+        assert_eq!(ps.temperature_c, 0);
+        assert!(!ps.shutting_down);
     }
 
     #[test]
-    fn test_button_first_press_returns_none() {
-        let mut db = ButtonDebouncer::new();
-        let action = db.on_press();
-        assert_eq!(action, None);
+    fn test_parse_temperature() {
+        assert_eq!((0x49_u8 as i16 - 40).clamp(-40, 125) as i8, 33);
+        assert_eq!((0x28_u8 as i16 - 40).clamp(-40, 125) as i8, 0);
+        assert_eq!((0x00_u8 as i16 - 40).clamp(-40, 125) as i8, -40);
+        assert_eq!((0x7D_u8 as i16 - 40).clamp(-40, 125) as i8, 85);
+        assert_eq!((0xA8_u8 as i16 - 40).clamp(-40, 125) as i8, 125); // overflow clamped
+        assert_eq!((0xFF_u8 as i16 - 40).clamp(-40, 125) as i8, 125); // overflow clamped
     }
 
     #[test]
-    fn test_button_immediate_second_press() {
-        let mut db = ButtonDebouncer::new();
-        db.on_press();
-        let action = db.on_press();
-        assert_eq!(action, Some(ButtonAction::DoubleTap));
+    fn test_read_tap_event_unavailable() {
+        let mut ps = PiSugar::default();
+        assert_eq!(ps.read_tap_event(), None);
     }
 
     #[test]
-    fn test_button_check_timeout_no_press() {
-        let mut db = ButtonDebouncer::new();
-        let action = db.check_timeout();
-        assert_eq!(action, None);
+    fn test_check_soft_shutdown_unavailable() {
+        let mut ps = PiSugar::default();
+        assert!(!ps.check_soft_shutdown());
     }
 
     #[test]
-    fn test_button_check_timeout_resolves_single() {
-        let mut db = ButtonDebouncer::new();
-        db.on_press();
-        db.last_press = Some(Instant::now() - std::time::Duration::from_millis(500));
-        let action = db.check_timeout();
-        assert_eq!(action, Some(ButtonAction::SingleTap));
-    }
-
-    #[test]
-    fn test_button_debouncer_resets_after_gesture() {
-        let mut db = ButtonDebouncer::new();
-        db.on_press();
-        let _ = db.on_press();
-        let action = db.on_press();
-        assert_eq!(action, None);
+    fn test_check_soft_shutdown_already_shutting_down() {
+        let mut ps = PiSugar::default();
+        ps.shutting_down = true;
+        assert!(!ps.check_soft_shutdown());
     }
 
     // ===== Existing battery/pisugar tests =====
@@ -865,18 +832,6 @@ mod tests {
         let mut ps = PiSugar::default();
         assert!(!ps.probe());
         assert!(!ps.available);
-    }
-
-    #[test]
-    fn test_read_button_event_unavailable() {
-        let mut ps = PiSugar::default();
-        assert_eq!(ps.read_button_event(), None);
-    }
-
-    #[test]
-    fn test_poll_button_unavailable() {
-        let mut ps = PiSugar::default();
-        assert_eq!(ps.poll_button(), None);
     }
 
     #[test]
