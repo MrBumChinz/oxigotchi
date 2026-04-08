@@ -19,14 +19,26 @@ pub const REG_BATTERY_LEVEL: u8 = 0x2A;
 pub const REG_VOLTAGE_HIGH: u8 = 0x22;
 /// Register: battery voltage low byte (mV, big-endian).
 pub const REG_VOLTAGE_LOW: u8 = 0x23;
-/// Register: charging status (bit flags).
+/// Register: CTR1 — charging status (lower bits RO) + power control (upper bits R/W).
+/// Also used as REG_CHARGE_STATUS (lower 3 bits).
+pub const REG_CTR1: u8 = 0x02;
+/// Alias: charge status is in the lower bits of CTR1.
 pub const REG_CHARGE_STATUS: u8 = 0x02;
-/// Register: button event flags.
-pub const REG_BUTTON_EVENT: u8 = 0x04;
-/// Register: auto-shutdown battery level threshold.
+/// Register: CTR2 — soft shutdown enable/state, auto-hibernate.
+pub const REG_CTR2: u8 = 0x03;
+/// Register: board temperature (value - 40 = °C).
+pub const REG_TEMPERATURE: u8 = 0x04;
+/// Register: TAP — button tap type (2-bit: 0=none, 1=single, 2=double, 3=long).
+/// Write 0 to clear after reading.
+pub const REG_TAP: u8 = 0x08;
+/// Register: delay shutdown countdown (value × 2 seconds).
+pub const REG_DELAY_SHUTDOWN: u8 = 0x09;
+/// Register: write protection gate (0x29 = unlock, anything else = lock).
+pub const REG_WRITE_PROTECT: u8 = 0x0B;
+/// Register: auto-shutdown battery level threshold (undocumented — verify on Pi).
 pub const REG_AUTO_SHUTDOWN: u8 = 0x19;
 
-// Charge status bit flags (register 0x02)
+// Charge status bit flags (lower bits of CTR1 / register 0x02)
 /// Bit 0: power cable connected.
 pub const CHARGE_FLAG_POWER_CONNECTED: u8 = 0x01;
 /// Bit 1: charging in progress.
@@ -34,13 +46,19 @@ pub const CHARGE_FLAG_CHARGING: u8 = 0x02;
 /// Bit 2: charge complete / full.
 pub const CHARGE_FLAG_FULL: u8 = 0x04;
 
-// Button event bit flags (register 0x04)
-/// Bit 0: single press detected.
-pub const BUTTON_FLAG_SINGLE: u8 = 0x01;
-/// Bit 1: double press detected.
-pub const BUTTON_FLAG_DOUBLE: u8 = 0x02;
-/// Bit 2: long press detected.
-pub const BUTTON_FLAG_LONG: u8 = 0x04;
+// CTR1 control bit masks (upper bits of register 0x02)
+/// Bit 3: anti-mistouch — prevents accidental power button activation.
+pub const CTR1_ANTI_MISTOUCH: u8 = 0x08;
+/// Bit 4: auto-restore output on USB power reconnect.
+pub const CTR1_AUTO_RESTORE: u8 = 0x10;
+
+// CTR2 bit masks (register 0x03)
+/// Bit 3: soft shutdown state (RO) — set by MCU when power button long-pressed.
+pub const CTR2_SOFT_SHUTDOWN_STATE: u8 = 0x08;
+/// Bit 4: soft shutdown enable.
+pub const CTR2_SOFT_SHUTDOWN_ENABLE: u8 = 0x10;
+/// Bit 6: auto-hibernate.
+pub const CTR2_AUTO_HIBERNATE: u8 = 0x40;
 
 // ---------------------------------------------------------------------------
 // Parsing helpers (pure functions, testable on any platform)
@@ -71,14 +89,26 @@ pub fn parse_charge_state(flags: u8) -> ChargeState {
     }
 }
 
+/// Parse TAP register value (0x08) into a button action.
+/// The register uses a 2-bit value: 0=none, 1=single, 2=double, 3=long.
+pub fn parse_tap_event(value: u8) -> Option<ButtonAction> {
+    match value & 0x03 {
+        1 => Some(ButtonAction::SingleTap),
+        2 => Some(ButtonAction::DoubleTap),
+        3 => Some(ButtonAction::LongPress),
+        _ => None,
+    }
+}
+
 /// Parse button event flags from register 0x04.
 /// Returns the highest-priority event (long > double > single).
+/// Deprecated: register 0x04 is actually temperature; use parse_tap_event with REG_TAP (0x08).
 pub fn parse_button_event(flags: u8) -> Option<ButtonAction> {
-    if flags & BUTTON_FLAG_LONG != 0 {
+    if flags & 0x04 != 0 {
         Some(ButtonAction::LongPress)
-    } else if flags & BUTTON_FLAG_DOUBLE != 0 {
+    } else if flags & 0x02 != 0 {
         Some(ButtonAction::DoubleTap)
-    } else if flags & BUTTON_FLAG_SINGLE != 0 {
+    } else if flags & 0x01 != 0 {
         Some(ButtonAction::SingleTap)
     } else {
         None
@@ -384,14 +414,14 @@ impl PiSugar {
         &self.status
     }
 
-    /// Read button events from I2C register 0x04.
+    /// Read button tap event from I2C register REG_TAP (0x08).
     pub fn read_button_event(&mut self) -> Option<ButtonAction> {
         if !self.available {
             return None;
         }
-        let flags =
-            i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_BUTTON_EVENT).ok()?;
-        parse_button_event(flags)
+        let value =
+            i2c_read_register(self.config.i2c_bus, self.config.i2c_addr, REG_TAP).ok()?;
+        parse_tap_event(value)
     }
 
     /// Poll button: read hardware events and feed through debouncer.
@@ -447,23 +477,23 @@ impl Default for PiSugar {
 // Button action mapping
 // ---------------------------------------------------------------------------
 
-/// Mapped button actions for the PiSugar button.
+/// Mapped button actions for the PiSugar custom button.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MappedAction {
-    /// Toggle Bluetooth PAN tethering on/off.
-    Bluetooth,
-    /// Switch between AUTO and MANUAL mode.
-    AutoManual,
-    /// Switch between AO and PWN mode.
-    AoPwn,
+    /// Cycle rage level 1→2→3→4→5→6→1 (skips 7/YOLO — crashes firmware).
+    CycleRageLevel,
+    /// Toggle BT PAN tethering on/off.
+    ToggleBtTether,
+    /// Toggle between RAGE and SAFE mode.
+    ToggleRageSafe,
 }
 
 /// Map a raw button action to a semantic daemon action.
 pub fn map_button_action(action: ButtonAction) -> MappedAction {
     match action {
-        ButtonAction::SingleTap => MappedAction::Bluetooth,
-        ButtonAction::DoubleTap => MappedAction::AutoManual,
-        ButtonAction::LongPress => MappedAction::AoPwn,
+        ButtonAction::SingleTap => MappedAction::CycleRageLevel,
+        ButtonAction::DoubleTap => MappedAction::ToggleBtTether,
+        ButtonAction::LongPress => MappedAction::ToggleRageSafe,
     }
 }
 
@@ -484,8 +514,14 @@ mod tests {
         assert_eq!(REG_BATTERY_LEVEL, 0x2A);
         assert_eq!(REG_VOLTAGE_HIGH, 0x22);
         assert_eq!(REG_VOLTAGE_LOW, 0x23);
+        assert_eq!(REG_CTR1, 0x02);
         assert_eq!(REG_CHARGE_STATUS, 0x02);
-        assert_eq!(REG_BUTTON_EVENT, 0x04);
+        assert_eq!(REG_CTR1, REG_CHARGE_STATUS);
+        assert_eq!(REG_CTR2, 0x03);
+        assert_eq!(REG_TEMPERATURE, 0x04);
+        assert_eq!(REG_TAP, 0x08);
+        assert_eq!(REG_DELAY_SHUTDOWN, 0x09);
+        assert_eq!(REG_WRITE_PROTECT, 0x0B);
         assert_eq!(REG_AUTO_SHUTDOWN, 0x19);
     }
 
@@ -501,14 +537,11 @@ mod tests {
     }
 
     #[test]
-    fn test_button_flag_constants() {
-        assert_eq!(BUTTON_FLAG_SINGLE, 0x01);
-        assert_eq!(BUTTON_FLAG_DOUBLE, 0x02);
-        assert_eq!(BUTTON_FLAG_LONG, 0x04);
-        assert_eq!(
-            BUTTON_FLAG_SINGLE & BUTTON_FLAG_DOUBLE & BUTTON_FLAG_LONG,
-            0
-        );
+    fn test_tap_values() {
+        assert_eq!(0u8 & 0x03, 0);
+        assert_eq!(1u8 & 0x03, 1);
+        assert_eq!(2u8 & 0x03, 2);
+        assert_eq!(3u8 & 0x03, 3);
     }
 
     // ===== Battery level parsing tests =====
@@ -601,65 +634,35 @@ mod tests {
         );
     }
 
-    // ===== Button event parsing tests =====
+    // ===== TAP event parsing tests =====
 
     #[test]
-    fn test_parse_button_event_none() {
-        assert_eq!(parse_button_event(0x00), None);
+    fn test_parse_tap_event_none() {
+        assert_eq!(parse_tap_event(0x00), None);
     }
 
     #[test]
-    fn test_parse_button_event_single() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_SINGLE),
-            Some(ButtonAction::SingleTap)
-        );
+    fn test_parse_tap_event_single() {
+        assert_eq!(parse_tap_event(0x01), Some(ButtonAction::SingleTap));
     }
 
     #[test]
-    fn test_parse_button_event_double() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_DOUBLE),
-            Some(ButtonAction::DoubleTap)
-        );
+    fn test_parse_tap_event_double() {
+        assert_eq!(parse_tap_event(0x02), Some(ButtonAction::DoubleTap));
     }
 
     #[test]
-    fn test_parse_button_event_long() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_LONG),
-            Some(ButtonAction::LongPress)
-        );
+    fn test_parse_tap_event_long() {
+        assert_eq!(parse_tap_event(0x03), Some(ButtonAction::LongPress));
     }
 
     #[test]
-    fn test_parse_button_event_long_overrides_double() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_LONG | BUTTON_FLAG_DOUBLE),
-            Some(ButtonAction::LongPress)
-        );
-    }
-
-    #[test]
-    fn test_parse_button_event_double_overrides_single() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_DOUBLE | BUTTON_FLAG_SINGLE),
-            Some(ButtonAction::DoubleTap)
-        );
-    }
-
-    #[test]
-    fn test_parse_button_event_all_flags() {
-        assert_eq!(
-            parse_button_event(BUTTON_FLAG_LONG | BUTTON_FLAG_DOUBLE | BUTTON_FLAG_SINGLE),
-            Some(ButtonAction::LongPress)
-        );
-    }
-
-    #[test]
-    fn test_parse_button_event_unknown_bits_ignored() {
-        assert_eq!(parse_button_event(0xF0), None);
-        assert_eq!(parse_button_event(0xF1), Some(ButtonAction::SingleTap));
+    fn test_parse_tap_event_masks_upper_bits() {
+        assert_eq!(parse_tap_event(0x04), None);
+        assert_eq!(parse_tap_event(0x05), Some(ButtonAction::SingleTap));
+        assert_eq!(parse_tap_event(0x80), None);
+        assert_eq!(parse_tap_event(0xFF), Some(ButtonAction::LongPress));
+        assert_eq!(parse_tap_event(0xFE), Some(ButtonAction::DoubleTap));
     }
 
     // ===== Debouncer tests =====
@@ -816,27 +819,18 @@ mod tests {
     // ===== Button action mapping tests =====
 
     #[test]
-    fn test_button_single_tap_maps_to_bluetooth() {
-        assert_eq!(
-            map_button_action(ButtonAction::SingleTap),
-            MappedAction::Bluetooth
-        );
+    fn test_single_tap_maps_to_cycle_rage() {
+        assert_eq!(map_button_action(ButtonAction::SingleTap), MappedAction::CycleRageLevel);
     }
 
     #[test]
-    fn test_button_double_tap_maps_to_auto_manual() {
-        assert_eq!(
-            map_button_action(ButtonAction::DoubleTap),
-            MappedAction::AutoManual
-        );
+    fn test_double_tap_maps_to_bt_tether() {
+        assert_eq!(map_button_action(ButtonAction::DoubleTap), MappedAction::ToggleBtTether);
     }
 
     #[test]
-    fn test_button_long_press_maps_to_ao_pwn() {
-        assert_eq!(
-            map_button_action(ButtonAction::LongPress),
-            MappedAction::AoPwn
-        );
+    fn test_long_press_maps_to_rage_safe() {
+        assert_eq!(map_button_action(ButtonAction::LongPress), MappedAction::ToggleRageSafe);
     }
 
     // ===== Config defaults test =====
