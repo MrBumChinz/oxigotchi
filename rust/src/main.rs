@@ -2274,6 +2274,7 @@ impl Daemon {
             battery_low: bat_low,
             battery_critical: bat_crit,
             battery_available: bat_avail,
+            pisugar_temp_c: self.battery.temperature_c,
             bt_connected: bt_conn,
             bt_short,
             bt_ip,

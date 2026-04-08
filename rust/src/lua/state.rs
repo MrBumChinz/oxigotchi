@@ -35,6 +35,7 @@ pub struct EpochState {
     pub battery_low: bool,
     pub battery_critical: bool,
     pub battery_available: bool,
+    pub pisugar_temp_c: i8,
 
     // bluetooth
     pub bt_connected: bool,
@@ -108,6 +109,7 @@ impl EpochState {
         t.set("battery_low", self.battery_low)?;
         t.set("battery_critical", self.battery_critical)?;
         t.set("battery_available", self.battery_available)?;
+        t.set("pisugar_temp_c", self.pisugar_temp_c)?;
 
         t.set("bt_connected", self.bt_connected)?;
         t.set("bt_short", self.bt_short.as_str())?;
