@@ -548,7 +548,8 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px">Phone Tethering</div>
 <div style="display:flex;gap:8px;align-items:center">
 <button class="util-btn" onclick="btScan()" id="bt-scan-btn">Scan for Devices</button>
-<button class="util-btn util-btn-danger" id="bt-disconnect-btn" onclick="btDisconnect()" style="display:none">Disconnect</button>
+<button class="util-btn" id="bt-connect-btn" onclick="btTetherConnect()" style="display:none">Connect</button>
+<button class="util-btn util-btn-danger" id="bt-disconnect-btn" onclick="btTetherDisconnect()" style="display:none">Disconnect</button>
 </div>
 <div id="bt-device-list" style="margin-top:8px"></div>
 <div id="bt-passkey-area" style="display:none;margin-top:10px;padding:10px;background:#0a1628;border-radius:8px">
@@ -1513,6 +1514,20 @@ function btForget(m) {
     }
 }
 
+function btTetherConnect() {
+    if (!confirm('Connect BT tethering to your phone?\\nThis will use the last paired device.')) return;
+    api('POST', '/api/button', {tap: 'long'}).then(function(r) {
+        if (r && r.ok) toast('BT tether connecting...');
+    });
+}
+
+function btTetherDisconnect() {
+    if (!confirm('Disconnect BT tethering?\\nIf you are accessing this dashboard over BT, you will lose connection.')) return;
+    api('POST', '/api/bluetooth/disconnect').then(function(r) {
+        if (r && r.ok) toast('BT disconnected');
+    });
+}
+
 function btDisconnect() {
     api('POST', '/api/bluetooth/disconnect').then(function(r) {
         if (r && r.ok) toast('BT disconnected');
@@ -1867,8 +1882,10 @@ function updateBluetoothFromWs(d) {
     document.getElementById('bt-feature-mode').textContent = d.feature_mode || '-';
     document.getElementById('bt-nearby').textContent = d.nearby_devices != null ? d.nearby_devices : '-';
     document.getElementById('bt-contention').textContent = d.contention_score != null ? d.contention_score : '-';
-    // disconnect button visibility
+    // tether connect/disconnect button visibility
+    var cBtn = document.getElementById('bt-connect-btn');
     var dBtn = document.getElementById('bt-disconnect-btn');
+    if (cBtn) { cBtn.style.display = (!d.connected && d.device_name) ? 'inline-block' : 'none'; }
     if (dBtn) { dBtn.style.display = d.connected ? 'inline-block' : 'none'; }
     // passkey display
     if (d.passkey != null && d.passkey > 0) {
