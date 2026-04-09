@@ -265,6 +265,8 @@ pub struct PiSugar {
     pub temperature_c: i8,
     /// Whether a shutdown sequence is in progress.
     pub shutting_down: bool,
+    /// True if CTR2 bit3 was already high at boot (stale latch from previous power cycle).
+    boot_ctr2_stale: bool,
 }
 
 impl PiSugar {
@@ -275,6 +277,7 @@ impl PiSugar {
             status: BatteryStatus::default(),
             available: false,
             temperature_c: 0,
+            boot_ctr2_stale: false,
             shutting_down: false,
         }
     }
@@ -324,6 +327,20 @@ impl PiSugar {
             (val | CTR2_SOFT_SHUTDOWN_ENABLE) & !CTR2_AUTO_HIBERNATE
         }) {
             log::warn!("pisugar: CTR2 configure failed: {e}");
+        }
+
+        // Clear any stale soft shutdown state from a previous power cycle.
+        // CTR2 bit3 latches until power is fully cut — if the Pi rebooted via
+        // systemd restart (not full power cycle), bit3 may still be high.
+        // Read and discard it so check_soft_shutdown() doesn't immediately trigger.
+        if let Ok(ctr2) = i2c_read_register(bus, addr, REG_CTR2) {
+            if ctr2 & CTR2_SOFT_SHUTDOWN_STATE != 0 {
+                log::info!("pisugar: clearing stale soft shutdown state from previous boot");
+                // We can't clear the bit (it's RO), so set shutting_down=false
+                // and ignore it. The bit will only be honored if it transitions
+                // from 0→1 while the daemon is running.
+                self.boot_ctr2_stale = true;
+            }
         }
 
         log::info!("pisugar: control registers configured");
@@ -390,7 +407,15 @@ impl PiSugar {
             Ok(v) => v,
             Err(_) => return false,
         };
-        if ctr2 & CTR2_SOFT_SHUTDOWN_STATE == 0 { return false; }
+        if ctr2 & CTR2_SOFT_SHUTDOWN_STATE == 0 {
+            // Bit went low — clear the stale flag so future 0→1 transitions are honored
+            self.boot_ctr2_stale = false;
+            return false;
+        }
+        // If bit3 was already high at boot, ignore it until it goes low first
+        if self.boot_ctr2_stale {
+            return false;
+        }
         log::info!("pisugar: power button soft shutdown detected");
         // Boot-loop guard: charging at low battery = skip shutdown
         if self.status.level < 10 && self.status.charge_state == ChargeState::Charging {
