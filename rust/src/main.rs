@@ -1422,6 +1422,9 @@ impl Daemon {
                 }
             }
         }
+
+        // Immediate display refresh so button feedback is visible on e-ink
+        self.update_display();
     }
 
     /// Process commands queued by the web server.
