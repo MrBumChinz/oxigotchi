@@ -14,7 +14,7 @@ The daemon operates in three modes:
 - **BT** — Bluetooth offensive: HCI scanning, GATT resolution, BT attacks (ATT fuzz, KNOB, L2CAP fuzz/flood, SMP). WiFi off, phone tether disconnected.
 - **SAFE** — WiFi managed mode, BT tethered to phone for internet, no attacks. Used for uploads and maintenance.
 
-Toggle between them with the **PiSugar3 button** (single tap) or the **web dashboard**. Mode transitions are atomic via `RadioManager`, which coordinates WiFi/BT hardware teardown and bringup including patchram loading for BT attack mode.
+Toggle between them with the **web dashboard**. Mode transitions are atomic via `RadioManager`, which coordinates WiFi/BT hardware teardown and bringup including patchram loading for BT attack mode.
 
 ## Module Overview
 

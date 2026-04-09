@@ -126,8 +126,8 @@ The PiSugar 3 has two buttons on the edge and a reset button near the magnets. T
 | Gesture | Action | Details |
 |---------|--------|---------|
 | **Single tap** | Cycle rage level | Rotates through levels 1-6 (Chill → FURY). Skips level 7 (YOLO) for stability. |
-| **Double tap** | Toggle BT tethering | Connect or disconnect Bluetooth PAN to your phone. |
-| **Long press** | Toggle RAGE ↔ SAFE | Switch between attack mode and safe/upload mode. |
+| **Double tap** | Toggle RAGE ↔ SAFE | Switch between attack mode and safe/upload mode. |
+| **Long press** (~1s) | Toggle BT tethering | Connect or disconnect Bluetooth PAN to your phone. |
 
 **Power button** (the other edge button):
 - **Long press** — Clean shutdown with e-ink confirmation. Hardware cuts power after 30 seconds as a safety net.

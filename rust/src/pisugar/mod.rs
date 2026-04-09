@@ -483,6 +483,8 @@ impl Default for PiSugar {
 // ---------------------------------------------------------------------------
 
 /// Mapped button actions for the PiSugar custom button.
+/// Long press is detected by pisugar-server software (not MCU hardware)
+/// and delivered via /api/button endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MappedAction {
     /// Cycle rage level 1→2→3→4→5→6→1 (skips 7/YOLO — crashes firmware).
@@ -497,8 +499,8 @@ pub enum MappedAction {
 pub fn map_button_action(action: ButtonAction) -> MappedAction {
     match action {
         ButtonAction::SingleTap => MappedAction::CycleRageLevel,
-        ButtonAction::DoubleTap => MappedAction::ToggleBtTether,
-        ButtonAction::LongPress => MappedAction::ToggleRageSafe,
+        ButtonAction::DoubleTap => MappedAction::ToggleRageSafe,
+        ButtonAction::LongPress => MappedAction::ToggleBtTether,
     }
 }
 
@@ -816,13 +818,13 @@ mod tests {
     }
 
     #[test]
-    fn test_double_tap_maps_to_bt_tether() {
-        assert_eq!(map_button_action(ButtonAction::DoubleTap), MappedAction::ToggleBtTether);
+    fn test_double_tap_maps_to_rage_safe() {
+        assert_eq!(map_button_action(ButtonAction::DoubleTap), MappedAction::ToggleRageSafe);
     }
 
     #[test]
-    fn test_long_press_maps_to_rage_safe() {
-        assert_eq!(map_button_action(ButtonAction::LongPress), MappedAction::ToggleRageSafe);
+    fn test_long_press_maps_to_bt_tether() {
+        assert_eq!(map_button_action(ButtonAction::LongPress), MappedAction::ToggleBtTether);
     }
 
     // ===== Config defaults test =====

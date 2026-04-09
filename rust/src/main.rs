@@ -1351,9 +1351,27 @@ impl Daemon {
     }
 
     /// Process PiSugar custom button tap events.
+    /// Events come from two sources:
+    /// 1. Direct I2C TAP register poll (single/double tap from MCU)
+    /// 2. Web API /api/button (from pisugar-server shell scripts — supports long press)
     fn process_button(&mut self) {
-        let Some(action) = self.battery.read_tap_event() else {
-            return;
+        // Check web API first (pisugar-server shell scripts)
+        let web_tap = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_button_tap.take()
+        };
+
+        let action = if let Some(tap_value) = web_tap {
+            match pisugar::parse_tap_event(tap_value) {
+                Some(a) => a,
+                None => return,
+            }
+        } else {
+            // Fall back to direct I2C TAP register poll
+            match self.battery.read_tap_event() {
+                Some(a) => a,
+                None => return,
+            }
         };
 
         match pisugar::map_button_action(action) {

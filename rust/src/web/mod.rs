@@ -217,6 +217,8 @@ pub struct DaemonState {
     pub pending_shutdown: bool,
     pub pending_attack_toggle: Option<AttackToggle>,
     pub pending_bt_toggle: Option<bool>,
+    /// Button tap event from pisugar-server shell script (1=single, 2=double, 3=long).
+    pub pending_button_tap: Option<u8>,
     pub pending_bt_pair: Option<String>,
     pub bt_scan_results: Vec<BtScanDevice>,
     pub bt_scan_in_progress: bool,
@@ -416,6 +418,7 @@ impl DaemonState {
 
             pending_attack_toggle: None,
             pending_bt_toggle: None,
+            pending_button_tap: None,
             pending_bt_pair: None,
             bt_scan_results: Vec::new(),
             bt_scan_in_progress: false,
@@ -1294,6 +1297,7 @@ pub const API_HANDSHAKE_DL: &str = "/api/handshakes/:filename";
 pub const API_MODE: &str = "/api/mode";
 pub const API_RESTART: &str = "/api/restart";
 pub const API_SHUTDOWN: &str = "/api/shutdown";
+pub const API_BUTTON: &str = "/api/button";
 pub const API_WHITELIST: &str = "/api/whitelist";
 pub const API_CRACKED: &str = "/api/cracked";
 pub const API_HEALTH: &str = "/api/health";
@@ -2056,6 +2060,32 @@ async fn shutdown_handler(State(state): State<SharedState>) -> Json<ActionRespon
     Json(ActionResponse {
         ok: true,
         message: "System shutdown queued".into(),
+    })
+}
+
+/// POST /api/button -> queue a button tap event (called by pisugar-server shell scripts).
+/// Body: {"tap": "single"} | {"tap": "double"} | {"tap": "long"}
+async fn button_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<serde_json::Value>,
+) -> Json<ActionResponse> {
+    let tap = body.get("tap").and_then(|v| v.as_str()).unwrap_or("");
+    let tap_value = match tap {
+        "single" => 1u8,
+        "double" => 2,
+        "long" => 3,
+        _ => {
+            return Json(ActionResponse {
+                ok: false,
+                message: format!("unknown tap type: {tap:?}"),
+            });
+        }
+    };
+    let mut s = state.lock().unwrap();
+    s.pending_button_tap = Some(tap_value);
+    Json(ActionResponse {
+        ok: true,
+        message: format!("button {tap} queued"),
     })
 }
 
@@ -2864,6 +2894,7 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_RATE, post(rate_handler))
         .route(API_RESTART, post(restart_handler))
         .route(API_SHUTDOWN, post(shutdown_handler))
+        .route(API_BUTTON, post(button_handler))
         .route(API_DISPLAY, get(display_handler))
         .route("/api/download/all", get(download_zip_handler))
         .route(
