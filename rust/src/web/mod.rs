@@ -271,6 +271,16 @@ pub struct DaemonState {
     // -- mood interaction --
     pub interact_cooldowns: std::collections::HashMap<String, std::time::Instant>,
     pub pending_mood_boost: Option<f32>,
+
+    // -- face packs --
+    /// Currently active face pack name.
+    pub active_face_pack: String,
+    /// Discovered face packs (cached from last scan).
+    pub face_packs: Vec<FacePackInfo>,
+    /// User-requested pack switch — processed by daemon.
+    pub pending_face_pack: Option<String>,
+    /// Last face pack error message (for dashboard display).
+    pub face_pack_last_error: Option<String>,
 }
 
 impl DaemonState {
@@ -447,6 +457,10 @@ impl DaemonState {
             pending_radio_request: None,
             interact_cooldowns: std::collections::HashMap::new(),
             pending_mood_boost: None,
+            active_face_pack: "default".to_string(),
+            face_packs: Vec::new(),
+            pending_face_pack: None,
+            face_pack_last_error: None,
         }
     }
 }
@@ -1043,6 +1057,17 @@ pub struct WifiInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WifiUpdate {
     pub skip_captured: Option<bool>,
+}
+
+/// Face pack information returned by GET /api/face_packs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FacePackInfo {
+    pub name: String,
+    pub is_default: bool,
+    /// Number of cached .raw files ready to use.
+    pub face_count: usize,
+    /// Number of .png files awaiting conversion.
+    pub converting: usize,
 }
 
 /// Bluetooth info returned by /api/bluetooth.

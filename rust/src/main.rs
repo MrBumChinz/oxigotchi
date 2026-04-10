@@ -2195,6 +2195,37 @@ impl Daemon {
             }
         }
 
+        // Process pending face pack switch
+        let pending_face_pack = {
+            let mut s = self.shared_state.lock().unwrap();
+            s.pending_face_pack.take()
+        };
+        if let Some(pack_name) = pending_face_pack {
+            any_command = true;
+            info!("web: face pack switch to {pack_name}");
+            if pack_name == "default" {
+                self.active_pack = display::face_pack::FacePack::empty();
+                self.update_display();
+            } else {
+                let cache_dir = std::path::Path::new(display::face_pack::FACE_PACK_CACHE)
+                    .join(&pack_name);
+                match display::face_pack::FacePack::load(&pack_name, &cache_dir) {
+                    Ok(pack) => {
+                        info!("face pack: loaded '{}' ({} faces)", pack.name, pack.face_count());
+                        self.active_pack = pack;
+                        self.update_display();
+                    }
+                    Err(e) => {
+                        log::warn!("face pack load failed: {e}");
+                        let mut s = self.shared_state.lock().unwrap();
+                        s.face_pack_last_error = Some(format!("load {pack_name}: {e}"));
+                    }
+                }
+            }
+            let mut s = self.shared_state.lock().unwrap();
+            s.active_face_pack = self.active_pack.name.clone();
+        }
+
         // Process pending mood boost from interact buttons
         let mood_boost = {
             let mut s = self.shared_state.lock().unwrap();
@@ -2382,6 +2413,7 @@ impl Daemon {
             "min_rssi": s.min_rssi,
             "ap_ttl_secs": s.ap_ttl_secs,
             "bt_scan_mode": self.config.bt_attacks.scan_mode.as_str(),
+            "face_pack": self.active_pack.name,
             "state_version": 2,
         });
         drop(s);
@@ -2584,6 +2616,25 @@ impl Daemon {
                 self.config.bt_attacks.scan_mode = mode;
                 let mut s = self.shared_state.lock().unwrap();
                 s.bt_scan_mode = mode_str.to_string();
+            }
+        }
+
+        // Apply face pack
+        if let Some(name) = state.get("face_pack").and_then(|v| v.as_str()) {
+            if name != "default" && !name.is_empty() {
+                let cache_dir = std::path::Path::new(display::face_pack::FACE_PACK_CACHE)
+                    .join(name);
+                match display::face_pack::FacePack::load(name, &cache_dir) {
+                    Ok(pack) => {
+                        info!("face pack: restored '{}' ({} faces)", pack.name, pack.face_count());
+                        self.active_pack = pack;
+                        let mut s = self.shared_state.lock().unwrap();
+                        s.active_face_pack = self.active_pack.name.clone();
+                    }
+                    Err(e) => {
+                        log::warn!("face pack: restore '{name}' failed: {e} (using default)");
+                    }
+                }
             }
         }
 
