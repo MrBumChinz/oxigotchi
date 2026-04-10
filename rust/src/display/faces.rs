@@ -15,7 +15,7 @@ pub const FACE_HEIGHT: u32 = 66;
 /// Bytes per row in the face bitmap (120 / 8 = 15).
 pub const FACE_STRIDE: usize = 15;
 
-// Embed all 28 face bitmaps at compile time.
+// Embed all 26 face bitmaps at compile time.
 static ANGRY: &[u8] = include_bytes!("../../faces/angry.raw");
 static AO_CRASHED: &[u8] = include_bytes!("../../faces/ao_crashed.raw");
 static AWAKE: &[u8] = include_bytes!("../../faces/awake.raw");
@@ -33,10 +33,6 @@ static GRATEFUL: &[u8] = include_bytes!("../../faces/grateful.raw");
 static HAPPY: &[u8] = include_bytes!("../../faces/happy.raw");
 static INTENSE: &[u8] = include_bytes!("../../faces/intense.raw");
 static LONELY: &[u8] = include_bytes!("../../faces/lonely.raw");
-static LOOK_L: &[u8] = include_bytes!("../../faces/look_l.raw");
-static LOOK_L_HAPPY: &[u8] = include_bytes!("../../faces/look_l_happy.raw");
-static LOOK_R: &[u8] = include_bytes!("../../faces/look_r.raw");
-static LOOK_R_HAPPY: &[u8] = include_bytes!("../../faces/look_r_happy.raw");
 static MOTIVATED: &[u8] = include_bytes!("../../faces/motivated.raw");
 static SAD: &[u8] = include_bytes!("../../faces/sad.raw");
 static SHUTDOWN: &[u8] = include_bytes!("../../faces/shutdown.raw");
