@@ -212,6 +212,9 @@ struct Daemon {
     active_pack: display::face_pack::FacePack,
     face_pack_timer: WallTimer,
     face_pack_last_error: Option<String>,
+    /// True if AO was stopped to free the radio for a BT pair flow.
+    /// Daemon restarts AO after the pair flow terminates (Done or Failed).
+    ao_paused_for_bt_pair: bool,
 }
 
 impl Daemon {
@@ -331,6 +334,7 @@ impl Daemon {
             active_pack: display::face_pack::FacePack::empty(),
             face_pack_timer: WallTimer::new(Duration::from_secs(30)),
             face_pack_last_error: None,
+            ao_paused_for_bt_pair: false,
         }
     }
 
@@ -1948,6 +1952,16 @@ impl Daemon {
         if let Some(mac) = bt_pair_mac {
             any_command = true;
             info!("web: BT pair flow starting for {mac}");
+            // Pause AO for the duration of the pair flow — the BCM43436B0
+            // shares an antenna between WiFi and BT, and AO's aggressive
+            // channel hopping makes BT operations (scan, pair, SSP passkey
+            // exchange) slow to the point of failing the 30s SSP timeout.
+            // Restart AO after the flow terminates (Done or Failed).
+            if self.ao.state == ao::AoState::Running {
+                info!("web: pausing AO for BT pair flow (radio coexistence)");
+                self.ao.stop();
+                self.ao_paused_for_bt_pair = true;
+            }
             match self.bluetooth.pair_and_trust_flow_start(&mac) {
                 Ok(()) => {
                     let mut s = self.shared_state.lock().unwrap();
@@ -1956,6 +1970,13 @@ impl Daemon {
                 }
                 Err(e) => {
                     log::warn!("web: BT pair flow start failed: {e}");
+                    // If we stopped AO but the flow never started, restart it now.
+                    if self.ao_paused_for_bt_pair {
+                        if let Err(re) = self.ao.start() {
+                            log::warn!("web: AO restart after failed pair start failed: {re}");
+                        }
+                        self.ao_paused_for_bt_pair = false;
+                    }
                     let mut s = self.shared_state.lock().unwrap();
                     s.bt_pair_in_progress = false;
                     s.bt_pair_result = Some(Err(e));
@@ -1974,6 +1995,14 @@ impl Daemon {
                     Ok(()) => info!("web: BT paired+connected to {device_path}"),
                     Err(e) => log::warn!("web: BT PAN connect failed: {e}"),
                 }
+                // Restart AO if we paused it for the pair flow.
+                if self.ao_paused_for_bt_pair {
+                    info!("web: resuming AO after successful pair");
+                    if let Err(e) = self.ao.start() {
+                        log::warn!("web: AO restart after pair failed: {e}");
+                    }
+                    self.ao_paused_for_bt_pair = false;
+                }
                 let mut s = self.shared_state.lock().unwrap();
                 s.bt_pair_in_progress = false;
                 s.bt_pair_result = Some(Ok(device_path));
@@ -1982,6 +2011,14 @@ impl Daemon {
                 any_command = true;
                 log::warn!("web: BT pair failed: {e}");
                 self.bluetooth.state = bluetooth::BtState::Error;
+                // Restart AO if we paused it for the pair flow.
+                if self.ao_paused_for_bt_pair {
+                    info!("web: resuming AO after failed pair");
+                    if let Err(re) = self.ao.start() {
+                        log::warn!("web: AO restart after pair failed: {re}");
+                    }
+                    self.ao_paused_for_bt_pair = false;
+                }
                 let mut s = self.shared_state.lock().unwrap();
                 s.bt_pair_in_progress = false;
                 s.bt_pair_result = Some(Err(e));
