@@ -142,6 +142,16 @@ pub struct DaemonState {
     pub bt_passkey_device: String,                // Device name being paired
     pub bt_passkey_confirmed: Option<bool>,       // User's confirmation response
     pub pending_bt_disconnect: Option<bool>,      // Disconnect request (suppresses auto-reconnect)
+    /// User-requested "Reset all BT pairings" escape hatch.
+    pub pending_bt_reset_pairings: bool,
+    /// User-requested refresh of the paired_devices cache.
+    /// Triggers an on-demand scan only; not populated by sync_to_web
+    /// to avoid powering on BT as a side effect every 2 seconds.
+    pub pending_bt_refresh_paired: bool,
+    /// Cached paired devices for the /api/bluetooth/paired endpoint.
+    /// Populated ONLY when pending_bt_refresh_paired fires — never from
+    /// passive sync, so viewing the dashboard does not initialize D-Bus.
+    pub paired_devices: Vec<PairedDeviceBrief>,
 
     // -- gpu --
     pub gpu_mode: String,
@@ -374,6 +384,9 @@ impl DaemonState {
             bt_passkey_device: String::new(),
             bt_passkey_confirmed: None,
             pending_bt_disconnect: None,
+            pending_bt_reset_pairings: false,
+            pending_bt_refresh_paired: false,
+            paired_devices: Vec::new(),
             gpu_mode: "Off".into(),
             gpu_signal: "None".into(),
             gpu_submit_seen: false,
@@ -981,6 +994,13 @@ pub struct BtAttackStats {
     pub devices_seen: u32,
 }
 
+/// Brief paired device info for /api/bluetooth/paired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairedDeviceBrief {
+    pub name: String,
+    pub mac: String,
+}
+
 /// Lightweight device info for the web API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BtDeviceInfo {
@@ -1370,6 +1390,9 @@ pub const API_BT_SCAN_MODE: &str = "/api/bt/scan-mode";
 pub const API_BT_FORGET: &str = "/api/bluetooth/forget";
 pub const API_BT_DISCONNECT: &str = "/api/bluetooth/disconnect";
 pub const API_BT_CONFIRM_PASSKEY: &str = "/api/bluetooth/confirm-passkey";
+pub const API_BT_RESET_PAIRINGS: &str = "/api/bluetooth/reset-pairings";
+pub const API_BT_LIST_PAIRED: &str = "/api/bluetooth/paired";
+pub const API_BT_REFRESH_PAIRED: &str = "/api/bluetooth/refresh-paired";
 pub const API_INTERACT: &str = "/api/interact";
 pub const API_FACE_PACKS: &str = "/api/face_packs";
 
@@ -2475,6 +2498,37 @@ async fn bt_confirm_passkey_handler(
     Json(serde_json::json!({"ok": true}))
 }
 
+/// GET /api/bluetooth/paired -> return the currently cached paired-device list.
+/// This reads only from shared state — the daemon does NOT refresh it here.
+/// Callers that want fresh data must POST /api/bluetooth/refresh-paired first
+/// and then GET this endpoint on the next epoch.
+async fn bt_list_paired_handler(State(state): State<SharedState>) -> Json<Vec<PairedDeviceBrief>> {
+    let s = state.lock().unwrap();
+    Json(s.paired_devices.clone())
+}
+
+/// POST /api/bluetooth/refresh-paired -> queue a refresh of the paired cache.
+/// Deliberate user opt-in so the daemon only initializes D-Bus when asked.
+async fn bt_refresh_paired_handler(State(state): State<SharedState>) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_bt_refresh_paired = true;
+    Json(ActionResponse {
+        ok: true,
+        message: "BT paired refresh queued".into(),
+    })
+}
+
+/// POST /api/bluetooth/reset-pairings -> queue removal of all paired devices.
+/// Danger: this forgets every paired BT device.
+async fn bt_reset_pairings_handler(State(state): State<SharedState>) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_bt_reset_pairings = true;
+    Json(ActionResponse {
+        ok: true,
+        message: "BT reset pairings queued".into(),
+    })
+}
+
 /// POST /api/settings -> update device settings (name, etc.)
 async fn settings_handler(
     State(state): State<SharedState>,
@@ -2992,6 +3046,9 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_FORGET, post(bt_forget_handler))
         .route(API_BT_DISCONNECT, post(bt_disconnect_handler))
         .route(API_BT_CONFIRM_PASSKEY, post(bt_confirm_passkey_handler))
+        .route(API_BT_LIST_PAIRED, get(bt_list_paired_handler))
+        .route(API_BT_REFRESH_PAIRED, post(bt_refresh_paired_handler))
+        .route(API_BT_RESET_PAIRINGS, post(bt_reset_pairings_handler))
         .route(API_RADIO, get(radio_get_handler).post(radio_post_handler))
         .route(API_CAPTURE_ALL, post(capture_all_handler))
         .route(API_DELETE_CAPTURE, delete(delete_capture_handler))

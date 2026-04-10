@@ -1897,6 +1897,44 @@ impl Daemon {
             self.bluetooth.disconnect();
         }
 
+        // Process BT paired-device refresh (on-demand only — never from passive sync)
+        let bt_refresh_paired = {
+            let mut s = self.shared_state.lock().unwrap();
+            let v = s.pending_bt_refresh_paired;
+            s.pending_bt_refresh_paired = false;
+            v
+        };
+        if bt_refresh_paired {
+            any_command = true;
+            match self.bluetooth.list_paired_devices_brief() {
+                Ok(list) => {
+                    let devices: Vec<web::PairedDeviceBrief> = list
+                        .into_iter()
+                        .map(|(name, mac)| web::PairedDeviceBrief { name, mac })
+                        .collect();
+                    info!("web: BT paired refresh found {} device(s)", devices.len());
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.paired_devices = devices;
+                }
+                Err(e) => log::warn!("web: BT paired refresh failed: {e}"),
+            }
+        }
+
+        // Process BT reset pairings (nuclear option: forget all paired devices)
+        let bt_reset = {
+            let mut s = self.shared_state.lock().unwrap();
+            let v = s.pending_bt_reset_pairings;
+            s.pending_bt_reset_pairings = false;
+            v
+        };
+        if bt_reset {
+            any_command = true;
+            match self.bluetooth.reset_all_pairings() {
+                Ok(n) => info!("web: BT reset pairings removed {n} device(s)"),
+                Err(e) => log::warn!("web: BT reset pairings failed: {e}"),
+            }
+        }
+
         // Process BT pair request — spawn in background thread so the main
         // epoch loop can keep processing D-Bus Agent1 passkey events.
         let bt_pair_mac = {

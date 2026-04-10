@@ -1196,6 +1196,67 @@ impl BtTether {
         Ok(())
     }
 
+    /// Remove ALL paired BT devices from BlueZ. Called via the "Reset all"
+    /// escape hatch in the web UI. Only devices with `paired == true` are
+    /// removed; unpaired discovered devices are left alone. Returns the
+    /// number of devices removed.
+    pub fn reset_all_pairings(&mut self) -> Result<usize, String> {
+        self.ensure_dbus()?;
+        #[cfg(target_os = "linux")]
+        {
+            let devices = self
+                .dbus
+                .as_ref()
+                .map(|d| d.list_all_devices().unwrap_or_default())
+                .unwrap_or_default();
+            let mut removed = 0;
+            for dev in &devices {
+                if !dev.paired {
+                    continue;
+                }
+                match self.dbus.as_ref().map(|d| d.remove_device(&dev.path)) {
+                    Some(Ok(())) => {
+                        log::info!("BT reset: removed {} ({})", dev.name, dev.mac);
+                        removed += 1;
+                    }
+                    Some(Err(e)) => {
+                        log::warn!("BT reset: failed to remove {}: {e}", dev.path);
+                    }
+                    None => {}
+                }
+            }
+            Ok(removed)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(0)
+        }
+    }
+
+    /// List all paired devices (name + MAC tuples). Used by the web UI for
+    /// the "Reset all" confirmation dialog. Returns plain tuples to avoid a
+    /// reverse import dependency on `crate::web`.
+    pub fn list_paired_devices_brief(&mut self) -> Result<Vec<(String, String)>, String> {
+        self.ensure_dbus()?;
+        #[cfg(target_os = "linux")]
+        {
+            let devices = self
+                .dbus
+                .as_ref()
+                .map(|d| d.list_all_devices().unwrap_or_default())
+                .unwrap_or_default();
+            Ok(devices
+                .into_iter()
+                .filter(|d| d.paired)
+                .map(|d| (d.name, d.mac))
+                .collect())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Ok(Vec::new())
+        }
+    }
+
     /// Scan for nearby BT devices (blocking, ~10s). Returns list of (MAC, name).
     pub fn scan_devices(&self) -> Vec<(String, String)> {
         Self::scan_devices_static()
