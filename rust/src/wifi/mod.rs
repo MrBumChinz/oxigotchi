@@ -822,6 +822,38 @@ impl WifiManager {
         }
     }
 
+    /// Lightweight pause: bring wlan0mon DOWN without deleting the interface.
+    /// Used to free the BCM43436B0's shared antenna for BT pairing without
+    /// tearing down the whole monitor mode stack. Pair with `resume_from_pause`.
+    pub fn pause_for_bt(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let (prog, args) = self.cmd.monitor_down();
+            run_cmd(prog, &args).map_err(|e| format!("wlan0mon down: {e}"))?;
+            info!("wifi: wlan0mon brought DOWN to free radio for BT");
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(())
+        }
+    }
+
+    /// Reverse of `pause_for_bt`: bring wlan0mon back UP.
+    pub fn resume_from_pause(&self) -> Result<(), String> {
+        #[cfg(unix)]
+        {
+            let (prog, args) = self.cmd.monitor_up();
+            run_cmd(prog, &args).map_err(|e| format!("wlan0mon up: {e}"))?;
+            info!("wifi: wlan0mon brought UP after BT pause");
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(())
+        }
+    }
+
     /// Hop to the next channel. On Unix, also issues the iw set channel command.
     pub fn hop_channel(&mut self) -> u8 {
         let ch = self.channel_config.next_channel();
