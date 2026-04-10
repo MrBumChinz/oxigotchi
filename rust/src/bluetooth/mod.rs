@@ -693,6 +693,65 @@ impl BtTether {
         self.connect_after_pair(device_path)
     }
 
+    /// Spawn a background thread that calls Pair() on a fresh D-Bus connection.
+    /// Returns immediately. Writes the result into `self.pair_thread_result`
+    /// once the pair call returns.
+    ///
+    /// This is intentionally split from the post-pair steps (trust, verify)
+    /// because:
+    /// 1. Pair() blocks for up to 90s waiting for Agent1 callbacks
+    /// 2. Those callbacks arrive on the MAIN D-Bus connection
+    /// 3. The main thread must keep pumping `process_dbus` while Pair blocks
+    /// 4. Post-pair steps (trust, read-back verify, bond flush wait) run on
+    ///    the main thread in the pair flow state machine.
+    ///
+    /// Unlike the old implementation, this does NOT treat `AlreadyExists`
+    /// as success. That error means BlueZ has a concurrent pair in flight,
+    /// not that the device is already bonded. On `AlreadyExists`, the thread
+    /// returns Ok to let the state machine poll `Paired=true` — if the
+    /// concurrent pair never completes, the wait will time out cleanly.
+    ///
+    /// Returns Ok(()) on successful thread spawn, Err on spawn failure
+    /// (propagated — no .expect() panics).
+    #[allow(dead_code)]
+    fn spawn_pair_thread(&self, device_path: String) -> Result<(), String> {
+        let result_slot = std::sync::Arc::clone(&self.pair_thread_result);
+        let path_for_thread = device_path.clone();
+        std::thread::Builder::new()
+            .name("bt-pair".into())
+            .spawn(move || {
+                let outcome = (|| -> Result<String, String> {
+                    #[cfg(target_os = "linux")]
+                    {
+                        let pair_dbus = dbus::DbusBluez::new()
+                            .map_err(|e| format!("pair thread D-Bus init: {e}"))?;
+                        log::info!("BT pair thread: calling Pair on {path_for_thread}");
+                        match pair_dbus.pair_device(&path_for_thread) {
+                            Ok(()) => {
+                                log::info!("BT pair thread: Pair returned Ok for {path_for_thread}");
+                                Ok(path_for_thread)
+                            }
+                            Err(e) if e.contains("Already Exists") => {
+                                log::info!(
+                                    "BT pair thread: AlreadyExists — state machine will wait for Paired=true"
+                                );
+                                Ok(path_for_thread)
+                            }
+                            Err(e) => Err(e),
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        Ok(path_for_thread)
+                    }
+                })();
+                let mut slot = result_slot.lock().unwrap();
+                *slot = Some(outcome);
+            })
+            .map_err(|e| format!("failed to spawn bt-pair thread: {e}"))?;
+        Ok(())
+    }
+
     /// Connect PAN after pair+trust completed. Waits for NAP UUID,
     /// then calls ConnectProfile with retry on PhoneBusy.
     pub fn connect_after_pair(&mut self, device_path: &str) -> Result<(), String> {
