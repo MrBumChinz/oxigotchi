@@ -298,7 +298,7 @@ impl Daemon {
         // Boot screen: centered face + centered welcome text below
         // Face: 120x66, centered horizontally: x = (250-120)/2 = 65
         self.screen.draw_bitmap(
-            display::faces::bitmap_for_face(&boot_face),
+            display::faces::builtin_bitmap(&boot_face),
             65,
             5,
             display::faces::FACE_WIDTH,

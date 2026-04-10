@@ -41,7 +41,7 @@ impl Screen {
     /// Draw a bull face sprite at (0, 16) — matches Python AO mode.
     /// Uses embedded 120x66 1-bit bitmap sprites from faces/eink/.
     pub fn draw_face(&mut self, face: &Face) {
-        let bitmap = faces::bitmap_for_face(face);
+        let bitmap = faces::builtin_bitmap(face);
         self.draw_bitmap(bitmap, 0, 16, faces::FACE_WIDTH, faces::FACE_HEIGHT);
     }
 

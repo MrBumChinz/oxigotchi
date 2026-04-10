@@ -125,6 +125,49 @@ impl FacePack {
     pub fn face_count(&self) -> usize {
         self.map.len()
     }
+
+    /// Load all `.raw` files from `cache_dir` into RAM. All-or-nothing:
+    /// any per-file error returns Err and does not partially populate the map.
+    pub fn load(name: &str, cache_dir: &Path) -> Result<Self, FacePackError> {
+        let entries = std::fs::read_dir(cache_dir)?;
+
+        let mut map = HashMap::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let extension = path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+            if extension.as_deref() != Some("raw") {
+                continue;
+            }
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            let face = match face_name_from_filename(stem) {
+                Some(f) => f,
+                None => continue,
+            };
+
+            let bytes = std::fs::read(&path)?;
+            if bytes.len() != RAW_FACE_SIZE {
+                return Err(FacePackError::BadRawSize(bytes.len()));
+            }
+            map.insert(face, bytes);
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            map,
+        })
+    }
+}
+
+/// Look up a face bitmap: pack first, falls back to built-in.
+/// Returns a borrowed slice — zero copy on both paths.
+pub fn bitmap_for_face(face: Face, pack: &FacePack) -> &[u8] {
+    pack.map
+        .get(&face)
+        .map(|v| v.as_slice())
+        .unwrap_or_else(|| crate::display::faces::builtin_bitmap(&face))
 }
 
 /// Decode a PNG file at `path` and convert to a 120x66 1-bit packed bitmap.
@@ -558,6 +601,80 @@ mod tests {
 
         let result = find_stale_png(&pack_dir, &cache_dir).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_facepack_load_empty_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&cache_dir).unwrap();
+
+        let pack = FacePack::load("mypack", &cache_dir).unwrap();
+        assert_eq!(pack.name, "mypack");
+        assert_eq!(pack.face_count(), 0);
+    }
+
+    #[test]
+    fn test_facepack_load_with_raw_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&cache_dir).unwrap();
+
+        let mut sample = vec![0u8; 990];
+        sample[0] = 0xAB;
+        std::fs::write(cache_dir.join("cool.raw"), &sample).unwrap();
+        std::fs::write(cache_dir.join("happy.raw"), &sample).unwrap();
+
+        let pack = FacePack::load("mypack", &cache_dir).unwrap();
+        assert_eq!(pack.face_count(), 2);
+        assert_eq!(pack.map.get(&Face::Cool).unwrap()[0], 0xAB);
+        assert_eq!(pack.map.get(&Face::Happy).unwrap()[0], 0xAB);
+    }
+
+    #[test]
+    fn test_facepack_load_rejects_wrong_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("cool.raw"), vec![0u8; 100]).unwrap();
+
+        let err = FacePack::load("mypack", &cache_dir).unwrap_err();
+        match err {
+            FacePackError::BadRawSize(100) => {}
+            _ => panic!("expected BadRawSize(100), got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_facepack_load_missing_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does_not_exist");
+
+        let err = FacePack::load("mypack", &missing).unwrap_err();
+        match err {
+            FacePackError::Io(_) | FacePackError::PackNotFound(_) => {}
+            _ => panic!("expected Io or PackNotFound, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_bitmap_for_face_pack_hit() {
+        let mut pack = FacePack::empty();
+        let mut sample = vec![0u8; 990];
+        sample[42] = 0xFE;
+        pack.map.insert(Face::Cool, sample.clone());
+
+        let result = bitmap_for_face(Face::Cool, &pack);
+        assert_eq!(result[42], 0xFE);
+        assert_eq!(result.len(), 990);
+    }
+
+    #[test]
+    fn test_bitmap_for_face_falls_back_to_builtin() {
+        let pack = FacePack::empty();
+        let result = bitmap_for_face(Face::Cool, &pack);
+        let builtin = crate::display::faces::builtin_bitmap(&Face::Cool);
+        assert_eq!(result.as_ptr(), builtin.as_ptr(), "fallback should return the static bitmap");
     }
 
     fn encode_test_png_gray(w: u32, h: u32, mut pixel: impl FnMut(u32, u32) -> u8) -> Vec<u8> {

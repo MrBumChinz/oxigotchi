@@ -43,8 +43,11 @@ static WIFI_DOWN: &[u8] = include_bytes!("../../faces/wifi_down.raw");
 static RAGING: &[u8] = include_bytes!("../../faces/raging.raw");
 static GRAZING: &[u8] = include_bytes!("../../faces/grazing.raw");
 
-/// Get the raw bitmap data for a face. Returns the 990-byte packed bitmap.
-pub fn bitmap_for_face(face: &Face) -> &'static [u8] {
+/// Get the raw bitmap data for a built-in face. Returns the 990-byte packed
+/// bitmap compiled into the binary. This is the fallback path used when a
+/// user-supplied face pack does not provide a bitmap for the requested face —
+/// see `display::face_pack::bitmap_for_face` for the pack-aware lookup.
+pub fn builtin_bitmap(face: &Face) -> &'static [u8] {
     match face {
         Face::Awake => AWAKE,
         Face::Happy => HAPPY,
@@ -82,7 +85,7 @@ mod tests {
     #[test]
     fn test_all_faces_have_correct_size() {
         for face in Face::all() {
-            let data = bitmap_for_face(&face);
+            let data = builtin_bitmap(&face);
             assert_eq!(
                 data.len(),
                 FACE_STRIDE * FACE_HEIGHT as usize,
@@ -95,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_awake_face_has_pixels() {
-        let data = bitmap_for_face(&Face::Awake);
+        let data = builtin_bitmap(&Face::Awake);
         let black_pixels: u32 = data.iter().map(|b| b.count_ones()).sum();
         assert!(
             black_pixels > 100,
@@ -105,8 +108,8 @@ mod tests {
 
     #[test]
     fn test_faces_are_different() {
-        let awake = bitmap_for_face(&Face::Awake);
-        let sleep = bitmap_for_face(&Face::Sleep);
+        let awake = builtin_bitmap(&Face::Awake);
+        let sleep = builtin_bitmap(&Face::Sleep);
         assert_ne!(
             awake, sleep,
             "different faces should have different bitmaps"
