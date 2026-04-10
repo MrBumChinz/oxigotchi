@@ -127,6 +127,124 @@ impl FacePack {
     }
 }
 
+/// Decode a PNG file at `path` and convert to a 120x66 1-bit packed bitmap.
+///
+/// Returns Err if the PNG is not exactly 120x66, has an unsupported format,
+/// or cannot be decoded.
+///
+/// Conversion:
+/// - L8 → use luma value directly
+/// - LA8 → use luma, ignore alpha
+/// - RGB8 → convert to luma via 0.299*R + 0.587*G + 0.114*B
+/// - RGBA8 → convert to luma, ignore alpha
+/// - Other formats → rejected
+///
+/// Threshold: pixel < 128 → black (bit=1), else white (bit=0).
+pub fn png_to_raw(path: &Path) -> Result<Vec<u8>, FacePackError> {
+    let file = std::fs::File::open(path)?;
+    let decoder = png::Decoder::new(file);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| FacePackError::Decode(e.to_string()))?;
+
+    let info = reader.info();
+    if info.width != 120 || info.height != 66 {
+        return Err(FacePackError::WrongSize {
+            width: info.width,
+            height: info.height,
+        });
+    }
+
+    let color_type = info.color_type;
+    let bit_depth = info.bit_depth;
+
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let frame = reader
+        .next_frame(&mut buf)
+        .map_err(|e| FacePackError::Decode(e.to_string()))?;
+    let data = &buf[..frame.buffer_size()];
+
+    let mut luma = vec![0u8; 120 * 66];
+
+    match (color_type, bit_depth) {
+        (png::ColorType::Grayscale, png::BitDepth::Eight) => {
+            luma.copy_from_slice(&data[..120 * 66]);
+        }
+        (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => {
+            for i in 0..(120 * 66) {
+                luma[i] = data[i * 2];
+            }
+        }
+        (png::ColorType::Rgb, png::BitDepth::Eight) => {
+            for i in 0..(120 * 66) {
+                let r = data[i * 3] as u32;
+                let g = data[i * 3 + 1] as u32;
+                let b = data[i * 3 + 2] as u32;
+                luma[i] = ((299 * r + 587 * g + 114 * b) / 1000) as u8;
+            }
+        }
+        (png::ColorType::Rgba, png::BitDepth::Eight) => {
+            for i in 0..(120 * 66) {
+                let r = data[i * 4] as u32;
+                let g = data[i * 4 + 1] as u32;
+                let b = data[i * 4 + 2] as u32;
+                luma[i] = ((299 * r + 587 * g + 114 * b) / 1000) as u8;
+            }
+        }
+        _ => {
+            return Err(FacePackError::UnsupportedFormat(format!(
+                "{:?} @ {:?}",
+                color_type, bit_depth
+            )));
+        }
+    }
+
+    // Pack to 1-bit MSB-first, row-major. 120 cols / 8 = 15 bytes per row.
+    let mut raw = vec![0u8; RAW_FACE_SIZE];
+    for y in 0..66 {
+        for x in 0..120 {
+            let pixel = luma[y * 120 + x];
+            if pixel < 128 {
+                let byte_idx = y * 15 + x / 8;
+                let bit_idx = 7 - (x % 8);
+                raw[byte_idx] |= 1 << bit_idx;
+            }
+        }
+    }
+
+    Ok(raw)
+}
+
+/// Atomically write `bytes` to `path`.
+///
+/// Sequence:
+/// 1. Write to `<path>.tmp` (truncating any existing temp)
+/// 2. Sync to disk (important on SD cards)
+/// 3. Rename to final path
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), FacePackError> {
+    use std::io::Write;
+
+    let tmp_path: PathBuf = {
+        let mut p = path.to_path_buf();
+        let mut name = p
+            .file_name()
+            .map(|s| s.to_os_string())
+            .unwrap_or_default();
+        name.push(".tmp");
+        p.set_file_name(name);
+        p
+    };
+
+    {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+
+    std::fs::rename(&tmp_path, path)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +303,82 @@ mod tests {
     fn test_raw_face_size_constant() {
         assert_eq!(RAW_FACE_SIZE, 990);
         assert_eq!((120 * 66) / 8, 990);
+    }
+
+    #[test]
+    fn test_png_to_raw_valid_120x66_grayscale() {
+        let png_bytes = encode_test_png_gray(120, 66, |_x, y| {
+            if y < 8 { 0 } else { 255 }
+        });
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &png_bytes).unwrap();
+
+        let raw = png_to_raw(tmp.path()).unwrap();
+        assert_eq!(raw.len(), 990);
+        // First 8 rows: 8 * 15 = 120 bytes of 0xFF
+        assert!(raw[..120].iter().all(|&b| b == 0xFF), "first 8 rows should be black");
+        assert!(raw[120..].iter().all(|&b| b == 0x00), "remaining rows should be white");
+    }
+
+    #[test]
+    fn test_png_to_raw_rejects_wrong_size() {
+        let png_bytes = encode_test_png_gray(100, 50, |_, _| 0);
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), &png_bytes).unwrap();
+
+        let err = png_to_raw(tmp.path()).unwrap_err();
+        match err {
+            FacePackError::WrongSize { width: 100, height: 50 } => {}
+            _ => panic!("expected WrongSize, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_png_to_raw_rejects_garbage() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), b"not a png").unwrap();
+
+        let err = png_to_raw(tmp.path()).unwrap_err();
+        match err {
+            FacePackError::Decode(_) => {}
+            _ => panic!("expected Decode error, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_write_atomic_creates_file() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let target = tmp_dir.path().join("test.raw");
+        write_atomic(&target, b"hello world").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"hello world");
+        assert!(!tmp_dir.path().join("test.raw.tmp").exists());
+    }
+
+    #[test]
+    fn test_write_atomic_overwrites() {
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let target = tmp_dir.path().join("test.raw");
+        std::fs::write(&target, b"old").unwrap();
+        write_atomic(&target, b"new").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    }
+
+    fn encode_test_png_gray(w: u32, h: u32, mut pixel: impl FnMut(u32, u32) -> u8) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut buf, w, h);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            let mut data = Vec::with_capacity((w * h) as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    data.push(pixel(x, y));
+                }
+            }
+            writer.write_image_data(&data).unwrap();
+        }
+        buf
     }
 }
