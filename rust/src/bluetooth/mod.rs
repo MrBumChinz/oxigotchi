@@ -39,6 +39,65 @@ pub enum BtState {
     Error,
 }
 
+/// State machine for the web-initiated pair+trust flow.
+/// Each state transitions to the next on an epoch tick after verification
+/// conditions are met. Spans multiple epochs because of the background
+/// pair thread and the post-pair property wait loops.
+#[derive(Debug, Clone)]
+pub enum PairFlowState {
+    /// No pair flow in progress.
+    Idle,
+    /// Scan is running; waiting for BlueZ to publish the Device1 object
+    /// for the requested MAC via ObjectManager. Prevents racing Pair()
+    /// against a stale/nonexistent path.
+    WaitingForDeviceObject {
+        path: String,
+        mac: String,
+        started: std::time::Instant,
+    },
+    /// D-Bus Pair() running in a background thread. The main thread polls
+    /// `pair_thread_result` each epoch until the thread reports done.
+    PairingInThread {
+        path: String,
+        started: std::time::Instant,
+    },
+    /// Background thread reported Pair() returned Ok. Main thread now polls
+    /// GetProperty(Paired) until it sees true or times out.
+    WaitingForPaired {
+        path: String,
+        started: std::time::Instant,
+    },
+    /// Paired=true confirmed. About to call trust_device on the main conn.
+    Trusting { path: String },
+    /// trust_device returned Ok. Main thread polls GetProperty(Trusted)
+    /// to verify the property was actually accepted.
+    WaitingForTrusted {
+        path: String,
+        started: std::time::Instant,
+    },
+    /// Trusted=true verified. Wait 2 seconds for BlueZ's debounced
+    /// store_device_info_cb to flush the bond to /var/lib/bluetooth/.
+    BondFlushGrace {
+        path: String,
+        started: std::time::Instant,
+    },
+    /// Pair flow complete. Caller will collect the result.
+    Complete { path: String },
+    /// Pair flow failed at some step.
+    Failed { error: String },
+}
+
+/// Result of a single tick of the pair flow state machine.
+#[derive(Debug, Clone)]
+pub enum PairFlowOutcome {
+    /// Still running — no state change to report.
+    InProgress,
+    /// Flow reached Complete. State was reset to Idle.
+    Done(String),
+    /// Flow reached Failed. State was reset to Idle.
+    Failed(String),
+}
+
 /// Configuration for Bluetooth tethering.
 #[derive(Debug, Clone)]
 pub struct BtConfig {
@@ -252,6 +311,10 @@ pub struct BtTether {
     pub user_disconnected: bool,
     /// Receiver for Agent1 pairing events (passkey display/confirmation).
     pub pairing_rx: Option<std::sync::mpsc::Receiver<dbus::PairingEvent>>,
+    /// State machine for the web pair flow. Persists across epochs.
+    pub pair_flow_state: PairFlowState,
+    /// Result handoff from the background pair thread to the state machine.
+    pub pair_thread_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
 }
 
 fn ip_is_routable(ip: &str) -> bool {
@@ -272,6 +335,8 @@ impl BtTether {
             dbus: None,
             user_disconnected: false,
             pairing_rx: None,
+            pair_flow_state: PairFlowState::Idle,
+            pair_thread_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -1471,5 +1536,29 @@ mod tests {
         let state = bt.check_status();
         assert_eq!(state, BtState::Disconnected, "zombie Connected+no-iface should become Disconnected");
         assert!(!bt.internet_available, "internet_available must clear with zombie state");
+    }
+}
+
+#[cfg(test)]
+mod pair_flow_prep_tests {
+    use super::*;
+
+    #[test]
+    fn new_bttether_has_no_dbus() {
+        let bt = BtTether::default();
+        assert!(bt.dbus.is_none());
+    }
+
+    #[test]
+    fn new_bttether_starts_in_idle_pair_flow_state() {
+        let bt = BtTether::default();
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
+    }
+
+    #[test]
+    fn new_bttether_has_empty_pair_thread_result() {
+        let bt = BtTether::default();
+        let slot = bt.pair_thread_result.lock().unwrap();
+        assert!(slot.is_none());
     }
 }
