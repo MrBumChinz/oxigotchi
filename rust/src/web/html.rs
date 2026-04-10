@@ -551,6 +551,7 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <button class="util-btn" id="bt-connect-btn" onclick="btTetherConnect()" style="display:none">Connect</button>
 <button class="util-btn util-btn-danger" id="bt-disconnect-btn" onclick="btTetherDisconnect()" style="display:none">Disconnect</button>
 </div>
+<button class="util-btn util-btn-danger" id="bt-reset-btn" onclick="resetAllBtPairings()" style="margin-top:6px">Reset all BT pairings</button>
 <div id="bt-device-list" style="margin-top:8px"></div>
 <div id="bt-passkey-area" style="display:none;margin-top:10px;padding:10px;background:#0a1628;border-radius:8px">
 <div style="color:#e0e0e0;font-size:12px">Confirm passkey matches your phone:</div>
@@ -1585,6 +1586,49 @@ function btDisconnect() {
 function btConfirmPasskey(c) {
     api('POST', '/api/bluetooth/confirm-passkey', {confirmed: c});
     document.getElementById('bt-passkey-area').style.display = 'none';
+}
+
+function resetAllBtPairings() {
+    // Two-step fetch: POST refresh triggers the daemon to scan BlueZ
+    // on demand, then after a short delay GET returns the cached list.
+    // This avoids any side effect from passive dashboard polling.
+    api('POST', '/api/bluetooth/refresh-paired').then(function(r) {
+        if (!r || !r.ok) {
+            toast('Could not refresh paired list');
+            return;
+        }
+        // Wait ~1.5s for the daemon to process the refresh in the next epoch.
+        setTimeout(function() {
+            fetch('/api/bluetooth/paired').then(function(r) { return r.json(); }).then(function(devices) {
+                if (!Array.isArray(devices) || devices.length === 0) {
+                    toast('No paired BT devices to reset');
+                    return;
+                }
+                var listText = devices.map(function(d) {
+                    return '\u2022 ' + d.name + ' (' + d.mac + ')';
+                }).join('\n');
+                var msg = 'This will forget ALL paired Bluetooth devices:\n\n' +
+                          listText + '\n\n' +
+                          'You will need to re-pair from scratch. Continue?';
+                if (!confirm(msg)) {
+                    return;
+                }
+                api('POST', '/api/bluetooth/reset-pairings').then(function(r2) {
+                    if (r2 && r2.ok) {
+                        toast('All BT pairings reset \u2014 re-pair when ready');
+                    } else {
+                        toast('Reset failed \u2014 check logs');
+                    }
+                });
+            }).catch(function() {
+                if (confirm('Could not read paired device list. Reset all pairings anyway?')) {
+                    api('POST', '/api/bluetooth/reset-pairings').then(function(r2) {
+                        if (r2 && r2.ok) toast('All BT pairings reset');
+                    });
+                }
+            });
+        }, 1500);
+    });
 }
 
 function renderBtDeviceList(devices) {
