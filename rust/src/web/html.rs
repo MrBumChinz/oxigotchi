@@ -447,7 +447,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 <div class="section-label" data-modes="rage bt">Loot</div>
 
 <!-- Whitelist -->
-<div class="card" id="card-whitelist" data-modes="rage">
+<div class="card" id="card-whitelist" data-modes="rage safe">
 <div class="card-title">Whitelist</div>
 <div class="sub">Networks and MACs excluded from attacks. Changes apply next epoch.</div>
 <div id="wl-list"><div style="color:#555;font-size:12px">Loading...</div></div>
@@ -459,7 +459,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 </div>
 
 <!-- 10. Captures (merged: stats + list + download) -->
-<div class="card" id="card-captures" data-modes="rage">
+<div class="card" id="card-captures" data-modes="rage safe">
 <div class="card-title">Trophies</div>
 <div class="status-grid" style="margin-bottom:8px">
 <div class="label">Total Files</div><div class="value" id="cap-total">-</div>
@@ -491,7 +491,7 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 </div>
 
 <!-- 11. WPA-SEC Upload -->
-<div class="card" id="card-wpasec" data-modes="rage">
+<div class="card" id="card-wpasec" data-modes="rage safe">
 <div class="card-title">WPA-SEC Upload</div>
 <div class="sub">Upload captured handshakes to wpa-sec.stanev.org for cloud cracking.</div>
 <div class="status-grid" style="margin-bottom:8px">
@@ -505,7 +505,7 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 </div>
 
 <!-- 12. Cracked passwords -->
-<div class="card" id="card-cracked" data-modes="rage">
+<div class="card" id="card-cracked" data-modes="rage safe">
 <div class="card-title">Milk</div>
 <div class="sub">Passwords milked from pwned cows.</div>
 <div id="cracked-list"><div style="color:#555;font-size:12px">No cracked passwords yet</div></div>
@@ -584,7 +584,7 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div class="section-label" data-modes="rage">Status</div>
 
 <!-- 16. Recovery status -->
-<div class="card" id="card-recovery" data-modes="rage">
+<div class="card" id="card-recovery" data-modes="rage safe">
 <div class="card-title">Recovery Status</div>
 <div class="sub">WiFi and firmware crash recovery tracking.</div>
 <div class="health-row" style="margin-bottom:8px">
