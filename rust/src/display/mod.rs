@@ -1,5 +1,6 @@
 pub mod buffer;
 pub mod driver;
+pub mod face_pack;
 pub mod faces;
 pub mod fonts;
 
