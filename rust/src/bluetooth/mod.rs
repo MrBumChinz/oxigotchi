@@ -752,6 +752,321 @@ impl BtTether {
         Ok(())
     }
 
+    /// Begin the pair+trust state machine for a user-provided MAC.
+    /// Validates the MAC, normalizes it to BlueZ's expected path format
+    /// (uppercase hex, underscores), ensures D-Bus + Agent are ready,
+    /// starts discovery (Pairable=true), and transitions state to
+    /// WaitingForDeviceObject. The tick function will poll ObjectManager
+    /// until BlueZ publishes the Device1 object, THEN spawn the Pair thread.
+    /// This avoids racing Pair() against a stale/missing device path.
+    ///
+    /// Returns Ok(()) if the flow started, Err with a user-facing message otherwise.
+    pub fn pair_and_trust_flow_start(&mut self, mac: &str) -> Result<(), String> {
+        if !matches!(self.pair_flow_state, PairFlowState::Idle) {
+            return Err("another pair flow is already in progress".into());
+        }
+
+        // Validate MAC shape: 6 octets of ASCII hex separated by colons.
+        let mac_upper = mac.to_uppercase();
+        let octets: Vec<&str> = mac_upper.split(':').collect();
+        if octets.len() != 6
+            || octets
+                .iter()
+                .any(|o| o.len() != 2 || !o.chars().all(|c| c.is_ascii_hexdigit()))
+        {
+            return Err(format!("invalid MAC: {mac}"));
+        }
+        let path = format!("/org/bluez/hci0/dev_{}", mac_upper.replace(':', "_"));
+
+        self.ensure_dbus()?;
+
+        // Start scan so BlueZ discovers the device and publishes its Device1
+        // object on D-Bus. Kept active through pair+trust+grace.
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(ref dbus) = self.dbus {
+                dbus.start_scan()?;
+            }
+        }
+
+        // Clear any stale thread result from previous flows.
+        {
+            let mut slot = self.pair_thread_result.lock().unwrap();
+            *slot = None;
+        }
+
+        self.pair_flow_state = PairFlowState::WaitingForDeviceObject {
+            path,
+            mac: mac_upper,
+            started: std::time::Instant::now(),
+        };
+        log::info!("BT pair flow: start, state=WaitingForDeviceObject");
+        Ok(())
+    }
+
+    /// Called each epoch from process_web_commands. Advances the pair flow
+    /// state machine one step. Returns `PairFlowOutcome::Done(path)` or
+    /// `PairFlowOutcome::Failed(err)` when the flow terminates, otherwise
+    /// `PairFlowOutcome::InProgress`.
+    ///
+    /// Note: each call advances by at most one state. A complete flow takes
+    /// roughly 7 epochs (WaitingForDeviceObject -> PairingInThread -> WaitingForPaired
+    /// -> Trusting -> WaitingForTrusted -> BondFlushGrace -> Complete).
+    /// Epochs run every few hundred ms, so visible latency is ~2 seconds once
+    /// Pair() returns.
+    pub fn pair_and_trust_flow_tick(&mut self) -> PairFlowOutcome {
+        // Take the current state out so we can rebuild it without fighting the borrow checker.
+        let state = std::mem::replace(&mut self.pair_flow_state, PairFlowState::Idle);
+        match state {
+            PairFlowState::Idle => PairFlowOutcome::InProgress,
+
+            PairFlowState::WaitingForDeviceObject { path, mac, started } => {
+                // Poll ObjectManager until the Device1 path exists.
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref dbus) = self.dbus {
+                        dbus.process_messages(std::time::Duration::from_millis(50));
+                    }
+                    let device_present = self
+                        .dbus
+                        .as_ref()
+                        .map(|d| {
+                            d.list_all_devices()
+                                .map(|devs| devs.iter().any(|x| x.path == path))
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                    if device_present {
+                        log::info!("BT pair flow: device object present, spawning pair thread");
+                        if let Err(e) = self.spawn_pair_thread(path.clone()) {
+                            log::warn!("BT pair flow: spawn failed: {e}");
+                            self.pair_flow_state = PairFlowState::Failed { error: e };
+                            return PairFlowOutcome::InProgress;
+                        }
+                        self.pair_flow_state = PairFlowState::PairingInThread {
+                            path,
+                            started: std::time::Instant::now(),
+                        };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    if started.elapsed() > std::time::Duration::from_secs(10) {
+                        log::warn!("BT pair flow: device {mac} not found after 10s scan");
+                        self.pair_flow_state = PairFlowState::Failed {
+                            error: format!("device {mac} did not appear in scan (10s)"),
+                        };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    self.pair_flow_state = PairFlowState::WaitingForDeviceObject { path, mac, started };
+                    PairFlowOutcome::InProgress
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    // Stub path: skip waiting, spawn thread immediately.
+                    let _ = mac;
+                    let _ = started;
+                    if let Err(e) = self.spawn_pair_thread(path.clone()) {
+                        self.pair_flow_state = PairFlowState::Failed { error: e };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    self.pair_flow_state = PairFlowState::PairingInThread {
+                        path,
+                        started: std::time::Instant::now(),
+                    };
+                    PairFlowOutcome::InProgress
+                }
+            }
+
+            PairFlowState::PairingInThread { path, started } => {
+                let result_opt = {
+                    let mut slot = self.pair_thread_result.lock().unwrap();
+                    slot.take()
+                };
+                match result_opt {
+                    None => {
+                        // Thread still running. Timeout after 120s as a safety net.
+                        if started.elapsed() > std::time::Duration::from_secs(120) {
+                            log::warn!("BT pair flow: pair thread timed out after 120s");
+                            self.pair_flow_state = PairFlowState::Failed {
+                                error: "pair thread timed out".into(),
+                            };
+                        } else {
+                            self.pair_flow_state = PairFlowState::PairingInThread { path, started };
+                        }
+                        PairFlowOutcome::InProgress
+                    }
+                    Some(Ok(_returned_path)) => {
+                        log::info!("BT pair flow: pair thread returned Ok, state=WaitingForPaired");
+                        self.pair_flow_state = PairFlowState::WaitingForPaired {
+                            path,
+                            started: std::time::Instant::now(),
+                        };
+                        PairFlowOutcome::InProgress
+                    }
+                    Some(Err(e)) => {
+                        log::warn!("BT pair flow: pair thread failed: {e}");
+                        self.pair_flow_state = PairFlowState::Failed { error: e };
+                        PairFlowOutcome::InProgress
+                    }
+                }
+            }
+
+            PairFlowState::WaitingForPaired { path, started } => {
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref dbus) = self.dbus {
+                        dbus.process_messages(std::time::Duration::from_millis(50));
+                    }
+                    let paired_ok = self
+                        .dbus
+                        .as_ref()
+                        .map(|d| d.get_device_property_bool(&path, "Paired").unwrap_or(false))
+                        .unwrap_or(false);
+                    if paired_ok {
+                        log::info!("BT pair flow: Paired=true confirmed, state=Trusting");
+                        self.pair_flow_state = PairFlowState::Trusting { path };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    if started.elapsed() > std::time::Duration::from_secs(30) {
+                        log::warn!("BT pair flow: wait_for_paired timed out (30s)");
+                        self.pair_flow_state = PairFlowState::Failed {
+                            error: "pair did not complete within 30s".into(),
+                        };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    self.pair_flow_state = PairFlowState::WaitingForPaired { path, started };
+                    PairFlowOutcome::InProgress
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = started;
+                    self.pair_flow_state = PairFlowState::Trusting { path };
+                    PairFlowOutcome::InProgress
+                }
+            }
+
+            PairFlowState::Trusting { path } => {
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref dbus) = self.dbus {
+                        match dbus.trust_device(&path) {
+                            Ok(()) => {
+                                log::info!("BT pair flow: trust_device Ok, state=WaitingForTrusted");
+                                self.pair_flow_state = PairFlowState::WaitingForTrusted {
+                                    path,
+                                    started: std::time::Instant::now(),
+                                };
+                            }
+                            Err(e) => {
+                                log::warn!("BT pair flow: trust_device failed: {e}");
+                                self.pair_flow_state = PairFlowState::Failed { error: e };
+                            }
+                        }
+                    } else {
+                        // self.dbus is None — cannot trust. Fail cleanly instead
+                        // of silently dropping back to Idle (which would happen
+                        // because mem::replace already took the state).
+                        log::warn!("BT pair flow: trust_device called with no D-Bus connection");
+                        self.pair_flow_state = PairFlowState::Failed {
+                            error: "no D-Bus connection available for trust".into(),
+                        };
+                    }
+                    PairFlowOutcome::InProgress
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    self.pair_flow_state = PairFlowState::WaitingForTrusted {
+                        path,
+                        started: std::time::Instant::now(),
+                    };
+                    PairFlowOutcome::InProgress
+                }
+            }
+
+            PairFlowState::WaitingForTrusted { path, started } => {
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref dbus) = self.dbus {
+                        dbus.process_messages(std::time::Duration::from_millis(50));
+                    }
+                    let trusted_ok = self
+                        .dbus
+                        .as_ref()
+                        .map(|d| d.get_device_property_bool(&path, "Trusted").unwrap_or(false))
+                        .unwrap_or(false);
+                    if trusted_ok {
+                        log::info!("BT pair flow: Trusted=true confirmed, state=BondFlushGrace");
+                        self.pair_flow_state = PairFlowState::BondFlushGrace {
+                            path,
+                            started: std::time::Instant::now(),
+                        };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    if started.elapsed() > std::time::Duration::from_secs(5) {
+                        log::warn!("BT pair flow: wait_for_trusted timed out (5s)");
+                        self.pair_flow_state = PairFlowState::Failed {
+                            error: "trust did not persist within 5s".into(),
+                        };
+                        return PairFlowOutcome::InProgress;
+                    }
+                    self.pair_flow_state = PairFlowState::WaitingForTrusted { path, started };
+                    PairFlowOutcome::InProgress
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = started;
+                    self.pair_flow_state = PairFlowState::BondFlushGrace {
+                        path,
+                        started: std::time::Instant::now(),
+                    };
+                    PairFlowOutcome::InProgress
+                }
+            }
+
+            PairFlowState::BondFlushGrace { path, started } => {
+                if started.elapsed() >= std::time::Duration::from_secs(2) {
+                    log::info!("BT pair flow: bond flush grace complete, state=Complete");
+                    // Stop the scan now that the bond is safely on disk.
+                    #[cfg(target_os = "linux")]
+                    {
+                        if let Some(ref dbus) = self.dbus {
+                            let _ = dbus.stop_scan();
+                        }
+                    }
+                    self.pair_flow_state = PairFlowState::Complete { path };
+                    PairFlowOutcome::InProgress
+                } else {
+                    // Pump D-Bus during the grace period too.
+                    #[cfg(target_os = "linux")]
+                    {
+                        if let Some(ref dbus) = self.dbus {
+                            dbus.process_messages(std::time::Duration::from_millis(50));
+                        }
+                    }
+                    self.pair_flow_state = PairFlowState::BondFlushGrace { path, started };
+                    PairFlowOutcome::InProgress
+                }
+            }
+
+            PairFlowState::Complete { path } => {
+                // Caller picks up the result. Reset state to Idle.
+                self.pair_flow_state = PairFlowState::Idle;
+                PairFlowOutcome::Done(path)
+            }
+
+            PairFlowState::Failed { error } => {
+                // Stop the scan if it was running, so the adapter returns to normal.
+                #[cfg(target_os = "linux")]
+                {
+                    if let Some(ref dbus) = self.dbus {
+                        let _ = dbus.stop_scan();
+                    }
+                }
+                self.pair_flow_state = PairFlowState::Idle;
+                PairFlowOutcome::Failed(error)
+            }
+        }
+    }
+
     /// Connect PAN after pair+trust completed. Waits for NAP UUID,
     /// then calls ConnectProfile with retry on PhoneBusy.
     pub fn connect_after_pair(&mut self, device_path: &str) -> Result<(), String> {
@@ -1619,5 +1934,125 @@ mod pair_flow_prep_tests {
         let bt = BtTether::default();
         let slot = bt.pair_thread_result.lock().unwrap();
         assert!(slot.is_none());
+    }
+}
+
+#[cfg(test)]
+mod pair_flow_state_machine_tests {
+    use super::*;
+
+    #[test]
+    fn pair_flow_idle_tick_returns_in_progress() {
+        let mut bt = BtTether::default();
+        let outcome = bt.pair_and_trust_flow_tick();
+        assert!(matches!(outcome, PairFlowOutcome::InProgress));
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
+    }
+
+    #[test]
+    fn pair_flow_start_rejects_invalid_mac() {
+        let mut bt = BtTether::default();
+        assert!(bt.pair_and_trust_flow_start("not-a-mac").is_err());
+        assert!(bt.pair_and_trust_flow_start("AA:BB").is_err());
+        assert!(bt.pair_and_trust_flow_start("ZZ:BB:CC:DD:EE:FF").is_err());
+        // State must remain Idle on validation failure.
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
+    }
+
+    #[test]
+    fn pair_flow_pairing_in_thread_timeout_transitions_to_failed() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::PairingInThread {
+            path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF".into(),
+            started: std::time::Instant::now() - std::time::Duration::from_secs(121),
+        };
+        let _ = bt.pair_and_trust_flow_tick();
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Failed { .. }));
+    }
+
+    #[test]
+    fn pair_flow_complete_returns_done_and_resets_to_idle() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::Complete {
+            path: "/org/bluez/hci0/dev_AA".into(),
+        };
+        let outcome = bt.pair_and_trust_flow_tick();
+        match outcome {
+            PairFlowOutcome::Done(p) => assert_eq!(p, "/org/bluez/hci0/dev_AA"),
+            _ => panic!("expected Done"),
+        }
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
+    }
+
+    #[test]
+    fn pair_flow_failed_returns_failed_and_resets_to_idle() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::Failed {
+            error: "boom".into(),
+        };
+        let outcome = bt.pair_and_trust_flow_tick();
+        match outcome {
+            PairFlowOutcome::Failed(e) => assert_eq!(e, "boom"),
+            _ => panic!("expected Failed"),
+        }
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
+    }
+
+    #[test]
+    fn pair_flow_pairing_in_thread_ok_result_transitions_to_waiting_paired() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::PairingInThread {
+            path: "/org/bluez/hci0/dev_AA".into(),
+            started: std::time::Instant::now(),
+        };
+        {
+            let mut slot = bt.pair_thread_result.lock().unwrap();
+            *slot = Some(Ok("dummy".into()));
+        }
+        let _ = bt.pair_and_trust_flow_tick();
+        assert!(matches!(bt.pair_flow_state, PairFlowState::WaitingForPaired { .. }));
+    }
+
+    #[test]
+    fn pair_flow_start_rejects_when_already_running() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::PairingInThread {
+            path: "/org/bluez/hci0/dev_AA".into(),
+            started: std::time::Instant::now(),
+        };
+        assert!(bt.pair_and_trust_flow_start("AA:BB:CC:DD:EE:FF").is_err());
+    }
+
+    #[test]
+    fn pair_flow_waiting_for_device_object_timeout_transitions_to_failed() {
+        let mut bt = BtTether::default();
+        bt.pair_flow_state = PairFlowState::WaitingForDeviceObject {
+            path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF".into(),
+            mac: "AA:BB:CC:DD:EE:FF".into(),
+            started: std::time::Instant::now() - std::time::Duration::from_secs(11),
+        };
+        let _ = bt.pair_and_trust_flow_tick();
+        // On non-Linux stub, this immediately spawns the pair thread and
+        // transitions to PairingInThread. On Linux without dbus available,
+        // it times out and transitions to Failed. Either is acceptable.
+        assert!(matches!(
+            bt.pair_flow_state,
+            PairFlowState::Failed { .. } | PairFlowState::PairingInThread { .. }
+        ));
+    }
+
+    #[test]
+    fn pair_flow_trusting_without_dbus_transitions_to_failed() {
+        let mut bt = BtTether::default();
+        // dbus is None by default; the Trusting arm must fail cleanly
+        // rather than silently dropping back to Idle.
+        bt.pair_flow_state = PairFlowState::Trusting {
+            path: "/org/bluez/hci0/dev_AA".into(),
+        };
+        let _ = bt.pair_and_trust_flow_tick();
+        #[cfg(target_os = "linux")]
+        assert!(matches!(bt.pair_flow_state, PairFlowState::Failed { .. }));
+        #[cfg(not(target_os = "linux"))]
+        assert!(matches!(bt.pair_flow_state, PairFlowState::WaitingForTrusted { .. }));
     }
 }
