@@ -282,10 +282,35 @@ impl BtTether {
 
     /// Ensure D-Bus + Agent1 are initialized (ignores config.enabled).
     /// Used by web pair requests that need D-Bus even when auto-tether is off.
+    /// If a previous D-Bus connection exists but bluetoothd has restarted,
+    /// tear down and re-initialize (re-registers Agent1). Note: pairing_rx
+    /// is replaced on restart; any in-flight Agent1 events from the dead
+    /// channel are lost by design.
     pub fn ensure_dbus(&mut self) -> Result<(), String> {
+        // Health check: if we already have a connection, verify bluez is still reachable.
+        // If not (bluetoothd restarted), drop it so we re-init below.
         if self.dbus.is_some() {
-            return Ok(());
+            #[cfg(target_os = "linux")]
+            {
+                let alive = self
+                    .dbus
+                    .as_ref()
+                    .map(|d| d.is_bus_alive())
+                    .unwrap_or(false);
+                if !alive {
+                    warn!("BT: bluetoothd restart detected, re-initializing D-Bus");
+                    self.dbus = None;
+                    self.pairing_rx = None;
+                } else {
+                    return Ok(());
+                }
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                return Ok(());
+            }
         }
+
         match dbus::DbusBluez::new() {
             Ok(conn) => {
                 self.dbus = Some(conn);
@@ -296,7 +321,6 @@ impl BtTether {
                 return Err(e);
             }
         }
-        // Register Agent1 for pairing
         if let Some(ref dbus) = self.dbus {
             if let Err(e) = dbus.register_agent() {
                 warn!("BT: Agent1 registration failed: {e}");
