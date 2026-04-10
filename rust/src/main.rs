@@ -1909,80 +1909,47 @@ impl Daemon {
         };
         if let Some(mac) = bt_pair_mac {
             any_command = true;
-            // Ensure main D-Bus + Agent1 are ready (for passkey callbacks)
-            if let Err(e) = self.bluetooth.ensure_dbus() {
-                log::warn!("web: BT D-Bus init failed before pair: {e}");
-            }
-            let path = format!("/org/bluez/hci0/dev_{}", mac.replace(':', "_"));
-            let shared = Arc::clone(&self.shared_state);
-            {
-                let mut s = shared.lock().unwrap();
-                s.bt_pair_in_progress = true;
-                s.bt_pair_result = None;
-            }
-            info!("web: BT pair+trust spawning background thread for {mac}");
-            let path_clone = path.clone();
-            match std::thread::Builder::new()
-                .name("bt-pair".into())
-                .spawn(move || {
-                    // Create a separate D-Bus connection just for the blocking Pair call.
-                    // Agent1 callbacks still arrive on the main connection.
-                    let result = (|| -> Result<String, String> {
-                        #[cfg(target_os = "linux")]
-                        {
-                            let pair_dbus = bluetooth::dbus::DbusBluez::new()
-                                .map_err(|e| format!("pair thread D-Bus init: {e}"))?;
-                            log::info!("BT pair thread: calling Pair on {path_clone}");
-                            match pair_dbus.pair_device(&path_clone) {
-                                Ok(()) => {}
-                                Err(e) if e.contains("Already Exists") => {
-                                    log::info!("BT pair thread: already paired, skipping to trust");
-                                }
-                                Err(e) => return Err(e),
-                            }
-                            pair_dbus.trust_device(&path_clone)?;
-                            log::info!("BT pair thread: pair+trust complete for {path_clone}");
-                            Ok(path_clone)
-                        }
-                        #[cfg(not(target_os = "linux"))]
-                        {
-                            // Stub for non-Linux
-                            Ok(path_clone)
-                        }
-                    })();
-                    let mut s = shared.lock().unwrap();
-                    s.bt_pair_in_progress = false;
-                    s.bt_pair_result = Some(result);
-                }) {
-                Ok(_handle) => {}
+            info!("web: BT pair flow starting for {mac}");
+            match self.bluetooth.pair_and_trust_flow_start(&mac) {
+                Ok(()) => {
+                    let mut s = self.shared_state.lock().unwrap();
+                    s.bt_pair_in_progress = true;
+                    s.bt_pair_result = None;
+                }
                 Err(e) => {
-                    log::error!("failed to spawn bt-pair thread: {e}");
+                    log::warn!("web: BT pair flow start failed: {e}");
                     let mut s = self.shared_state.lock().unwrap();
                     s.bt_pair_in_progress = false;
-                    s.bt_pair_result = Some(Err(format!("thread spawn failed: {e}")));
+                    s.bt_pair_result = Some(Err(e));
                 }
             }
         }
 
-        // Check for completed background pair+trust and run connect_pan on main thread
-        let pair_result = {
-            let mut s = self.shared_state.lock().unwrap();
-            s.bt_pair_result.take()
-        };
-        if let Some(result) = pair_result {
-            any_command = true;
-            match result {
-                Ok(device_path) => {
-                    info!("web: BT pair+trust completed, connecting PAN to {device_path}");
-                    match self.bluetooth.connect_after_pair(&device_path) {
-                        Ok(()) => info!("web: BT paired+connected to {device_path}"),
-                        Err(e) => log::warn!("web: BT PAN connect failed: {e}"),
-                    }
+        // Advance the BT pair flow state machine. Returns Done/Failed only when
+        // the flow terminates; InProgress while still running or Idle.
+        let pair_outcome = self.bluetooth.pair_and_trust_flow_tick();
+        match pair_outcome {
+            bluetooth::PairFlowOutcome::Done(device_path) => {
+                any_command = true;
+                info!("web: BT pair+trust completed, connecting PAN to {device_path}");
+                match self.bluetooth.connect_after_pair(&device_path) {
+                    Ok(()) => info!("web: BT paired+connected to {device_path}"),
+                    Err(e) => log::warn!("web: BT PAN connect failed: {e}"),
                 }
-                Err(e) => {
-                    log::warn!("web: BT pair failed: {e}");
-                    self.bluetooth.state = bluetooth::BtState::Error;
-                }
+                let mut s = self.shared_state.lock().unwrap();
+                s.bt_pair_in_progress = false;
+                s.bt_pair_result = Some(Ok(device_path));
+            }
+            bluetooth::PairFlowOutcome::Failed(e) => {
+                any_command = true;
+                log::warn!("web: BT pair failed: {e}");
+                self.bluetooth.state = bluetooth::BtState::Error;
+                let mut s = self.shared_state.lock().unwrap();
+                s.bt_pair_in_progress = false;
+                s.bt_pair_result = Some(Err(e));
+            }
+            bluetooth::PairFlowOutcome::InProgress => {
+                // Nothing to do this epoch.
             }
         }
 
