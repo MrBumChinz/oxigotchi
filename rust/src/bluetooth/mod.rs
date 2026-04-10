@@ -400,6 +400,15 @@ impl BtTether {
         #[cfg(unix)]
         {
             let _ = run_bluetoothctl(&["power".into(), "on".into()]);
+            // Reduce BT page timeout from the default 5120ms to 1280ms.
+            // BlueZ pages a device up to ~9 times when establishing an
+            // ACL connection during Pair(); with the default, 9 retries
+            // take ~46 seconds before the phone's RequestConfirmation
+            // even appears. 1280ms cuts this to roughly ~12s and makes
+            // web UI pairing feel responsive.
+            let _ = std::process::Command::new("hciconfig")
+                .args(["hci0", "pageto", "2048"])
+                .output();
         }
         if self.state == BtState::Off {
             self.state = BtState::Disconnected;
