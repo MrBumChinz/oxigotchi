@@ -1070,6 +1070,20 @@ pub struct FacePackInfo {
     pub converting: usize,
 }
 
+/// Request body for POST /api/face_packs.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FacePackSelect {
+    pub pack: String,
+}
+
+/// Response for GET /api/face_packs.
+#[derive(Debug, Clone, Serialize)]
+pub struct FacePacksResponse {
+    pub active: String,
+    pub packs: Vec<FacePackInfo>,
+    pub last_error: Option<String>,
+}
+
 /// Bluetooth info returned by /api/bluetooth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BluetoothInfo {
@@ -1357,6 +1371,7 @@ pub const API_BT_FORGET: &str = "/api/bluetooth/forget";
 pub const API_BT_DISCONNECT: &str = "/api/bluetooth/disconnect";
 pub const API_BT_CONFIRM_PASSKEY: &str = "/api/bluetooth/confirm-passkey";
 pub const API_INTERACT: &str = "/api/interact";
+pub const API_FACE_PACKS: &str = "/api/face_packs";
 
 // ---------------------------------------------------------------------------
 // StatusParams helper (used by main.rs to build StatusResponse)
@@ -2085,6 +2100,29 @@ async fn shutdown_handler(State(state): State<SharedState>) -> Json<ActionRespon
     Json(ActionResponse {
         ok: true,
         message: "System shutdown queued".into(),
+    })
+}
+
+/// GET /api/face_packs -> list packs with conversion status
+async fn face_packs_get_handler(State(state): State<SharedState>) -> Json<FacePacksResponse> {
+    let s = state.lock().unwrap();
+    Json(FacePacksResponse {
+        active: s.active_face_pack.clone(),
+        packs: s.face_packs.clone(),
+        last_error: s.face_pack_last_error.clone(),
+    })
+}
+
+/// POST /api/face_packs -> select active pack. Body: {"pack": "name"}
+async fn face_packs_post_handler(
+    State(state): State<SharedState>,
+    Json(body): Json<FacePackSelect>,
+) -> Json<ActionResponse> {
+    let mut s = state.lock().unwrap();
+    s.pending_face_pack = Some(body.pack.clone());
+    Json(ActionResponse {
+        ok: true,
+        message: format!("face pack '{}' queued", body.pack),
     })
 }
 
@@ -2966,6 +3004,10 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
         .route(API_BT_CAPTURES, get(bt_captures_handler))
         .route(API_BT_PATCHRAM, get(bt_patchram_handler))
         .route(API_INTERACT, get(interact_status_handler).post(interact_handler))
+        .route(
+            API_FACE_PACKS,
+            get(face_packs_get_handler).post(face_packs_post_handler),
+        )
         .with_state(app)
 }
 

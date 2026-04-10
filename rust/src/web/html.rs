@@ -699,6 +699,15 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div style="display:flex;justify-content:space-between;font-size:10px;color:#555"><span>10 (less ghosting)</span><span>500 (less flicker)</span></div>
 </div>
 
+<div class="card-section" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
+<div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px">Face Pack</div>
+<select id="face-pack-select" onchange="setFacePack(this.value)" style="width:100%;padding:6px;background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:4px">
+<option value="default">default (built-in)</option>
+</select>
+<div id="face-pack-status" style="font-size:11px;color:#888;margin-top:4px">&mdash;</div>
+<div style="font-size:11px;color:#888;margin-top:8px">Drop 120&times;66 PNG files into <code>/home/pi/face_packs/&lt;name&gt;/</code> via SCP.</div>
+</div>
+
 <div style="margin-top:12px">
 <button class="wl-btn wl-btn-add" onclick="saveSettings()" style="width:100%">Save Settings</button>
 </div>
@@ -1214,6 +1223,45 @@ function refreshDiscord() {
         document.getElementById('discord-status').style.color = d.enabled ? '#00d4aa' : '#888';
         document.getElementById('discord-toggle').checked = d.enabled;
     });
+}
+
+function refreshFacePacks() {
+    fetch('/api/face_packs').then(function(r) { return r.json(); }).then(updateFacePackUI).catch(function() {});
+}
+
+function setFacePack(name) {
+    api('POST', '/api/face_packs', {pack: name}).then(function(r) {
+        if (r && r.ok) toast('Face pack: ' + name);
+    });
+}
+
+function updateFacePackUI(data) {
+    if (!data) return;
+    var sel = document.getElementById('face-pack-select');
+    var status = document.getElementById('face-pack-status');
+    if (!sel || !status) return;
+
+    var currentValue = data.active || 'default';
+    sel.innerHTML = '';
+    data.packs.forEach(function(p) {
+        var opt = document.createElement('option');
+        opt.value = p.name;
+        var suffix = p.is_default ? ' (built-in)' : ' (' + p.face_count + '/26)';
+        if (p.converting > 0) {
+            suffix += ' +' + p.converting + ' pending';
+        }
+        opt.textContent = p.name + suffix;
+        if (p.name === currentValue) opt.selected = true;
+        sel.appendChild(opt);
+    });
+
+    if (data.last_error) {
+        status.textContent = 'Error: ' + data.last_error;
+        status.style.color = '#ff6b6b';
+    } else {
+        status.textContent = data.packs.length + ' pack(s) detected';
+        status.style.color = '#888';
+    }
 }
 
 // --- Action functions ---
@@ -2317,6 +2365,7 @@ function startPolling() {
     _pollTimers.push(setInterval(refreshBtDevices, 10000));
     _pollTimers.push(setInterval(refreshBtAttacks, 15000));
     _pollTimers.push(setInterval(refreshBtPatchram, 30000));
+    _pollTimers.push(setInterval(refreshFacePacks, 30000));
 }
 
 function stopPolling() {
@@ -2390,6 +2439,7 @@ setTimeout(refreshDiscord, 7500);
 setTimeout(refreshBtDevices, 8000);
 setTimeout(refreshBtAttacks, 8500);
 setTimeout(refreshBtPatchram, 9000);
+setTimeout(refreshFacePacks, 9500);
 
 // Start polling as initial strategy; WS will take over once connected
 startPolling();

@@ -48,6 +48,59 @@ fn ensure_tmpfs_capture_dir() -> String {
     dir.to_string_lossy().to_string()
 }
 
+/// Build a FacePackInfo list by scanning the face_packs directory.
+/// Used by sync_to_web to populate the dashboard's pack listing.
+fn list_face_packs(
+    root: &std::path::Path,
+    cache_root: &std::path::Path,
+) -> Vec<web::FacePackInfo> {
+    let mut infos = vec![web::FacePackInfo {
+        name: "default".to_string(),
+        is_default: true,
+        face_count: 26,
+        converting: 0,
+    }];
+    let pack_names = match display::face_pack::discover_packs(root) {
+        Ok(p) => p,
+        Err(_) => return infos,
+    };
+    for name in pack_names {
+        let cache_dir = cache_root.join(&name);
+        let mut face_count = 0;
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("raw") {
+                    face_count += 1;
+                }
+            }
+        }
+        let mut converting = 0;
+        let pack_dir = root.join(&name);
+        if let Ok(entries) = std::fs::read_dir(&pack_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("png") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        if display::face_pack::face_name_from_filename(stem).is_some() {
+                            let raw_path = cache_dir.join(format!("{}.raw", stem.to_lowercase()));
+                            if !raw_path.exists() {
+                                converting += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        infos.push(web::FacePackInfo {
+            name,
+            is_default: false,
+            face_count,
+            converting,
+        });
+    }
+    infos
+}
+
 /// Default attack rate. All rates (1-3) stable with v6 firmware patch.
 const ATTACK_RATE: u32 = 1;
 /// Default capture directory.
@@ -3054,6 +3107,13 @@ impl Daemon {
         s.wpasec_api_key = self.wpasec_config.api_key.clone();
         s.discord_webhook_url = self.discord_webhook_url.clone();
         s.discord_enabled = self.discord_enabled;
+
+        // Sync face pack listing for web dashboard
+        let root = std::path::Path::new(display::face_pack::FACE_PACK_DIR);
+        let cache_root = std::path::Path::new(display::face_pack::FACE_PACK_CACHE);
+        s.face_packs = list_face_packs(root, cache_root);
+        s.active_face_pack = self.active_pack.name.clone();
+        s.face_pack_last_error = self.face_pack_last_error.clone();
     }
 
     /// Check for pending display settings changes and apply immediately.
