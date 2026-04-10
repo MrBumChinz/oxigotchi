@@ -245,6 +245,109 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), FacePackError> {
     Ok(())
 }
 
+/// Validate a pack name: 1-32 chars, ASCII alphanumeric or `_` `-` only,
+/// not reserved (`default`, anything starting with `.`).
+pub fn validate_pack_name(name: &str) -> Result<(), FacePackError> {
+    if name.is_empty() || name.len() > 32 {
+        return Err(FacePackError::InvalidPackName(name.to_string()));
+    }
+    if name == "default" {
+        return Err(FacePackError::InvalidPackName(format!("{name} (reserved)")));
+    }
+    if name.starts_with('.') {
+        return Err(FacePackError::InvalidPackName(format!("{name} (hidden)")));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(FacePackError::InvalidPackName(name.to_string()));
+    }
+    Ok(())
+}
+
+/// Discover all valid pack directories under `root`.
+/// Returns pack names (not full paths). Caps at MAX_PACKS.
+pub fn discover_packs(root: &Path) -> Result<Vec<String>, FacePackError> {
+    let mut packs = Vec::new();
+    let entries = match std::fs::read_dir(root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(packs),
+        Err(e) => return Err(FacePackError::Io(e)),
+    };
+
+    for entry in entries.flatten() {
+        if packs.len() >= MAX_PACKS {
+            log::warn!("face_pack: hit MAX_PACKS limit ({MAX_PACKS}), skipping rest");
+            break;
+        }
+        let file_type = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = match entry.file_name().into_string() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if validate_pack_name(&name).is_err() {
+            continue;
+        }
+        packs.push(name);
+    }
+    Ok(packs)
+}
+
+/// Find one PNG in `pack_dir` that needs conversion (no cached .raw or stale mtime).
+/// Returns (png_path, raw_path) for the first stale file found, or None.
+/// Unknown face filenames are silently skipped (logged).
+pub fn find_stale_png(
+    pack_dir: &Path,
+    cache_dir: &Path,
+) -> Result<Option<(PathBuf, PathBuf)>, FacePackError> {
+    let entries = match std::fs::read_dir(pack_dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(FacePackError::Io(e)),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let extension = path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase());
+        if extension.as_deref() != Some("png") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        if face_name_from_filename(stem).is_none() {
+            log::warn!(
+                "face_pack: unknown face name '{}' in pack — valid names: {}",
+                stem,
+                FACE_NAMES.iter().map(|(n, _)| *n).collect::<Vec<_>>().join(", ")
+            );
+            continue;
+        }
+
+        let raw_path = cache_dir.join(format!("{}.raw", stem.to_lowercase()));
+        let png_mtime = entry.metadata()?.modified()?;
+        let raw_mtime = std::fs::metadata(&raw_path).and_then(|m| m.modified()).ok();
+
+        let is_stale = match raw_mtime {
+            None => true,
+            Some(raw_time) => png_mtime > raw_time,
+        };
+
+        if is_stale {
+            return Ok(Some((path, raw_path)));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -362,6 +465,99 @@ mod tests {
         std::fs::write(&target, b"old").unwrap();
         write_atomic(&target, b"new").unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    }
+
+    #[test]
+    fn test_validate_pack_name_valid() {
+        assert!(validate_pack_name("my_pack").is_ok());
+        assert!(validate_pack_name("MyPack").is_ok());
+        assert!(validate_pack_name("pack-1").is_ok());
+        assert!(validate_pack_name("a").is_ok());
+        assert!(validate_pack_name(&"a".repeat(32)).is_ok());
+    }
+
+    #[test]
+    fn test_validate_pack_name_invalid() {
+        assert!(validate_pack_name("").is_err());
+        assert!(validate_pack_name(".hidden").is_err());
+        assert!(validate_pack_name(".cache").is_err());
+        assert!(validate_pack_name("default").is_err());
+        assert!(validate_pack_name("has space").is_err());
+        assert!(validate_pack_name("has/slash").is_err());
+        assert!(validate_pack_name("has..dots").is_err());
+        assert!(validate_pack_name(&"a".repeat(33)).is_err());
+        assert!(validate_pack_name("emoji🎉").is_err());
+    }
+
+    #[test]
+    fn test_discover_packs_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let packs = discover_packs(tmp.path()).unwrap();
+        assert!(packs.is_empty());
+    }
+
+    #[test]
+    fn test_discover_packs_finds_valid_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("pack_a")).unwrap();
+        std::fs::create_dir(tmp.path().join("pack_b")).unwrap();
+        std::fs::create_dir(tmp.path().join(".cache")).unwrap();
+        std::fs::create_dir(tmp.path().join("bad name")).unwrap();
+        std::fs::write(tmp.path().join("not_a_dir.txt"), b"hi").unwrap();
+
+        let mut packs = discover_packs(tmp.path()).unwrap();
+        packs.sort();
+        assert_eq!(packs, vec!["pack_a".to_string(), "pack_b".to_string()]);
+    }
+
+    #[test]
+    fn test_find_stale_png_no_cache_means_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pack_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&pack_dir).unwrap();
+        let png = pack_dir.join("cool.png");
+        std::fs::write(&png, b"fake png").unwrap();
+
+        let cache_dir = tmp.path().join(".cache").join("mypack");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let result = find_stale_png(&pack_dir, &cache_dir).unwrap();
+        assert!(result.is_some());
+        let (stale_png, raw_path) = result.unwrap();
+        assert_eq!(stale_png, png);
+        assert_eq!(raw_path, cache_dir.join("cool.raw"));
+    }
+
+    #[test]
+    fn test_find_stale_png_fresh_cache_means_not_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pack_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&pack_dir).unwrap();
+        let png = pack_dir.join("cool.png");
+        std::fs::write(&png, b"fake png").unwrap();
+
+        let cache_dir = tmp.path().join(".cache").join("mypack");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(cache_dir.join("cool.raw"), vec![0u8; 990]).unwrap();
+
+        let result = find_stale_png(&pack_dir, &cache_dir).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_stale_png_ignores_unknown_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pack_dir = tmp.path().join("mypack");
+        std::fs::create_dir(&pack_dir).unwrap();
+        std::fs::write(pack_dir.join("unknown_face.png"), b"fake").unwrap();
+
+        let cache_dir = tmp.path().join(".cache").join("mypack");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let result = find_stale_png(&pack_dir, &cache_dir).unwrap();
+        assert!(result.is_none());
     }
 
     fn encode_test_png_gray(w: u32, h: u32, mut pixel: impl FnMut(u32, u32) -> u8) -> Vec<u8> {
