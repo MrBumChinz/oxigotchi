@@ -629,7 +629,10 @@ impl Daemon {
                 .personality
                 .set_override(personality::Face::AoCrashed);
         }
-        if self.mode == OperatingMode::Rage {
+        // Suppress AO auto-restart while a BT pair flow is in progress —
+        // restarting AO mid-pair puts wlan0mon back on the shared antenna
+        // and starves BT paging.
+        if self.mode == OperatingMode::Rage && !self.ao_paused_for_bt_pair {
             self.ao.try_auto_restart();
         }
 
@@ -1952,20 +1955,19 @@ impl Daemon {
         if let Some(mac) = bt_pair_mac {
             any_command = true;
             info!("web: BT pair flow starting for {mac}");
-            // Pause AO AND bring wlan0mon DOWN for the duration of the pair
-            // flow — the BCM43436B0 shares an antenna between WiFi and BT.
-            // Stopping AO kills the userspace attack loop but leaves the
-            // monitor interface holding the radio. Bringing wlan0mon down
-            // releases the antenna entirely so BT paging is fast.
+            // ALWAYS pause WiFi+AO for the duration of the pair flow —
+            // the BCM43436B0 shares an antenna between WiFi and BT.
+            // We pause regardless of AO's current state because:
+            //   (a) AO may be Crashed and about to auto-restart mid-flow
+            //   (b) wlan0mon may still be up holding the radio even if
+            //       AO's userspace process isn't running
             // Both are restored after the flow terminates (Done or Failed).
-            if self.ao.state == ao::AoState::Running {
-                info!("web: pausing AO and wlan0mon for BT pair flow (radio coexistence)");
-                self.ao.stop();
-                if let Err(e) = self.wifi.pause_for_bt() {
-                    log::warn!("web: wlan0mon pause failed: {e}");
-                }
-                self.ao_paused_for_bt_pair = true;
+            info!("web: pausing AO and wlan0mon for BT pair flow (radio coexistence)");
+            self.ao.stop();
+            if let Err(e) = self.wifi.pause_for_bt() {
+                log::warn!("web: wlan0mon pause failed: {e}");
             }
+            self.ao_paused_for_bt_pair = true;
             match self.bluetooth.pair_and_trust_flow_start(&mac) {
                 Ok(()) => {
                     let mut s = self.shared_state.lock().unwrap();
