@@ -28,7 +28,7 @@ Yes — AO validates every capture before saving. No junk pcaps. Every `.pcapng`
 Get a free API key from [wpa-sec.stanev.org](https://wpa-sec.stanev.org), paste it in the WPA-SEC card on the dashboard and hit Save. Captured handshakes upload automatically when internet is available (SAFE mode with BT tethering). Cracked passwords appear in the Cracked Passwords card.
 
 **The e-ink display is blank or garbled.**
-Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use different drivers). Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i spi`
+Make sure you have the **Waveshare 2.13" V4** (not V1/V2/V3 — they use different drivers and are not supported out of the box). See the [E-ink Display](#e-ink-display) section below for a sketch of what hypothetical V3 support would look like. Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i spi`
 
 **How does XP and leveling work?**
 Your bull earns XP passively (+1 every 30 seconds) and actively (+100 per handshake, +2 per new AP, +1 per deauth, +1 per association). The level formula is quadratic: `XP needed = max(1, level² / 330)`. Early levels fly by (Lv 1-18 need just 1 XP each), mid-levels are moderate (Lv 100 needs 30 XP, Lv 500 needs 757 XP), but the endgame is a grind (Lv 999 needs 3,024 XP per level). Max level is **999**. Walk through busy areas for faster leveling (more APs = more XP). XP persists across reboots.
@@ -86,9 +86,36 @@ If SSH times out:
 
 ### E-ink Display
 
-The daemon supports the **Waveshare 2.13" V4** only. Other versions (V1, V2, V3) use different controllers and will not work.
+The daemon supports the **Waveshare 2.13" V4** only. Other versions (V1, V2, V3) use different controllers and will not work out of the box.
 
 If the display is blank:
 - Check SPI is enabled: `raspi-config` → Interface Options → SPI → Enable
 - Check daemon logs: `journalctl -u rusty-oxigotchi | grep -i "spi\|display\|eink"`
 - Verify the display is properly seated on the GPIO header
+
+#### Hypothetical V3 Support
+
+> **Note:** This section is hypothetical. The project maintainer does not own a Waveshare 2.13" V3 panel and cannot test this path. The code below does not exist yet — this is a rough sketch of what adding V3 would involve for anyone who wants to try it. Pull requests welcome from anyone with actual V3 hardware.
+
+The V3 and V4 panels have the **same physical dimensions** (122×250 pixels), the **same SPI wiring**, and the **same GPIO pins** (BCM 17/25/8/24) — so hardware-wise they're interchangeable. The problem is that they use **different controllers**:
+
+| Panel | Controller | Init | LUT | Full Refresh |
+|-------|-----------|------|-----|-------------|
+| V4 | SSD1680 | ~10 commands | Built-in (send 0xF7/0xFF) | ~2 seconds |
+| V3 | SSD1675B | ~20 commands | Manual upload (70 bytes, separate full+partial tables) | ~15 seconds |
+
+Adding V3 support would require a new driver file alongside the existing SSD1680 one:
+
+1. **Create `rust/src/display/driver_v3.rs`** — port the `waveshare_epd/epd2in13_V3.py` init sequence, the two 70-byte LUT tables (`LUT_FULL_UPDATE` and `LUT_PARTIAL_UPDATE`), and the refresh functions to Rust. Mirror the structure of the existing `Ssd1680Driver`.
+2. **Add a driver enum in `display/mod.rs`:**
+   ```rust
+   pub enum EpdDriver {
+       V4(Ssd1680Driver<RppalHal>),
+       V3(Ssd1675bDriver<RppalHal>),
+   }
+   ```
+3. **Branch on `config.display_type`** when instantiating the driver. The `display_type = "waveshare_3"` value is already accepted by the config parser — it just has no driver behind it.
+4. **Adjust the display refresh budget** — V3's 15-second full refresh will change the 180-second full-refresh gate in `display/mod.rs`. The partial refresh rhythm will also feel different.
+5. **Test on real hardware** — all the timing, waveform, and ghosting behavior can only be validated on an actual V3 panel.
+
+An alternative path is to replace the in-tree driver with the [`epd-waveshare`](https://crates.io/crates/epd-waveshare) crate, which supports both V3 and V4. That trades our hardened custom driver (180s full-refresh gate, ghosting recovery, BUSY timeout) for a third-party implementation — probably not worth it unless multiple panel versions need to be supported.
