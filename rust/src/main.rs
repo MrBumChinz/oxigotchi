@@ -156,6 +156,9 @@ struct Daemon {
     bt_scan_use_le: bool,
     epoch_start: Instant,
     last_drawn_face: Option<personality::Face>,
+    active_pack: display::face_pack::FacePack,
+    face_pack_timer: WallTimer,
+    face_pack_last_error: Option<String>,
 }
 
 impl Daemon {
@@ -272,6 +275,9 @@ impl Daemon {
             bt_scan_use_le: true,
             epoch_start: Instant::now(),
             last_drawn_face: None,
+            active_pack: display::face_pack::FacePack::empty(),
+            face_pack_timer: WallTimer::new(Duration::from_secs(30)),
+            face_pack_last_error: None,
         }
     }
 
@@ -297,8 +303,9 @@ impl Daemon {
         self.screen.clear();
         // Boot screen: centered face + centered welcome text below
         // Face: 120x66, centered horizontally: x = (250-120)/2 = 65
+        let boot_bitmap = display::face_pack::bitmap_for_face(boot_face, &self.active_pack);
         self.screen.draw_bitmap(
-            display::faces::builtin_bitmap(&boot_face),
+            boot_bitmap,
             65,
             5,
             display::faces::FACE_WIDTH,
@@ -3024,7 +3031,7 @@ impl Daemon {
                 captures,
                 patchram_error,
             );
-            self.screen.draw_face(&face);
+            self.screen.draw_face(&face, &self.active_pack);
         } else {
             let face = self.epoch_loop.current_face();
             if self.last_drawn_face != Some(face) {
@@ -3038,7 +3045,7 @@ impl Daemon {
                 );
                 self.last_drawn_face = Some(face);
             }
-            self.screen.draw_face(&face);
+            self.screen.draw_face(&face, &self.active_pack);
         }
 
         // ---- LINE 1 (y=14) ----
@@ -3140,7 +3147,7 @@ impl Daemon {
     /// Show a transition screen with face and message, then flush immediately.
     fn show_transition(&mut self, face: personality::Face, message: &str) {
         self.screen.clear();
-        self.screen.draw_face(&face);
+        self.screen.draw_face(&face, &self.active_pack);
         self.screen.draw_status(message);
         self.screen.flush();
     }
