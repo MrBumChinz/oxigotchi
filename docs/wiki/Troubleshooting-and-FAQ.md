@@ -10,7 +10,7 @@
 No. The firmware patches are for the BCM43436B0 chip in the Pi Zero 2W only. Other Pi models have different chips. No workaround exists.
 
 **Can I write plugins?**
-Yes. Oxigotchi v3 uses Lua 5.4 plugins. Place `.lua` files in `/etc/oxigotchi/plugins/`. Plugins can register indicators on the e-ink display and react to loop, handshake, crash, and BT events. See [docs/RUSTY_V3.md](https://github.com/CoderFX/oxigotchi/blob/main/docs/RUSTY_V3.md) for the full plugin API.
+Yes. The bull runs Lua 5.4 plugins for every e-ink indicator. Drop a `.lua` file into `/etc/oxigotchi/plugins/`, add it to `plugins.toml`, and the dashboard Plugins card picks it up. See the [Lua Plugins](Plugins) wiki page for the API, state fields, and a working example.
 
 **Is `sudo apt update && sudo apt upgrade -y` safe?**
 Yes. The dangerous packages are held and won't upgrade. See the "Safe apt Upgrades" section below.

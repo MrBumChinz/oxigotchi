@@ -23,6 +23,7 @@
 - **[Capture Pipeline](Capture-Pipeline)** — tmpfs-based capture flow, hashcat conversion, SD card protection
 - **[WiFi Firmware Patches](WiFi-Firmware)** — The 8-layer BCM43436B0 firmware patch that eliminated WiFi crashes
 - **[RF Classification Pipeline](RF-Classification-Pipeline)** — Real-time 802.11 frame classification via VideoCore IV GPU and CPU
+- **[Lua Plugins](Plugins)** — Write your own e-ink indicators in sandboxed Lua 5.4
 
 ## Development
 
