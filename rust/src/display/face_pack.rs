@@ -391,6 +391,41 @@ pub fn find_stale_png(
     Ok(None)
 }
 
+/// Scan all packs under `root` and convert at most one stale PNG to .raw.
+/// Returns Ok(true) if a conversion happened, Ok(false) if nothing to do.
+pub fn convert_one_png(root: &Path, cache_root: &Path) -> Result<bool, FacePackError> {
+    let packs = discover_packs(root)?;
+    for pack in packs {
+        let pack_dir = root.join(&pack);
+        let cache_dir = cache_root.join(&pack);
+        if !cache_dir.exists() {
+            std::fs::create_dir_all(&cache_dir)?;
+        }
+
+        if let Some((png_path, raw_path)) = find_stale_png(&pack_dir, &cache_dir)? {
+            match png_to_raw(&png_path) {
+                Ok(bytes) => {
+                    write_atomic(&raw_path, &bytes)?;
+                    log::info!(
+                        "face_pack: converted {}/{}",
+                        pack,
+                        png_path.file_name().unwrap_or_default().to_string_lossy()
+                    );
+                    return Ok(true);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "face_pack: {} failed: {e}",
+                        png_path.display()
+                    );
+                    // Continue to next pack rather than failing the whole tick
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -675,6 +710,57 @@ mod tests {
         let result = bitmap_for_face(Face::Cool, &pack);
         let builtin = crate::display::faces::builtin_bitmap(&Face::Cool);
         assert_eq!(result.as_ptr(), builtin.as_ptr(), "fallback should return the static bitmap");
+    }
+
+    #[test]
+    fn test_convert_one_pack_creates_raw_from_png() {
+        let tmp = tempfile::tempdir().unwrap();
+        let face_packs = tmp.path().join("face_packs");
+        let pack_dir = face_packs.join("test_pack");
+        std::fs::create_dir_all(&pack_dir).unwrap();
+        let cache_root = face_packs.join(".cache");
+        let cache_dir = cache_root.join("test_pack");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let png = encode_test_png_gray(120, 66, |x, _| if x < 60 { 0 } else { 255 });
+        std::fs::write(pack_dir.join("cool.png"), &png).unwrap();
+
+        let result = convert_one_png(&face_packs, &cache_root);
+        assert!(result.is_ok(), "convert failed: {:?}", result);
+        assert!(result.unwrap(), "expected conversion to happen");
+
+        let raw = std::fs::read(cache_dir.join("cool.raw")).unwrap();
+        assert_eq!(raw.len(), 990);
+    }
+
+    #[test]
+    fn test_convert_one_pack_skips_when_raw_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let face_packs = tmp.path().join("face_packs");
+        let pack_dir = face_packs.join("test_pack");
+        std::fs::create_dir_all(&pack_dir).unwrap();
+        let cache_root = face_packs.join(".cache");
+        let cache_dir = cache_root.join("test_pack");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+
+        let png = encode_test_png_gray(120, 66, |_, _| 128);
+        std::fs::write(pack_dir.join("cool.png"), &png).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(cache_dir.join("cool.raw"), vec![0u8; 990]).unwrap();
+
+        let result = convert_one_png(&face_packs, &cache_root).unwrap();
+        assert!(!result, "expected no conversion (raw is fresh)");
+    }
+
+    #[test]
+    fn test_convert_one_pack_no_packs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let face_packs = tmp.path().join("face_packs");
+        let cache_root = face_packs.join(".cache");
+        std::fs::create_dir_all(&face_packs).unwrap();
+
+        let result = convert_one_png(&face_packs, &cache_root).unwrap();
+        assert!(!result);
     }
 
     fn encode_test_png_gray(w: u32, h: u32, mut pixel: impl FnMut(u32, u32) -> u8) -> Vec<u8> {

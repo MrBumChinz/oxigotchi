@@ -509,6 +509,22 @@ impl Daemon {
         // ---- Web commands ----
         self.process_web_commands();
 
+        // ---- Face pack conversion (background tick) ----
+        if self.face_pack_timer.due() {
+            let root = std::path::Path::new(display::face_pack::FACE_PACK_DIR);
+            let cache = std::path::Path::new(display::face_pack::FACE_PACK_CACHE);
+            match display::face_pack::convert_one_png(root, cache) {
+                Ok(_) => self.face_pack_last_error = None,
+                Err(e) => {
+                    let msg = e.to_string();
+                    if self.face_pack_last_error.as_deref() != Some(&msg) {
+                        log::warn!("face_pack: tick failed: {msg}");
+                        self.face_pack_last_error = Some(msg);
+                    }
+                }
+            }
+        }
+
         // ---- PiSugar button events ----
         self.process_button();
 
