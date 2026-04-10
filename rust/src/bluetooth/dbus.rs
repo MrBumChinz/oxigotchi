@@ -331,6 +331,25 @@ mod inner {
             Ok(())
         }
 
+        /// Read a Device1 boolean property via D-Bus `Properties.Get`.
+        /// Returns Err if the device object does not exist or the property is absent.
+        pub fn get_device_property_bool(
+            &self,
+            device_path: &str,
+            property: &str,
+        ) -> Result<bool, String> {
+            let proxy = self.conn.with_proxy(
+                "org.bluez",
+                device_path,
+                Duration::from_secs(5),
+            );
+            use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+            let value: bool = proxy
+                .get("org.bluez.Device1", property)
+                .map_err(|e| format!("GetProperty({property}): {e}"))?;
+            Ok(value)
+        }
+
         /// Remove a device from BlueZ via Adapter1.RemoveDevice.
         pub fn remove_device(&self, device_path: &str) -> Result<(), String> {
             // Derive adapter path: /org/bluez/hci0/dev_XX -> /org/bluez/hci0
@@ -616,6 +635,14 @@ mod inner {
         }
 
         pub fn trust_device(&self, _device_path: &str) -> Result<(), String> {
+            Err("not supported on this platform".to_string())
+        }
+
+        pub fn get_device_property_bool(
+            &self,
+            _device_path: &str,
+            _property: &str,
+        ) -> Result<bool, String> {
             Err("not supported on this platform".to_string())
         }
 
