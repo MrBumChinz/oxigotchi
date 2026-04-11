@@ -344,7 +344,14 @@ impl DaemonState {
             display_rotation: 180,
             display_refresh_interval: 100,
             pending_display_reinit: false,
-            bt_state: "Off".into(),
+            // Seed the web-facing BT state with the "not yet connected"
+            // status string rather than "Off". The daemon's first sync_to_web
+            // overwrites this with the real BtTether::status_str(), but the
+            // web server is reachable before that first sync runs, so the
+            // seed value is what external queries see for the first second
+            // or two after boot. "Off" misled users into thinking the
+            // adapter was powered down.
+            bt_state: "BT DISC".into(),
             bt_connected: false,
             bt_device_name: String::new(),
             bt_ip: String::new(),
@@ -3453,7 +3460,7 @@ mod tests {
         assert_eq!(ds.xp, 0);
         assert_eq!(ds.level, 1);
         assert!(ds.cracked.is_empty());
-        assert_eq!(ds.bt_state, "Off");
+        assert_eq!(ds.bt_state, "BT DISC");
         assert!(!ds.bt_connected);
         assert!(ds.wpasec_api_key.is_empty());
         assert!(ds.pending_wpasec_key.is_none());

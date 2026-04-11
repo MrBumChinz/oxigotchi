@@ -622,6 +622,17 @@ impl Daemon {
                         // PAN auto-connect silently skips the device until the user
                         // manually runs `bluetoothctl trust MAC`.
                         info!("BT: auto-trusting newly paired device {device}");
+                        // Also clear the dashboard passkey box: PairingComplete
+                        // (Agent1 Release/Cancel) doesn't always fire on a
+                        // successful numeric-comparison pair, so without this
+                        // clear the passkey stays visible until the next epoch
+                        // nulls it indirectly. Two-line clear right here is
+                        // the reliable path.
+                        {
+                            let mut s = self.shared_state.lock().unwrap();
+                            s.bt_passkey = None;
+                            s.bt_passkey_device.clear();
+                        }
                         if let Some(ref dbus) = self.bluetooth.dbus_ref() {
                             match dbus.trust_device(&device) {
                                 Ok(()) => info!("BT: auto-trust OK for {device}"),

@@ -668,20 +668,26 @@ mod inner {
                     if pc.interface_name != "org.bluez.Device1" {
                         return true;
                     }
-                    // Check if `Paired` flipped to true in this update.
+                    // Check if `Paired` changed in this update. Log EVERY
+                    // transition (true OR false) so field diagnostics can
+                    // confirm the watcher is firing — the most common silent
+                    // failure mode is the watcher being registered on a dead
+                    // connection and never seeing the signal at all.
                     if let Some(variant) = pc.changed_properties.get("Paired") {
                         let paired = variant.0.as_i64().map(|v| v != 0).unwrap_or(false);
-                        if paired {
-                            let path = msg
-                                .path()
-                                .map(|p| p.to_string())
-                                .unwrap_or_default();
-                            if !path.is_empty() {
-                                info!("[dbus] PropertiesChanged: Paired=true on {path}");
-                                let _ = tx.send(PairingEvent::DeviceNewlyPaired {
-                                    device: path,
-                                });
-                            }
+                        let path = msg
+                            .path()
+                            .map(|p| p.to_string())
+                            .unwrap_or_default();
+                        info!(
+                            "[dbus] PropertiesChanged: Paired={} on {}",
+                            paired,
+                            if path.is_empty() { "<unknown>" } else { &path }
+                        );
+                        if paired && !path.is_empty() {
+                            let _ = tx.send(PairingEvent::DeviceNewlyPaired {
+                                device: path,
+                            });
                         }
                     }
                     true

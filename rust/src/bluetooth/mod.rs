@@ -263,7 +263,12 @@ impl BtTether {
     /// Create a new Bluetooth tether manager with the given configuration.
     pub fn new(config: BtConfig) -> Self {
         Self {
-            state: BtState::Off,
+            // Start in Disconnected, not Off: "Off" means adapter missing/powered
+            // down, which we don't know yet — the first setup() call in the
+            // daemon's boot path will overwrite this based on reality. Starting
+            // as Disconnected prevents the first sync_to_web from reporting a
+            // misleading "BT OFF" to the dashboard before setup() has run.
+            state: BtState::Disconnected,
             config,
             retry_count: 0,
             last_attempt: None,
@@ -388,6 +393,9 @@ impl BtTether {
     /// Initialize D-Bus connection and attempt PAN tethering.
     pub fn setup(&mut self) -> Result<(), String> {
         if !self.config.enabled {
+            // BT explicitly disabled in config → state is Off
+            // (daemon treats the adapter as powered down).
+            self.state = BtState::Off;
             return Ok(());
         }
 
@@ -1071,7 +1079,10 @@ mod tests {
     #[test]
     fn test_default_state() {
         let bt = BtTether::default();
-        assert_eq!(bt.state, BtState::Off);
+        // Fresh BtTether starts as Disconnected, not Off — see BtTether::new
+        // comment for rationale (avoids misleading "BT OFF" flicker on first
+        // sync_to_web before setup() has run).
+        assert_eq!(bt.state, BtState::Disconnected);
         assert!(!bt.internet_available);
         assert!(bt.ip_address.is_none());
         assert!(bt.pan_interface.is_none());
@@ -1193,6 +1204,8 @@ mod tests {
     #[test]
     fn test_status_strings() {
         let mut bt = BtTether::default();
+        assert_eq!(bt.status_str(), "BT DISC");
+        bt.state = BtState::Off;
         assert_eq!(bt.status_str(), "BT OFF");
         bt.state = BtState::Connected;
         assert_eq!(bt.status_str(), "BT OK");
