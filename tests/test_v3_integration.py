@@ -200,11 +200,12 @@ class TestConfig:
         state = json.loads(out)
         assert isinstance(state, dict)
 
-    def test_no_hardcoded_macs_in_services(self):
-        """bt-keepalive should read from config, not hardcode MACs."""
-        out, _ = ssh_cmd("cat /usr/local/bin/bt-keepalive.sh")
-        assert "9C:9E:D5" not in out, "Hardcoded MAC found!"
-        assert "config.toml" in out
+    def test_bt_keepalive_shell_removed(self):
+        """bt-keepalive.sh shell relic must NOT be on the image — v3.3.1
+        moved BT tether reconnect into the Rust daemon. Any leftover script
+        indicates an incomplete upgrade and will race with the daemon."""
+        _, rc = ssh_cmd("test -e /usr/local/bin/bt-keepalive.sh")
+        assert rc != 0, "bt-keepalive.sh still present; must be removed in v3.3.1"
 
     def test_xp_stats_valid(self):
         out, rc = ssh_cmd("cat /home/pi/exp_stats.json")

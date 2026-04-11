@@ -307,10 +307,17 @@ class TestSafety:
         )
         assert rc == 0, "Firmware protection apt hook not found"
 
-    def test_bt_keepalive_timer_enabled(self):
-        """BT keepalive timer must be enabled to prevent tether drops."""
-        out, _, rc = ssh_cmd("systemctl is-enabled bt-keepalive.timer")
-        assert out == "enabled", f"bt-keepalive.timer is {out}, expected enabled"
+    def test_bt_keepalive_timer_removed(self):
+        """bt-keepalive.timer must NOT be present — v3.3.1 moved BT tether
+        reconnect into the Rust daemon. The old shell-based keepalive raced
+        with the daemon's auto-reconnect and referenced the removed
+        phone_mac config key."""
+        out, _, _ = ssh_cmd("systemctl is-enabled bt-keepalive.timer 2>&1")
+        # Expect either "not-found" or "masked" — anything but "enabled".
+        assert out != "enabled", (
+            f"bt-keepalive.timer is {out}, expected not-found/masked. "
+            f"It was removed in v3.3.1 and must not be re-enabled."
+        )
 
     def test_tweak_view_deployed(self):
         """tweak_view.json display layout must be deployed."""

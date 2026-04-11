@@ -116,7 +116,8 @@ def step_stop_services(client):
     is fine since we're reading the block device directly; pwnagotchi writes are small
     and won't corrupt the image for distribution use."""
     log("Stopping non-critical services (keeping pwnagotchi up to preserve SSH)...")
-    services = ["bettercap", "bt-keepalive.timer", "oxigotchi-splash", "pi_helper"]
+    # bt-keepalive.timer removed in v3.3.1 — BT tether reconnect moved into the Rust daemon.
+    services = ["bettercap", "oxigotchi-splash", "pi_helper"]
     for svc in services:
         ssh_run(client, f"systemctl stop {svc} 2>/dev/null", timeout=30)
     time.sleep(2)

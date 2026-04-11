@@ -48,6 +48,18 @@ impl std::fmt::Display for PanConnectError {
 }
 
 /// Classify a D-Bus PAN connect error string into an actionable error type.
+///
+/// The `PhoneUnpaired` arm is the one that triggers `remove_device` in
+/// `connect()` so a stale bond gets cleaned up. It must catch every error
+/// that indicates "the phone no longer recognizes this bond":
+/// - "authentication failed" / "rejected" / "refused" — explicit SSP reject
+/// - "input/output error" / "i/o error" — errno EIO (5), the bluez return
+///   when bluetoothd got `Connection reset by peer` from the phone's BNEP
+///   layer during the post-encryption handshake (asymmetric bond state)
+/// - "connection reset" / "reset by peer" — peer tore down ACL mid-setup
+/// - "host is down" — already-paired ACL refused at HCI layer
+/// Without catching all of these, the daemon sits in a backoff loop against
+/// a stale bond forever and blocks incoming fresh pairs from the phone.
 pub fn classify_pan_error(err: &str) -> PanConnectError {
     let lower = err.to_lowercase();
     if lower.contains("create-socket")
@@ -58,6 +70,10 @@ pub fn classify_pan_error(err: &str) -> PanConnectError {
     } else if lower.contains("authentication")
         || lower.contains("rejected")
         || lower.contains("refused")
+        || lower.contains("input/output error")
+        || lower.contains("i/o error")
+        || lower.contains("connection reset")
+        || lower.contains("reset by peer")
     {
         PanConnectError::PhoneUnpaired
     } else if lower.contains("page-timeout")

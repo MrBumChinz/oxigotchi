@@ -21,7 +21,7 @@ REPO=/mnt/c/msys64/home/${USER:-$(whoami)}/oxigotchi
 BASE_IMG="${1:-/mnt/d/oxigotchi-release.img}"
 RELEASE_IMG="/mnt/d/oxigotchi-release.img"
 BINARY="$REPO/rust/target/aarch64-unknown-linux-gnu/release/oxigotchi"
-VERSION="3.3.0"
+VERSION="3.3.1"
 
 if [ ! -f "$BASE_IMG" ]; then
     echo "ERROR: Base image not found at $BASE_IMG"
@@ -176,8 +176,10 @@ sudo cp "$REPO/tools/bootlog.sh" "$PI/usr/local/bin/bootlog.sh"
 sudo cp "$REPO/scripts/usb0-fallback.sh" "$PI/usr/local/bin/usb0-fallback.sh"
 # WiFi ndev fix
 sudo cp "$REPO/scripts/fix_ndev_on_boot.sh" "$PI/usr/local/bin/fix_ndev_on_boot.sh"
-# BT keepalive
-sudo cp "$REPO/scripts/bt-keepalive.sh" "$PI/usr/local/bin/bt-keepalive.sh"
+# NOTE: bt-keepalive.sh intentionally not installed — v3.3.1+ handles BT
+# tether reconnect entirely inside rusty-oxigotchi (Network1.Connect via
+# D-Bus with exponential backoff). The old shell script raced with the
+# daemon's auto-reconnect and still referenced the removed phone_mac config.
 # Buffer cleaner
 sudo cp "$REPO/scripts/buffer-cleaner.sh" "$PI/usr/local/bin/buffer-cleaner.sh"
 # wlan_keepalive binary
@@ -199,7 +201,7 @@ SVC_DIR="$PI/etc/systemd/system"
 
 # Copy service files from repo
 for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepalive \
-           bootlog usb0-fallback fix-ndev nm-watchdog bt-agent bt-keepalive \
+           bootlog usb0-fallback fix-ndev nm-watchdog bt-agent \
            buffer-cleaner epd-startup wifi-watchdog; do
     if [ -f "$REPO/services/${svc}.service" ]; then
         sudo cp "$REPO/services/${svc}.service" "$SVC_DIR/${svc}.service"
@@ -210,7 +212,7 @@ for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepal
 done
 
 # Timer units
-for timer in bt-keepalive buffer-cleaner nm-watchdog; do
+for timer in buffer-cleaner nm-watchdog; do
     if [ -f "$REPO/services/${timer}.timer" ]; then
         sudo cp "$REPO/services/${timer}.timer" "$SVC_DIR/${timer}.timer"
         sudo sed -i 's/\r$//' "$SVC_DIR/${timer}.timer"
@@ -244,7 +246,7 @@ for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepal
 done
 
 # Timers
-for timer in bt-keepalive buffer-cleaner nm-watchdog; do
+for timer in buffer-cleaner nm-watchdog; do
     if [ -f "$SVC_DIR/${timer}.timer" ]; then
         sudo ln -sf "/etc/systemd/system/${timer}.timer" "$SVC_DIR/timers.target.wants/${timer}.timer"
         echo "  Enabled timer: $timer"
@@ -512,7 +514,19 @@ sudo rm -rf "$PI/var/lib/bluetooth/"*/cache 2>/dev/null
 for btdir in "$PI/var/lib/bluetooth/"*/; do
     [ -d "$btdir" ] && sudo find "$btdir" -maxdepth 1 -mindepth 1 -type d -exec rm -rf {} + 2>/dev/null
 done
-echo "  Bloat cleaned"
+# v3.3.1: purge bt-keepalive relic from older images. The Rust daemon now
+# handles BT tether reconnect internally; the old timer + shell script
+# raced with the daemon's auto-reconnect and referenced the removed
+# phone_mac config key. Leaving any of these behind causes visible bugs.
+sudo rm -f "$PI/usr/local/bin/bt-keepalive.sh" 2>/dev/null
+sudo rm -f "$PI/etc/systemd/system/bt-keepalive.service" 2>/dev/null
+sudo rm -f "$PI/etc/systemd/system/bt-keepalive.timer" 2>/dev/null
+sudo rm -f "$PI/etc/systemd/system/multi-user.target.wants/bt-keepalive.service" 2>/dev/null
+sudo rm -f "$PI/etc/systemd/system/timers.target.wants/bt-keepalive.timer" 2>/dev/null
+# Mask the unit inside the chroot so a stale systemd cache can't re-enable it.
+sudo chroot "$PI" systemctl mask bt-keepalive.timer 2>/dev/null || true
+sudo chroot "$PI" systemctl mask bt-keepalive.service 2>/dev/null || true
+echo "  Bloat cleaned (incl. bt-keepalive relic)"
 
 # ─── 17. Create sentinel ───
 echo ""
@@ -598,7 +612,7 @@ ls "$PI/etc/systemd/system/timers.target.wants/" 2>/dev/null | sort | sed 's/^/ 
 
 echo ""
 echo "--- Helper scripts ---"
-for f in wifi-recovery.sh bootlog.sh usb0-fallback.sh fix_ndev_on_boot.sh bt-keepalive.sh \
+for f in wifi-recovery.sh bootlog.sh usb0-fallback.sh fix_ndev_on_boot.sh \
          buffer-cleaner.sh wlan_keepalive; do
     verify "$f" "$PI/usr/local/bin/$f"
 done
