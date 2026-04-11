@@ -47,6 +47,37 @@ impl std::fmt::Display for PanConnectError {
     }
 }
 
+impl PanConnectError {
+    /// User-facing actionable hint suitable for rendering in the web UI.
+    /// Unlike `Display`, these are full sentences that tell the user
+    /// exactly what to do on their phone or the Pi.
+    pub fn hint(&self) -> String {
+        match self {
+            Self::TetherNotEnabled => {
+                "Bluetooth tethering isn't enabled on the phone. Turn it on under Portable Hotspot → Bluetooth tethering, and make sure mobile data is ON."
+                    .into()
+            }
+            Self::PhoneUnpaired => {
+                "The phone forgot the pairing. The Pi is removing the stale bond — pair again from the phone's Bluetooth settings."
+                    .into()
+            }
+            Self::PhoneOutOfRange => {
+                "Phone is out of range or Bluetooth is off. Unlock the phone and bring it closer."
+                    .into()
+            }
+            Self::PhoneBusy => {
+                "Phone is busy with another Bluetooth operation. The Pi will retry automatically in a few seconds."
+                    .into()
+            }
+            Self::PhoneNotResponding => {
+                "Phone isn't responding to connection requests. Try: forget the Pi on the phone → toggle Bluetooth tethering off and back on → pair fresh."
+                    .into()
+            }
+            Self::Other(s) => format!("Connect failed: {s}"),
+        }
+    }
+}
+
 /// Classify a D-Bus PAN connect error string into an actionable error type.
 ///
 /// The `PhoneUnpaired` arm is the one that triggers `remove_device` in

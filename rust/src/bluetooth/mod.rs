@@ -248,6 +248,11 @@ pub struct BtTether {
     pub user_disconnected: bool,
     /// Receiver for Agent1 pairing events (passkey display/confirmation).
     pub pairing_rx: Option<std::sync::mpsc::Receiver<dbus::PairingEvent>>,
+    /// User-facing actionable hint from the last failed operation (PAN
+    /// connect, DHCP, etc.). Populated by `connect()` on failure, cleared
+    /// on success. Surfaced to the web UI Phone Tethering card so users
+    /// see "enable BT tethering on your phone" instead of a silent spinner.
+    pub last_error_hint: Option<String>,
 }
 
 fn ip_is_routable(ip: &str) -> bool {
@@ -268,6 +273,7 @@ impl BtTether {
             dbus: None,
             user_disconnected: false,
             pairing_rx: None,
+            last_error_hint: None,
         }
     }
 
@@ -467,13 +473,17 @@ impl BtTether {
                 self.state = BtState::Connected;
                 self.retry_count = 0;
                 self.user_disconnected = false;
-                self.run_dhcp(&pan.interface);
+                let dhcp_hint = self.run_dhcp(&pan.interface);
                 self.refresh_ip();
                 if let Some(ref ip) = self.ip_address {
                     if ip_is_routable(ip) {
                         self.internet_available = true;
                     }
                 }
+                // DHCP failures don't fail the connect (the PAN link is
+                // still up), but we want the hint visible so the user can
+                // act on it.
+                self.last_error_hint = dhcp_hint;
                 if self.config.hide_after_connect {
                     self.hide();
                 }
@@ -481,14 +491,17 @@ impl BtTether {
             }
             Err(dbus::PanConnectError::PhoneUnpaired) => {
                 warn!("BT: phone unpaired us — removing stale bond");
+                let hint = dbus::PanConnectError::PhoneUnpaired.hint();
                 if let Some(ref d) = self.dbus {
                     let _ = d.remove_device(&device_path);
                 }
+                self.last_error_hint = Some(hint);
                 self.on_error();
                 Err("Phone unpaired Pi — removed stale bond, will re-pair".into())
             }
             Err(e) => {
                 warn!("BT: Network1.Connect failed: {e}");
+                self.last_error_hint = Some(e.hint());
                 self.on_error();
                 Err(e.to_string())
             }
@@ -602,43 +615,97 @@ impl BtTether {
     }
 
     /// Run DHCP on a PAN interface.
-    fn run_dhcp(&self, iface: &str) {
+    ///
+    /// Tries `dhcpcd` first (default on Raspberry Pi OS), falls back to
+    /// `dhclient` (ISC) if dhcpcd isn't installed or fails. Both are
+    /// invoked with `-4` so they don't wait ~5s for an IPv6 Router
+    /// Advertisement that BNEP never sends. Any existing lease on the
+    /// interface is released first so a stale IP from a previous session
+    /// doesn't mask a DHCP failure.
+    ///
+    /// Returns a user-friendly hint string on DHCP failure (e.g.
+    /// "enable Bluetooth tethering on your phone"), or None on success.
+    fn run_dhcp(&self, iface: &str) -> Option<String> {
         #[cfg(unix)]
         {
+            // Release any stale lease first — avoids reusing a dead IP
+            // from a previous session when the phone has rotated carrier
+            // NAT and handed out a different range.
+            let _ = std::process::Command::new("dhcpcd")
+                .args(["-k", iface])
+                .output();
+
             let result = std::process::Command::new("dhcpcd")
-                .args(["-n", iface])
+                .args(["-4", "-n", iface])
                 .output();
             match result {
                 Ok(o) if o.status.success() => {
                     info!("BT: DHCP via dhcpcd on {iface}");
-                    return;
+                    return None;
                 }
-                _ => {}
+                Ok(o) => {
+                    // dhcpcd may exit non-zero if not installed or if it
+                    // can't contact the kernel, fall through to dhclient.
+                    let stderr = String::from_utf8_lossy(&o.stderr);
+                    log::debug!("BT: dhcpcd failed, trying dhclient: {}", stderr.trim());
+                }
+                Err(_) => {
+                    log::debug!("BT: dhcpcd not available, trying dhclient");
+                }
             }
+
             let result = std::process::Command::new("dhclient")
-                .arg(iface)
+                .args(["-4", iface])
                 .output();
             match result {
-                Ok(o) if o.status.success() => info!("BT: DHCP via dhclient on {iface}"),
-                Ok(o) => warn!(
-                    "BT: dhclient failed: {}",
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ),
-                Err(e) => warn!("BT: DHCP failed: {e}"),
+                Ok(o) if o.status.success() => {
+                    info!("BT: DHCP via dhclient on {iface}");
+                    return None;
+                }
+                Ok(o) => {
+                    let combined = format!(
+                        "{} {}",
+                        String::from_utf8_lossy(&o.stdout),
+                        String::from_utf8_lossy(&o.stderr)
+                    );
+                    warn!("BT: dhclient failed: {}", combined.trim());
+                    // Parse common dhclient errors for user-facing hints.
+                    if combined.contains("Software caused connection abort")
+                        || combined.contains("No DHCPOFFERS")
+                    {
+                        return Some(
+                            "Phone isn't handing out DHCP leases — enable Bluetooth tethering on the phone"
+                                .into(),
+                        );
+                    }
+                    return Some(format!("DHCP failed on {iface}"));
+                }
+                Err(e) => {
+                    warn!("BT: no DHCP client available: {e}");
+                    return Some(
+                        "No DHCP client installed — run `sudo apt install dhcpcd5` or `isc-dhcp-client` on the Pi"
+                            .into(),
+                    );
+                }
             }
         }
         #[cfg(not(unix))]
         {
             let _ = iface;
+            None
         }
     }
 
-    /// Release DHCP lease on a PAN interface.
+    /// Release DHCP lease on a PAN interface. Tries both dhcpcd and
+    /// dhclient — whichever one brought up the lease will respond.
     fn release_dhcp(&self, iface: &str) -> Result<(), String> {
         #[cfg(unix)]
         {
             let _ = std::process::Command::new("dhcpcd")
                 .args(["-k", iface])
+                .output();
+            let _ = std::process::Command::new("dhclient")
+                .args(["-r", iface])
                 .output();
         }
         let _ = iface;

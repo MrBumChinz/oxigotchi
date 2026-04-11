@@ -106,6 +106,8 @@ pub struct DaemonState {
     pub bt_feature_mode: String,
     pub bt_feature_devices_now: u32,
     pub bt_feature_contention_score: u32,
+    /// User-actionable hint from the last BT connect failure.
+    pub bt_last_error_hint: String,
 
     // -- bt attacks --
     pub bt_attack_enabled: bool,
@@ -351,6 +353,7 @@ impl DaemonState {
             bt_feature_mode: "Off".into(),
             bt_feature_devices_now: 0,
             bt_feature_contention_score: 0,
+            bt_last_error_hint: String::new(),
             bt_attack_enabled: true,
             bt_rage_level: "Medium".into(),
             bt_scan_mode: "both".into(),
@@ -631,6 +634,7 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             // the user to tap Pair on the phone. Derived purely from passkey
             // presence now that the explicit state machine is gone.
             pair_in_progress: s.bt_passkey.is_some(),
+            last_error_hint: s.bt_last_error_hint.clone(),
         },
         bt_attacks: BtAttackResponse {
             enabled: s.bt_attack_enabled,
@@ -1114,6 +1118,12 @@ pub struct BluetoothInfo {
     pub passkey: Option<u32>,
     pub passkey_device: String,
     pub pair_in_progress: bool,
+    /// User-actionable hint from the last failed PAN connect or DHCP
+    /// attempt. Empty string when there's nothing to show. Rendered in
+    /// the Phone Tethering card so users see "Bluetooth tethering isn't
+    /// enabled on the phone" instead of a silent spinner.
+    #[serde(default)]
+    pub last_error_hint: String,
 }
 
 /// GPU info surfaced through the shared state/web snapshot.
@@ -1673,6 +1683,7 @@ async fn bluetooth_handler(State(state): State<SharedState>) -> Json<BluetoothIn
         passkey: s.bt_passkey,
         passkey_device: s.bt_passkey_device.clone(),
         pair_in_progress: s.bt_passkey.is_some(),
+        last_error_hint: s.bt_last_error_hint.clone(),
     })
 }
 
@@ -3257,6 +3268,7 @@ mod tests {
             passkey: None,
             passkey_device: String::new(),
             pair_in_progress: false,
+            last_error_hint: String::new(),
         };
         let json = serde_json::to_string(&info).unwrap();
         assert!(json.contains("\"connected\":true"));

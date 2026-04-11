@@ -555,6 +555,7 @@ Oxigotchi will auto-trust and connect. No buttons to press here.
 <div id="bt-passkey-code" style="font-size:28px;font-weight:bold;color:#00d4ff;text-align:center;padding:10px;letter-spacing:2px">------</div>
 <div style="color:#888;font-size:11px;text-align:center">Accept on the phone to complete pairing</div>
 </div>
+<div id="bt-error-hint" style="display:none;margin-top:10px;padding:10px;background:#2a0f0f;border-radius:8px;border:1px solid #e94560;color:#ffb3b3;font-size:12px;line-height:1.5"></div>
 <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px">
 <button class="wl-btn wl-btn-danger" id="bt-disconnect-btn" onclick="btTetherDisconnect()" style="display:none">Disconnect</button>
 <button class="wl-btn wl-btn-danger" id="bt-reset-btn" onclick="resetAllBtPairings()">Reset pairings</button>
@@ -1911,6 +1912,17 @@ function updateBluetoothFromWs(d) {
     } else {
         var pa = document.getElementById('bt-passkey-area');
         if (pa) pa.style.display = 'none';
+    }
+    // Error hint — surfaces the last actionable failure message from
+    // classify_pan_error or the DHCP fallback. Hidden when empty.
+    var hintEl = document.getElementById('bt-error-hint');
+    if (hintEl) {
+        if (d.last_error_hint && d.last_error_hint.length > 0 && !d.connected) {
+            hintEl.textContent = '\u26A0\uFE0F ' + d.last_error_hint;
+            hintEl.style.display = 'block';
+        } else {
+            hintEl.style.display = 'none';
+        }
     }
 }
 
