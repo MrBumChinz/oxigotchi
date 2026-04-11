@@ -84,6 +84,18 @@ If SSH times out:
 - Check that the RNDIS driver is installed (Windows)
 - Try `ping 10.0.0.2` to verify network connectivity
 
+### Does oxigotchi have internet when plugged in via USB?
+
+**Not by default.** USB gadget mode gives the Pi a point-to-point link to your computer (`usb0` → `10.0.0.2` on macOS/Linux, or `192.168.137.2` on Windows RNDIS). That's enough for SSH and the web dashboard, but it isn't a route to the wider internet.
+
+For the Pi to reach the internet via USB, **your computer has to share its own connection onto the USB adapter**:
+
+- **Windows**: Enable Internet Connection Sharing (ICS) on your real network adapter (Ethernet or WiFi). Right-click the adapter → Properties → Sharing tab → "Allow other network users to connect through this computer's Internet connection" → pick the RNDIS/USB Ethernet adapter from the dropdown. Windows assigns the Pi an IP in `192.168.137.x` and routes traffic through NAT automatically.
+- **macOS**: System Settings → General → Sharing → Internet Sharing → share your primary connection ("From") to the USB Ethernet adapter ("To computers using"). Turn on the switch. macOS handles NAT transparently.
+- **Linux**: Manual iptables MASQUERADE + `sysctl -w net.ipv4.ip_forward=1`. See the Arch wiki's "Internet sharing" page for the exact rules; there's no GUI toggle on most distros.
+
+Without any of those, USB is just SSH and dashboard access. The normal way oxigotchi gets internet in the field is **Bluetooth tethering to a phone** (see the [Bluetooth wiki page](Bluetooth)). That works stand-alone, no PC required.
+
 ### E-ink Display
 
 The daemon supports the **Waveshare 2.13" V4** only. Other versions (V1, V2, V3) use different controllers and will not work out of the box.

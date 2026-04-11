@@ -127,14 +127,35 @@ and reliable.
 
 ## Troubleshooting
 
-### "I paired but the Pi never connects"
+### First step for ANY pair issue: clean slate on both sides
+
+The single most common cause of pair/tether problems is a stale one-sided
+bond: one side forgot the bond, the other kept it. Before you spend any
+time debugging, do this:
+
+1. **On the Pi**: web dashboard → Bluetooth card → **Reset pairings** →
+   confirm. This forgets every paired device in BlueZ.
+2. **On the phone**: go to Bluetooth settings → tap the info/gear next to
+   `oxigotchi` → **Forget This Device** (or "Unpair"). Then toggle
+   Bluetooth off and back on.
+3. Pair fresh from the phone side (scan, tap `oxigotchi`, confirm
+   passkey, tap Pair).
+
+This fixes the vast majority of "I was paired but now it doesn't work"
+reports. Try it before reading anything else in this section.
+
+### "I paired but the Pi never connects" (and Reset pairings didn't fix it)
 
 - **Check that mobile data is actually ON on the phone**. Without it the
   phone's BNEP service refuses the connection with `Connection refused`.
 - **Check that the phone's "Bluetooth tethering" toggle is ON** (usually
-  under Portable Hotspot settings).
+  under Portable Hotspot settings). On iOS this is **Settings → Personal
+  Hotspot → Allow Others to Join**.
 - **Toggle Bluetooth tethering OFF then ON** on the phone — some MIUI
   builds need this to re-bind the BNEP service to a fresh bond.
+- **Keep the phone screen unlocked** during the first connect attempt,
+  especially on iOS. iOS suspends hotspot services aggressively when the
+  screen is off.
 - **Reboot the phone entirely**. Sounds drastic, but when the phone's BT
   stack is in a stuck state from previous failed attempts, a full power
   cycle is the only reliable fix.
@@ -142,10 +163,39 @@ and reliable.
 ### "I see `oxigotchi` in my phone's BT list, tap it, then nothing happens"
 
 - Watch the phone screen for a passkey confirmation popup. If it appears,
-  tap **Pair** within a few seconds. MIUI auto-dismisses the popup if you
-  don't respond.
+  tap **Pair** within a few seconds. Some Androids (notably MIUI) auto-
+  dismiss the popup if you don't respond.
 - If no popup appears, the Pi may already have a stale bond for this
   phone. Click **Reset pairings** in the web UI and try again.
+
+### "Phone says connected, the Pi trusted the phone, but the e-ink still shows BT:-"
+
+The daemon's "BT:C" indicator comes from `self.bluetooth.state ==
+Connected`, which only happens after `Network1.Connect("nap")` succeeds
+and a `bnep` interface is up. If Paired+Trusted is true on both sides but
+the BT indicator stays "-", it means the PAN profile never opened. Most
+common causes:
+
+- iOS: Personal Hotspot → **Allow Others to Join** is off.
+- Android: Bluetooth tethering toggle is off in Portable Hotspot
+  settings, OR mobile data is off.
+- Stale one-sided bond — do the clean-slate reset at the top of this
+  section.
+
+You can confirm by querying the daemon:
+
+```bash
+curl -s http://127.0.0.1:8080/api/bluetooth
+```
+
+If `connected: false` and `ip: ""` while the phone says "Connected",
+that's the Pi-side PAN failing. Check the daemon log for the actual
+error:
+
+```bash
+sudo journalctl -u rusty-oxigotchi --since '2 minutes ago' | grep -iE 'Network1|PAN|bnep'
+sudo journalctl -u bluetooth --since '2 minutes ago' | tail -20
+```
 
 ### "Pair works but bond doesn't survive reboot"
 
