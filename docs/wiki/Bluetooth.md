@@ -79,6 +79,8 @@ The `RadioManager` uses a lock file to prevent concurrent mode transitions and e
 
 ## Bluetooth Tethering (Phone-Initiated)
 
+> For the full step-by-step setup walkthrough, per-OS phone instructions (iOS, MIUI, OneUI, stock Android), and a troubleshooting checklist with error-hint reference, see the dedicated **[Bluetooth Tethering Guide](BT-Tethering)** page.
+
 BT tethering uses D-Bus BlueZ directly (`Network1.Connect("nap")`) and stays connected in RAGE and SAFE modes. Pairing is **phone-initiated** — the Pi is discoverable by default and you pair from your phone's Bluetooth settings like any other device.
 
 **Pairing a new phone:**

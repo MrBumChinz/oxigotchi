@@ -8,6 +8,8 @@
 
 **[Getting Started](Getting-Started)** — Flash the image, connect to your Pi, take your first walk. 5 minutes from download to capturing handshakes.
 
+**[Bluetooth Tethering Guide](BT-Tethering)** — Step-by-step: pair your phone over Bluetooth so oxigotchi can upload captures, fetch cracked passwords, and give you SSH over BT PAN.
+
 ---
 
 ## Reference
