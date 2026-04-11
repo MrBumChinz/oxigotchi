@@ -631,6 +631,14 @@ pub fn upload_to_wpasec(path: &Path, config: &WpaSecConfig) -> Result<(), String
             .arg("-s")
             .arg("-S")
             .arg("--fail")
+            // Hard upper bounds: curl defaults to 130s connect + infinite
+            // overall time, which lets a single upload stall the main epoch
+            // loop for minutes whenever there's no internet route (e.g. when
+            // wlan0mon is paused for BT scan/pair). 8s connect + 25s total
+            // is long enough for a real slow cell uplink but short enough
+            // that BT work does not freeze waiting for it.
+            .arg("--connect-timeout").arg("8")
+            .arg("--max-time").arg("25")
             .arg("-b")
             .arg(format!("key={}", config.api_key))
             .arg("-F")
@@ -666,6 +674,10 @@ pub fn fetch_cracked_from_wpasec(config: &WpaSecConfig) -> Vec<(String, String, 
     let url = format!("{}/?api&dl=1", config.url);
     let result = std::process::Command::new("curl")
         .arg("-s")
+        // Same rationale as upload_to_wpasec: bound curl so no HTTP call on
+        // the main loop can stall BT pair/scan work.
+        .arg("--connect-timeout").arg("8")
+        .arg("--max-time").arg("25")
         .arg("-b")
         .arg(format!("key={}", config.api_key))
         .arg(&url)

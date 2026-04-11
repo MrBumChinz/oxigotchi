@@ -131,6 +131,9 @@ whitelist = ["YourNetwork", "YourNetwork-5G"]
 enabled = true
 phone_name = ""
 auto_connect = true
+# Stay discoverable even after a successful tether so users can pair
+# a second phone later without toggling anything in the web UI.
+hide_after_connect = false
 
 [wpa_sec]
 # Get your API key from https://wpa-sec.stanev.org

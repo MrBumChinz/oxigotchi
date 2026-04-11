@@ -77,15 +77,28 @@ When switching modes, the daemon handles radio teardown and bringup:
 
 The `RadioManager` uses a lock file to prevent concurrent mode transitions and ensure clean handoff.
 
-## Bluetooth Tethering (Always-On)
+## Bluetooth Tethering (Phone-Initiated)
 
-BT tethering uses D-Bus BlueZ directly (`Network1.Connect("nap")`) and stays connected in RAGE and SAFE modes:
+BT tethering uses D-Bus BlueZ directly (`Network1.Connect("nap")`) and stays connected in RAGE and SAFE modes. Pairing is **phone-initiated** — the Pi is discoverable by default and you pair from your phone's Bluetooth settings like any other device.
 
-1. At boot, powers on Bluetooth and connects to paired phone via D-Bus PAN **before** starting WiFi monitor mode
-2. Periodically checks BT connection health and auto-reconnects with exponential backoff (30s → 60s → 120s → 300s cap)
-3. Only BT attack mode disconnects phone tethering (web dashboard shows a warning)
-4. When returning from BT attack mode, tether auto-reconnects
-5. iOS/Android MAC randomization is handled transparently via BlueZ bonding (IRK exchange)
+**Pairing a new phone:**
+
+1. On your phone, turn **mobile data ON** (hotspot needs a data connection to share)
+2. Turn **WiFi OFF** on the phone (so hotspot routes via mobile data)
+3. Open the phone's **Bluetooth settings** and tap `oxigotchi` when it appears
+4. When the passkey popup shows, confirm it matches the code in the web dashboard and tap **Pair** on the phone
+
+The daemon auto-trusts the new bond (via a D-Bus PropertiesChanged watcher on `Device1.Paired`), calls `Network1.Connect("nap")`, and runs DHCP on `bnep0`. ~1 second after the phone confirms, the tether is live.
+
+**Runtime behavior:**
+
+1. At boot, powers on Bluetooth, asserts `pairable=true` and `discoverable=true`, and connects to the paired phone via D-Bus PAN **before** starting WiFi monitor mode
+2. If `bnep0` already exists at boot (from a previous session), adopts it instead of re-connecting
+3. Periodically checks BT connection health and auto-reconnects with exponential backoff (30s → 60s → 120s → 300s cap)
+4. Only BT offensive mode disconnects phone tethering (web dashboard shows a warning)
+5. When returning from BT offensive mode, tether auto-reconnects
+6. iOS/Android MAC randomization is handled transparently via BlueZ bonding (IRK exchange)
+7. Bus-death recovery: if `bluetoothd` restarts, the daemon re-initializes its D-Bus connection, re-registers Agent1, and re-registers the paired-device watcher on the new connection
 
 ## Configuration
 
@@ -94,19 +107,22 @@ In `/etc/oxigotchi/config.toml`:
 ```toml
 [bluetooth]
 enabled = true
-phone_name = "My Phone"       # Optional display name
+phone_name = "My Phone"       # Optional display label (used to prefer this device when multiple are paired)
 auto_connect = true           # Auto-connect at boot
-hide_after_connect = true     # Hide adapter after connecting
+hide_after_connect = false    # Stay discoverable after a successful tether so a second phone can pair later
 ```
 
-No MAC address is needed — the daemon auto-discovers paired devices via D-Bus `ObjectManager`. Pair your phone from the web dashboard or via `bluetoothctl`. See [docs/BT_TETHERING.md](https://github.com/CoderFX/oxigotchi/blob/main/docs/BT_TETHERING.md) for full setup instructions.
+No MAC address is needed — the daemon auto-discovers paired devices via D-Bus `ObjectManager` and filters to only devices that advertise the NAP UUID (so paired headsets, watches, and smart speakers don't poison auto-connect). See [docs/BT_TETHERING.md](https://github.com/CoderFX/oxigotchi/blob/main/docs/BT_TETHERING.md) for full setup instructions and troubleshooting.
 
 ### Dashboard Controls
 
 The web dashboard's Bluetooth card shows:
-- Current BT state (off/scanning/attacking/tethered)
-- **Phone Tethering** section: scan, pair, disconnect, forget devices
-- Passkey confirmation during pairing
-- Discovered devices with vendor identification
-- BT aggression level selector (BT:1/BT:2/BT:3)
+- Current BT state (off/connecting/tethered)
+- **Phone Tethering** section with step-by-step pairing instructions
+- **Passkey display** — shown when a phone initiates a pair, so you can verify the 6-digit code matches the phone
+- **Disconnect** button (only when the tether is live)
+- **Reset pairings** button — forgets every paired BT device in BlueZ
+- Discoverable toggle (default ON)
 - Mode toggle buttons (RAGE/BT/SAFE)
+
+There is intentionally no "Scan + Pair" button from the Pi side. Pi-initiated outgoing pairs were fragile across MIUI builds; phone-initiated pairing is the reliable path and what actually worked in production.

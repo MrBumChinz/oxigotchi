@@ -95,13 +95,15 @@ After your walk, plug back in and open the dashboard. The **Recent Captures** ca
 
 For untethered walks with internet access (auto-upload captures, Discord notifications, SSH from your phone):
 
-1. Open the dashboard → **Phone Tethering** card
-2. Tap **Scan for Devices**
-3. Select your phone and tap **Pair**
-4. Confirm the passkey on both devices
-5. On your phone, enable **Bluetooth tethering** (Settings → Network → Bluetooth tethering)
+1. On your phone, turn **mobile data ON** (hotspot needs a data connection to share)
+2. Turn **WiFi OFF** on the phone so its tethering routes via mobile data
+3. Enable **Bluetooth tethering** in phone settings (Portable hotspot → Bluetooth tethering)
+4. Open the phone's **Bluetooth settings** and tap `oxigotchi` when it appears in the scan list
+5. When the passkey popup shows, verify the 6-digit code matches the one on the web dashboard and tap **Pair** on the phone
 
-The Pi auto-connects to your phone on every boot. You can access the dashboard from your phone's browser at the BT PAN IP.
+The daemon auto-trusts the new bond and establishes the tether in about 1 second. The Pi stays discoverable by default so you can add a second phone later without toggling anything. From then on, `oxigotchi` auto-connects to the paired phone on every boot. You can access the dashboard from your phone's browser at the BT PAN IP.
+
+> The web UI intentionally has **no** "Scan + Pair" button. Pi-initiated outgoing pair was fragile across Android builds; phone-initiated pairing is the reliable path.
 
 ## 9. Crank Up the Aggression
 

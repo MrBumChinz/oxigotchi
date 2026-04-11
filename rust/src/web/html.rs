@@ -88,7 +88,11 @@ input:checked+.slider:before{transform:translateX(22px)}
 .wl-select{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit}
 .wl-btn{padding:8px 16px;border:none;border-radius:6px;font-family:inherit;font-size:12px;font-weight:bold;cursor:pointer;transition:.2s}
 .wl-btn:active{transform:scale(0.95)}
+.wl-btn:disabled{opacity:.35;cursor:not-allowed}
 .wl-btn-add{background:#00d4aa;color:#1a1a2e}
+.wl-btn-add:hover:not(:disabled){background:#00f0bf}
+.wl-btn-danger{background:#e94560;color:#fff}
+.wl-btn-danger:hover:not(:disabled){background:#ff5875}
 .wl-btn-rm{background:#e94560;color:#fff;padding:4px 10px;font-size:11px;border:none;border-radius:4px;cursor:pointer}
 .wl-btn-rm:active{transform:scale(0.95)}
 .ch-input{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;width:100%}
@@ -144,16 +148,6 @@ input:checked+.slider:before{transform:translateX(22px)}
 .interact-btn:disabled{opacity:0.35;cursor:not-allowed;color:#555}
 .interact-btn.on-cooldown{border-color:#0f3460;color:#555;font-size:11px}
 .interact-response{margin-top:8px;font-size:12px;color:#00d4aa;text-align:center;min-height:18px;transition:opacity .3s}
-.util-btn{padding:6px 14px;border:1px solid #0f3460;border-radius:8px;background:#0a1628;color:#e0e0e0;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;transition:all .2s}
-.util-btn:hover:not(:disabled){background:#0f3460;border-color:#00d4aa;color:#00d4aa}
-.util-btn:active:not(:disabled){transform:scale(0.95)}
-.util-btn:disabled{opacity:0.35;cursor:not-allowed}
-.util-btn-danger{border-color:#5c1a1a;color:#e94560;background:#1a1a2e}
-.util-btn-danger:hover:not(:disabled){background:#5c1a1a;border-color:#e94560}
-.util-btn-confirm{border-color:#1a5c1a;color:#00d4aa}
-.util-btn-confirm:hover:not(:disabled){background:#1a5c1a;border-color:#00d4aa}
-.util-btn-reject{border-color:#5c1a1a;color:#e94560}
-.util-btn-reject:hover:not(:disabled){background:#5c1a1a;border-color:#e94560}
 @media(max-width:400px){.grid-2{grid-template-columns:1fr}.stat-row{gap:4px}.stat .value{font-size:15px}.bt-dev{padding:8px 10px;gap:8px}.bt-dev-rssi{display:none}}
 </style>
 </head>
@@ -545,20 +539,25 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <label class="switch"><input type="checkbox" id="bt-visible" onchange="toggleBtVisible(this.checked)"><span class="slider"></span></label>
 </div>
 <div class="card-section" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
-<div style="font-size:13px;font-weight:600;color:#e0e0e0;margin-bottom:8px">Phone Tethering</div>
-<div style="display:flex;gap:8px;align-items:center">
-<button class="util-btn" onclick="btScan()" id="bt-scan-btn">Scan for Devices</button>
-<button class="util-btn" id="bt-connect-btn" onclick="btTetherConnect()" style="display:none">Connect</button>
-<button class="util-btn util-btn-danger" id="bt-disconnect-btn" onclick="btTetherDisconnect()" style="display:none">Disconnect</button>
+<div class="sub" style="margin-bottom:8px">Phone Tethering</div>
+<div style="font-size:12px;color:#aaa;line-height:1.6">
+With <b style="color:#00d4aa">Discoverable</b> on, pair from your phone:
+<ol style="margin:6px 0 6px 18px;padding:0">
+<li>On your phone, turn <b>mobile data ON</b> (hotspot needs a data connection to share)</li>
+<li>Turn <b>WiFi OFF</b> on your phone (so the hotspot routes via mobile data)</li>
+<li>Open phone <b>Bluetooth settings</b> and tap <b>oxigotchi</b> when it appears</li>
+<li>When the passkey popup shows, confirm it matches the code below and tap <b>Pair</b> on your phone</li>
+</ol>
+Oxigotchi will auto-trust and connect. No buttons to press here.
 </div>
-<button class="util-btn util-btn-danger" id="bt-reset-btn" onclick="resetAllBtPairings()" style="margin-top:6px">Reset all BT pairings</button>
-<div id="bt-device-list" style="margin-top:8px"></div>
-<div id="bt-passkey-area" style="display:none;margin-top:10px;padding:10px;background:#0a1628;border-radius:8px">
-<div style="color:#e0e0e0;font-size:12px">Confirm passkey matches your phone:</div>
-<div id="bt-passkey-code" style="font-size:24px;font-weight:bold;color:#00d4ff;text-align:center;padding:10px">------</div>
-<div style="display:flex;gap:8px;justify-content:center">
-<button class="util-btn util-btn-confirm" onclick="btConfirmPasskey(true)">Confirm</button>
-<button class="util-btn util-btn-reject" onclick="btConfirmPasskey(false)">Reject</button>
+<div id="bt-passkey-area" style="display:none;margin-top:10px;padding:10px;background:#0a1628;border-radius:8px;border:1px solid #00d4aa">
+<div style="color:#e0e0e0;font-size:12px;text-align:center">Pairing passkey &mdash; confirm this matches your phone:</div>
+<div id="bt-passkey-code" style="font-size:28px;font-weight:bold;color:#00d4ff;text-align:center;padding:10px;letter-spacing:2px">------</div>
+<div style="color:#888;font-size:11px;text-align:center">Accept on the phone to complete pairing</div>
+</div>
+<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px">
+<button class="wl-btn wl-btn-danger" id="bt-disconnect-btn" onclick="btTetherDisconnect()" style="display:none">Disconnect</button>
+<button class="wl-btn wl-btn-danger" id="bt-reset-btn" onclick="resetAllBtPairings()">Reset pairings</button>
 </div>
 </div>
 </div>
@@ -1514,62 +1513,6 @@ function toggleBtVisible(visible) {
     });
 }
 
-function btScan() {
-    var btn = document.getElementById('bt-scan-btn');
-    btn.textContent = 'Scanning...';
-    btn.disabled = true;
-    document.getElementById('bt-device-list').innerHTML = '<div style="color:#888;font-size:12px">Scanning for nearby devices (~10s)...</div>';
-    api('POST', '/api/bluetooth/scan', {}).then(function() {
-        // Poll for results every 2s
-        var poll = setInterval(function() {
-            api('GET', '/api/bluetooth/scan').then(function(devices) {
-                if (!devices) return;
-                if (devices.length > 0) {
-                    clearInterval(poll);
-                    btn.textContent = 'Scan for Devices';
-                    btn.disabled = false;
-                    renderBtDeviceList(devices);
-                }
-            });
-        }, 2000);
-        // Stop polling after 20s — scan done or no devices found
-        setTimeout(function() {
-            clearInterval(poll);
-            btn.textContent = 'Scan for Devices';
-            btn.disabled = false;
-            if (document.getElementById('bt-device-list').innerHTML.indexOf('Scanning') !== -1) {
-                document.getElementById('bt-device-list').innerHTML = '<div style="color:#888;font-size:12px">No devices found. Make sure your phone\'s Bluetooth is on.</div>';
-            }
-        }, 20000);
-    });
-}
-
-function btPair(mac, name) {
-    var label = name || mac;
-    toast('Pairing with ' + label + '...');
-    api('POST', '/api/bluetooth/pair', {mac: mac}).then(function(r) {
-        if (r && r.ok) {
-            toast(r.message);
-            document.getElementById('bt-device-list').innerHTML = '<div style="color:#f0c040;font-size:12px" id="bt-pair-status">&#9881; Pairing with ' + esc(label) + '... confirm on your phone</div>';
-        }
-    });
-}
-
-function btForget(m) {
-    if (confirm('Remove ' + m + ' from paired devices?')) {
-        api('POST', '/api/bluetooth/forget', {mac: m}).then(function(r) {
-            if (r && r.ok) toast('Device removed');
-        });
-    }
-}
-
-function btTetherConnect() {
-    if (!confirm('Connect BT tethering to your phone?\\nThis will use the last paired device.')) return;
-    api('POST', '/api/button', {tap: 'long'}).then(function(r) {
-        if (r && r.ok) toast('BT tether connecting...');
-    });
-}
-
 function btTetherDisconnect() {
     if (!confirm('Disconnect BT tethering?\\nIf you are accessing this dashboard over BT, you will lose connection.')) return;
     api('POST', '/api/bluetooth/disconnect').then(function(r) {
@@ -1581,11 +1524,6 @@ function btDisconnect() {
     api('POST', '/api/bluetooth/disconnect').then(function(r) {
         if (r && r.ok) toast('BT disconnected');
     });
-}
-
-function btConfirmPasskey(c) {
-    api('POST', '/api/bluetooth/confirm-passkey', {confirmed: c});
-    document.getElementById('bt-passkey-area').style.display = 'none';
 }
 
 function resetAllBtPairings() {
@@ -1629,19 +1567,6 @@ function resetAllBtPairings() {
             });
         }, 1500);
     });
-}
-
-function renderBtDeviceList(devices) {
-    var dl = document.getElementById('bt-device-list');
-    if (!dl || !devices || devices.length === 0) return;
-    var html = '<div style="font-size:11px;color:#888;margin-bottom:4px">Found ' + devices.length + ' device(s):</div>';
-    devices.forEach(function(v) {
-        var ms = v.mac ? v.mac.slice(-5) : '';
-        html += '<div onclick="btPair(\'' + esc(v.mac) + '\',\'' + esc(v.name || '') + '\')" style="display:flex;justify-content:space-between;align-items:center;padding:8px;margin:4px 0;border:1px solid #0f3460;border-radius:8px;background:#0a1628;cursor:pointer;transition:all .2s" onmouseover="this.style.borderColor=\'#00d4aa\';this.style.background=\'#0f3460\'" onmouseout="this.style.borderColor=\'#0f3460\';this.style.background=\'#0a1628\'">' +
-            '<span style="color:#e0e0e0;font-size:12px">' + esc(v.name || 'Unknown') + ' <span style="color:#666;font-size:10px">(' + ms + ')</span></span>' +
-            '<span style="color:#00d4aa;font-size:11px;font-weight:600">Pair &rarr;</span></div>';
-    });
-    dl.innerHTML = html;
 }
 
 // --- BT Offensive functions ---
@@ -1974,34 +1899,18 @@ function updateBluetoothFromWs(d) {
     document.getElementById('bt-feature-mode').textContent = d.feature_mode || '-';
     document.getElementById('bt-nearby').textContent = d.nearby_devices != null ? d.nearby_devices : '-';
     document.getElementById('bt-contention').textContent = d.contention_score != null ? d.contention_score : '-';
-    // tether connect/disconnect button visibility
-    var cBtn = document.getElementById('bt-connect-btn');
+    // Disconnect button visibility — only show when the tether is live
     var dBtn = document.getElementById('bt-disconnect-btn');
-    if (cBtn) { cBtn.style.display = (!d.connected && d.device_name) ? 'inline-block' : 'none'; }
     if (dBtn) { dBtn.style.display = d.connected ? 'inline-block' : 'none'; }
-    // passkey display
+    // passkey display — fills the informational box while Agent1 waits for
+    // the user to tap Pair on the phone. Cleared when bt_passkey goes null
+    // (daemon clears it on PairingComplete).
     if (d.passkey != null && d.passkey > 0) {
         document.getElementById('bt-passkey-code').textContent = String(d.passkey).padStart(6, '0');
         document.getElementById('bt-passkey-area').style.display = 'block';
     } else {
         var pa = document.getElementById('bt-passkey-area');
         if (pa) pa.style.display = 'none';
-    }
-    // live pairing status update
-    var ps = document.getElementById('bt-pair-status');
-    if (ps) {
-        if (d.pair_in_progress) {
-            if (d.passkey) {
-                ps.innerHTML = '&#128273; Passkey: <b>' + String(d.passkey).padStart(6,'0') + '</b> — confirm on phone';
-                ps.style.color = '#00d4aa';
-            }
-        } else if (d.connected) {
-            ps.innerHTML = '&#10004; Connected!';
-            ps.style.color = '#00d4aa';
-        } else if (d.state === 'Error') {
-            ps.innerHTML = '&#10006; Pairing failed';
-            ps.style.color = '#e94560';
-        }
     }
 }
 
@@ -2384,7 +2293,6 @@ function updateAllCards(state) {
     if (state.bt_attacks) updateBtRageFromWs(state.bt_attacks);
     if (state.bt_attacks) updateBtAttacksFromWs(state.bt_attacks);
     if (state.bt_captures) updateBtCapturesFromWs(state.bt_captures);
-    if (state.bt_scan_results && state.bt_scan_results.length > 0) renderBtDeviceList(state.bt_scan_results);
 }
 
 function startPolling() {

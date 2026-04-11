@@ -136,11 +136,12 @@ pub struct DaemonState {
     /// Broadcasts remaining before clearing bt_manual_result.
     pub bt_manual_result_ttl: u8,
 
-    // BT tether v2 pairing flow
+    // BT tether web-command fields. Pairing itself is phone-initiated and
+    // handled entirely in the bluetooth module via Agent1 + PropertiesChanged;
+    // the fields below are just user-action commands we receive from the UI.
     pub pending_bt_forget: Option<String>,        // D-Bus device path to forget
-    pub bt_passkey: Option<u32>,                  // Current passkey for confirmation
+    pub bt_passkey: Option<u32>,                  // Passkey for display while Agent1 waits for phone confirm
     pub bt_passkey_device: String,                // Device name being paired
-    pub bt_passkey_confirmed: Option<bool>,       // User's confirmation response
     pub pending_bt_disconnect: Option<bool>,      // Disconnect request (suppresses auto-reconnect)
     /// User-requested "Reset all BT pairings" escape hatch.
     pub pending_bt_reset_pairings: bool,
@@ -229,13 +230,8 @@ pub struct DaemonState {
     pub pending_bt_toggle: Option<bool>,
     /// Button tap event from pisugar-server shell script (1=single, 2=double, 3=long).
     pub pending_button_tap: Option<u8>,
-    pub pending_bt_pair: Option<String>,
     pub bt_scan_results: Vec<BtScanDevice>,
     pub bt_scan_in_progress: bool,
-    /// Background pairing in progress (pair_device + trust running in thread).
-    pub bt_pair_in_progress: bool,
-    /// Result of background pair+trust thread: Some(Ok(path)) or Some(Err(msg)).
-    pub bt_pair_result: Option<Result<String, String>>,
     pub pending_settings: Option<SettingsUpdate>,
 
     // -- plugins --
@@ -382,7 +378,6 @@ impl DaemonState {
             pending_bt_forget: None,
             bt_passkey: None,
             bt_passkey_device: String::new(),
-            bt_passkey_confirmed: None,
             pending_bt_disconnect: None,
             pending_bt_reset_pairings: false,
             pending_bt_refresh_paired: false,
@@ -442,11 +437,8 @@ impl DaemonState {
             pending_attack_toggle: None,
             pending_bt_toggle: None,
             pending_button_tap: None,
-            pending_bt_pair: None,
             bt_scan_results: Vec::new(),
             bt_scan_in_progress: false,
-            bt_pair_in_progress: false,
-            bt_pair_result: None,
             pending_settings: None,
             plugin_list: Vec::new(),
             pending_plugin_updates: Vec::new(),
@@ -635,7 +627,10 @@ fn build_ws_snapshot(s: &DaemonState) -> WsSnapshot {
             contention_score: s.bt_feature_contention_score,
             passkey: s.bt_passkey,
             passkey_device: s.bt_passkey_device.clone(),
-            pair_in_progress: s.bt_pair_in_progress,
+            // "Pairing in progress" from the UI's POV == Agent1 is waiting for
+            // the user to tap Pair on the phone. Derived purely from passkey
+            // presence now that the explicit state machine is gone.
+            pair_in_progress: s.bt_passkey.is_some(),
         },
         bt_attacks: BtAttackResponse {
             enabled: s.bt_attack_enabled,
@@ -1165,7 +1160,8 @@ pub struct BtScanDevice {
     pub name: String,
 }
 
-/// BT pair request.
+/// BT device reference by MAC. Used by the `/api/bluetooth/forget` handler;
+/// the historical name is kept to avoid a gratuitous rename in web code.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BtPairRequest {
     pub mac: String,
@@ -1376,7 +1372,6 @@ pub const API_RESTART_SSH: &str = "/api/restart-ssh";
 pub const API_RESTART_PWN: &str = "/api/restart-pwn";
 pub const API_SETTINGS: &str = "/api/settings";
 pub const API_BT_SCAN: &str = "/api/bluetooth/scan";
-pub const API_BT_PAIR: &str = "/api/bluetooth/pair";
 pub const API_RADIO: &str = "/api/radio";
 pub const API_CAPTURE_ALL: &str = "/api/capture-all";
 pub const API_BT_ATTACKS: &str = "/api/bt/attacks";
@@ -1389,7 +1384,6 @@ pub const API_BT_PATCHRAM: &str = "/api/bt/patchram";
 pub const API_BT_SCAN_MODE: &str = "/api/bt/scan-mode";
 pub const API_BT_FORGET: &str = "/api/bluetooth/forget";
 pub const API_BT_DISCONNECT: &str = "/api/bluetooth/disconnect";
-pub const API_BT_CONFIRM_PASSKEY: &str = "/api/bluetooth/confirm-passkey";
 pub const API_BT_RESET_PAIRINGS: &str = "/api/bluetooth/reset-pairings";
 pub const API_BT_LIST_PAIRED: &str = "/api/bluetooth/paired";
 pub const API_BT_REFRESH_PAIRED: &str = "/api/bluetooth/refresh-paired";
@@ -1678,7 +1672,7 @@ async fn bluetooth_handler(State(state): State<SharedState>) -> Json<BluetoothIn
         contention_score: s.bt_feature_contention_score,
         passkey: s.bt_passkey,
         passkey_device: s.bt_passkey_device.clone(),
-        pair_in_progress: s.bt_pair_in_progress,
+        pair_in_progress: s.bt_passkey.is_some(),
     })
 }
 
@@ -2427,7 +2421,9 @@ async fn restart_ssh_handler() -> Json<ActionResponse> {
     })
 }
 
-/// POST /api/bluetooth/scan -> trigger BT scan, return cached results
+/// POST /api/bluetooth/scan -> trigger BT scan, return cached results.
+/// Used by BT attack mode; phone tethering is phone-initiated and does not
+/// go through this path.
 async fn bt_scan_handler(State(state): State<SharedState>) -> Json<Vec<BtScanDevice>> {
     let mut s = state.lock().unwrap();
     if s.bt_scan_in_progress {
@@ -2444,20 +2440,6 @@ async fn bt_scan_handler(State(state): State<SharedState>) -> Json<Vec<BtScanDev
 async fn bt_scan_results_handler(State(state): State<SharedState>) -> Json<Vec<BtScanDevice>> {
     let s = state.lock().unwrap();
     Json(s.bt_scan_results.clone())
-}
-
-/// POST /api/bluetooth/pair -> pair with a device by MAC
-async fn bt_pair_handler(
-    State(state): State<SharedState>,
-    Json(body): Json<BtPairRequest>,
-) -> Json<ActionResponse> {
-    log::info!("web: BT pair request for {}", body.mac);
-    let mut s = state.lock().unwrap();
-    s.pending_bt_pair = Some(body.mac.clone());
-    Json(ActionResponse {
-        ok: true,
-        message: format!("Pairing with {} queued", body.mac),
-    })
 }
 
 /// POST /api/bluetooth/forget -> remove a paired device
@@ -2481,20 +2463,6 @@ async fn bt_disconnect_handler(
 ) -> impl IntoResponse {
     let mut s = state.lock().unwrap();
     s.pending_bt_disconnect = Some(true);
-    Json(serde_json::json!({"ok": true}))
-}
-
-/// POST /api/bluetooth/confirm-passkey -> user confirms or rejects passkey
-async fn bt_confirm_passkey_handler(
-    State(state): State<SharedState>,
-    Json(body): Json<serde_json::Value>,
-) -> impl IntoResponse {
-    let confirmed = body.get("confirmed").and_then(|v| v.as_bool()).unwrap_or(false);
-    let mut s = state.lock().unwrap();
-    s.bt_passkey_confirmed = Some(confirmed);
-    // Clear passkey display — Agent1 auto-accepts, this is informational acknowledgement
-    s.bt_passkey = None;
-    s.bt_passkey_device.clear();
     Json(serde_json::json!({"ok": true}))
 }
 
@@ -3042,10 +3010,8 @@ pub fn build_router(state: SharedState, ws_tx: broadcast::Sender<String>) -> Rou
             API_BT_SCAN,
             get(bt_scan_results_handler).post(bt_scan_handler),
         )
-        .route(API_BT_PAIR, post(bt_pair_handler))
         .route(API_BT_FORGET, post(bt_forget_handler))
         .route(API_BT_DISCONNECT, post(bt_disconnect_handler))
-        .route(API_BT_CONFIRM_PASSKEY, post(bt_confirm_passkey_handler))
         .route(API_BT_LIST_PAIRED, get(bt_list_paired_handler))
         .route(API_BT_REFRESH_PAIRED, post(bt_refresh_paired_handler))
         .route(API_BT_RESET_PAIRINGS, post(bt_reset_pairings_handler))

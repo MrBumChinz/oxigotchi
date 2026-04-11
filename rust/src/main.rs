@@ -212,9 +212,10 @@ struct Daemon {
     active_pack: display::face_pack::FacePack,
     face_pack_timer: WallTimer,
     face_pack_last_error: Option<String>,
-    /// True if AO was stopped to free the radio for a BT pair flow.
-    /// Daemon restarts AO after the pair flow terminates (Done or Failed).
-    ao_paused_for_bt_pair: bool,
+    /// True while a BT scan thread is running and we have paused AO + wlan0mon
+    /// to free the shared antenna for BT inquiry. Cleared when the scan thread
+    /// completes and the main loop restores WiFi.
+    ao_paused_for_bt_scan: bool,
 }
 
 impl Daemon {
@@ -334,7 +335,7 @@ impl Daemon {
             active_pack: display::face_pack::FacePack::empty(),
             face_pack_timer: WallTimer::new(Duration::from_secs(30)),
             face_pack_last_error: None,
-            ao_paused_for_bt_pair: false,
+            ao_paused_for_bt_scan: false,
         }
     }
 
@@ -613,6 +614,23 @@ impl Daemon {
                     bluetooth::dbus::PairingEvent::RequestConfirmation { device } => {
                         info!("BT: pairing request from {device} (auto-accepted)");
                     }
+                    bluetooth::dbus::PairingEvent::DeviceNewlyPaired { device } => {
+                        // Phone-initiated pair just completed. Auto-set Trusted=true
+                        // so the daemon's connect path (and any user-facing logic
+                        // that cares about Trusted) sees a clean, first-class bond.
+                        // Without this, Rob's Discord symptom hits: pair works but
+                        // PAN auto-connect silently skips the device until the user
+                        // manually runs `bluetoothctl trust MAC`.
+                        info!("BT: auto-trusting newly paired device {device}");
+                        if let Some(ref dbus) = self.bluetooth.dbus_ref() {
+                            match dbus.trust_device(&device) {
+                                Ok(()) => info!("BT: auto-trust OK for {device}"),
+                                Err(e) => log::warn!("BT: auto-trust failed for {device}: {e}"),
+                            }
+                        } else {
+                            log::warn!("BT: auto-trust skipped — D-Bus not initialized");
+                        }
+                    }
                 }
             }
         }
@@ -629,10 +647,10 @@ impl Daemon {
                 .personality
                 .set_override(personality::Face::AoCrashed);
         }
-        // Suppress AO auto-restart while a BT pair flow is in progress —
-        // restarting AO mid-pair puts wlan0mon back on the shared antenna
-        // and starves BT paging.
-        if self.mode == OperatingMode::Rage && !self.ao_paused_for_bt_pair {
+        // Suppress AO auto-restart while a BT scan is in progress —
+        // restarting AO puts wlan0mon back on the shared antenna and
+        // starves BT inquiry.
+        if self.mode == OperatingMode::Rage && !self.ao_paused_for_bt_scan {
             self.ao.try_auto_restart();
         }
 
@@ -1281,21 +1299,33 @@ impl Daemon {
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
 
-        // 5. Upload pending .22000 files to WPA-SEC
-        let (uploaded, upload_failed) = capture::upload_all_pending(
-            &mut self.captures,
-            &self.wpasec_config,
-            &mut self.upload_queue,
-        );
-        if uploaded > 0 {
-            info!("WPA-SEC: uploaded {uploaded} files");
-        }
-        if upload_failed > 0 {
-            log::warn!("WPA-SEC: {upload_failed} upload(s) failed");
+        // 5. Upload pending .22000 files to WPA-SEC.
+        // Skipped while a BT scan owns the radio: wlan0mon is down, there
+        // is no internet route, and curl would block the main epoch loop
+        // (even with --max-time 25s) long enough to starve BT inquiry. The
+        // upload queue is persistent, so files upload on the next clean
+        // epoch after the scan completes.
+        if self.ao_paused_for_bt_scan {
+            log::debug!("WPA-SEC upload skipped: BT scan owns the radio");
+        } else {
+            let (uploaded, upload_failed) = capture::upload_all_pending(
+                &mut self.captures,
+                &self.wpasec_config,
+                &mut self.upload_queue,
+            );
+            if uploaded > 0 {
+                info!("WPA-SEC: uploaded {uploaded} files");
+            }
+            if upload_failed > 0 {
+                log::warn!("WPA-SEC: {upload_failed} upload(s) failed");
+            }
         }
 
         // 5b. Fetch cracked passwords from WPA-SEC (every 25 min wall-clock)
-        if self.wpasec_fetch_timer.due() && self.wpasec_config.enabled {
+        if self.wpasec_fetch_timer.due()
+            && self.wpasec_config.enabled
+            && !self.ao_paused_for_bt_scan
+        {
             let cracked = capture::fetch_cracked_from_wpasec(&self.wpasec_config);
             if !cracked.is_empty() {
                 info!("WPA-SEC: fetched {} cracked password(s)", cracked.len());
@@ -1340,6 +1370,12 @@ impl Daemon {
         let _ = std::process::Command::new("curl")
             .args([
                 "-s",
+                // Bound curl so Discord webhooks cannot stall the main loop
+                // when there is no internet route (e.g. wlan0mon paused for BT).
+                "--connect-timeout",
+                "5",
+                "--max-time",
+                "15",
                 "-H",
                 "Content-Type: application/json",
                 "-d",
@@ -1857,12 +1893,21 @@ impl Daemon {
             }
         }
 
-        // Process BT scan request — spawn in background thread to avoid blocking
+        // Process BT scan request — spawn in background thread to avoid blocking.
+        // Used by the BT attacks UI (tether pairing is phone-initiated and
+        // doesn't go through this path). AO + wlan0mon get paused for the
+        // duration so the BCM43436B0 shared antenna is free for BT inquiry.
         let bt_scan_needed = {
             let s = self.shared_state.lock().unwrap();
             s.bt_scan_in_progress && s.bt_scan_results.is_empty()
         };
         if bt_scan_needed {
+            info!("web: pausing AO and wlan0mon for BT scan (radio coexistence)");
+            self.ao.stop();
+            if let Err(e) = self.wifi.pause_for_bt() {
+                log::warn!("web: wlan0mon pause for scan failed: {e}");
+            }
+            self.ao_paused_for_bt_scan = true;
             info!("web: BT scan triggered (background thread)");
             let shared = Arc::clone(&self.shared_state);
             let _ = std::thread::Builder::new()
@@ -1879,6 +1924,21 @@ impl Daemon {
                     s.bt_scan_in_progress = false;
                     log::info!("BT scan thread completed");
                 });
+        }
+
+        // Detect scan completion and restore WiFi/AO.
+        if self.ao_paused_for_bt_scan {
+            let scan_done = {
+                let s = self.shared_state.lock().unwrap();
+                !s.bt_scan_in_progress
+            };
+            if scan_done {
+                info!("web: BT scan complete — resuming wlan0mon and AO");
+                if let Err(e) = self.wifi.resume_from_pause() {
+                    log::warn!("web: wlan0mon resume after scan failed: {e}");
+                }
+                self.ao_paused_for_bt_scan = false;
+            }
         }
 
         // Process BT forget
@@ -1939,107 +1999,6 @@ impl Daemon {
             match self.bluetooth.reset_all_pairings() {
                 Ok(n) => info!("web: BT reset pairings removed {n} device(s)"),
                 Err(e) => log::warn!("web: BT reset pairings failed: {e}"),
-            }
-        }
-
-        // Process BT pair request — spawn in background thread so the main
-        // epoch loop can keep processing D-Bus Agent1 passkey events.
-        let bt_pair_mac = {
-            let mut s = self.shared_state.lock().unwrap();
-            if s.bt_pair_in_progress {
-                None // Already pairing, ignore duplicate requests
-            } else {
-                s.pending_bt_pair.take()
-            }
-        };
-        if let Some(mac) = bt_pair_mac {
-            any_command = true;
-            info!("web: BT pair flow starting for {mac}");
-            // ALWAYS pause WiFi+AO for the duration of the pair flow —
-            // the BCM43436B0 shares an antenna between WiFi and BT.
-            // We pause regardless of AO's current state because:
-            //   (a) AO may be Crashed and about to auto-restart mid-flow
-            //   (b) wlan0mon may still be up holding the radio even if
-            //       AO's userspace process isn't running
-            // Both are restored after the flow terminates (Done or Failed).
-            info!("web: pausing AO and wlan0mon for BT pair flow (radio coexistence)");
-            self.ao.stop();
-            if let Err(e) = self.wifi.pause_for_bt() {
-                log::warn!("web: wlan0mon pause failed: {e}");
-            }
-            self.ao_paused_for_bt_pair = true;
-            match self.bluetooth.pair_and_trust_flow_start(&mac) {
-                Ok(()) => {
-                    let mut s = self.shared_state.lock().unwrap();
-                    s.bt_pair_in_progress = true;
-                    s.bt_pair_result = None;
-                }
-                Err(e) => {
-                    log::warn!("web: BT pair flow start failed: {e}");
-                    // If we paused WiFi/AO but the flow never started, restore them now.
-                    if self.ao_paused_for_bt_pair {
-                        if let Err(re) = self.wifi.resume_from_pause() {
-                            log::warn!("web: wlan0mon resume after failed pair start failed: {re}");
-                        }
-                        if let Err(re) = self.ao.start() {
-                            log::warn!("web: AO restart after failed pair start failed: {re}");
-                        }
-                        self.ao_paused_for_bt_pair = false;
-                    }
-                    let mut s = self.shared_state.lock().unwrap();
-                    s.bt_pair_in_progress = false;
-                    s.bt_pair_result = Some(Err(e));
-                }
-            }
-        }
-
-        // Advance the BT pair flow state machine. Returns Done/Failed only when
-        // the flow terminates; InProgress while still running or Idle.
-        let pair_outcome = self.bluetooth.pair_and_trust_flow_tick();
-        match pair_outcome {
-            bluetooth::PairFlowOutcome::Done(device_path) => {
-                any_command = true;
-                info!("web: BT pair+trust completed, connecting PAN to {device_path}");
-                match self.bluetooth.connect_after_pair(&device_path) {
-                    Ok(()) => info!("web: BT paired+connected to {device_path}"),
-                    Err(e) => log::warn!("web: BT PAN connect failed: {e}"),
-                }
-                // Restart WiFi monitor + AO if we paused them for the pair flow.
-                if self.ao_paused_for_bt_pair {
-                    info!("web: resuming wlan0mon and AO after successful pair");
-                    if let Err(e) = self.wifi.resume_from_pause() {
-                        log::warn!("web: wlan0mon resume failed: {e}");
-                    }
-                    if let Err(e) = self.ao.start() {
-                        log::warn!("web: AO restart after pair failed: {e}");
-                    }
-                    self.ao_paused_for_bt_pair = false;
-                }
-                let mut s = self.shared_state.lock().unwrap();
-                s.bt_pair_in_progress = false;
-                s.bt_pair_result = Some(Ok(device_path));
-            }
-            bluetooth::PairFlowOutcome::Failed(e) => {
-                any_command = true;
-                log::warn!("web: BT pair failed: {e}");
-                self.bluetooth.state = bluetooth::BtState::Error;
-                // Restart WiFi monitor + AO if we paused them for the pair flow.
-                if self.ao_paused_for_bt_pair {
-                    info!("web: resuming wlan0mon and AO after failed pair");
-                    if let Err(re) = self.wifi.resume_from_pause() {
-                        log::warn!("web: wlan0mon resume failed: {re}");
-                    }
-                    if let Err(re) = self.ao.start() {
-                        log::warn!("web: AO restart after pair failed: {re}");
-                    }
-                    self.ao_paused_for_bt_pair = false;
-                }
-                let mut s = self.shared_state.lock().unwrap();
-                s.bt_pair_in_progress = false;
-                s.bt_pair_result = Some(Err(e));
-            }
-            bluetooth::PairFlowOutcome::InProgress => {
-                // Nothing to do this epoch.
             }
         }
 

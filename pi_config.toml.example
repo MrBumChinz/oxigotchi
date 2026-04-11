@@ -361,4 +361,7 @@ enabled = true
 phone_name = ""
 auto_pair = true
 auto_connect = true
-hide_after_connect = true
+# Stay discoverable even after a successful tether so users can pair a
+# second phone later without toggling anything in the web UI. Set to true
+# if you want the adapter to go invisible once connected.
+hide_after_connect = false

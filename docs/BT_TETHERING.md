@@ -1,6 +1,9 @@
 # Bluetooth Tethering on Pi Zero 2W
 
-> **Note (v3.2):** BT tethering uses D-Bus BlueZ directly — no nmcli, no manual MAC address needed. Pair your phone from the web dashboard, and the daemon handles everything: auto-reconnect with exponential backoff, iOS/Android MAC randomization via BlueZ bonding (IRK), and PAN networking via BlueZ `Network1.Connect("nap")`.
+> **Note (v3.3):** BT tethering is phone-initiated. The Pi is discoverable by
+> default, you pair from your phone's Bluetooth settings, the daemon auto-
+> trusts the new bond and connects PAN via D-Bus BlueZ. No web-UI "Scan +
+> Pair" dance, no MAC address in config, no nmcli.
 
 ## Hardware: BCM43436B0 Dual-Bus Architecture
 
@@ -8,23 +11,66 @@ The Pi Zero 2W's BCM43436B0 combo chip uses **two independent buses**:
 - **WiFi** — SDIO bus (parallel, high-bandwidth)
 - **Bluetooth** — UART bus (serial, HCI protocol)
 
-Because the buses are independent, BT tethering can stay alive while WiFi is in monitor mode (RAGE). The only exception is **BT attack mode**, which requires exclusive UART access to load a custom patchram — this disconnects phone tethering.
+Because the buses are independent, BT tethering can stay alive while WiFi is
+in monitor mode (RAGE). The only exception is **BT offensive mode**, which
+requires exclusive UART access to load custom firmware — that disconnects
+phone tethering.
 
-## Boot Sequence
+## Pairing flow (what users actually do)
 
-The daemon sets up BT tethering **before** starting WiFi monitor mode at boot:
+On a fresh image, the Pi boots discoverable. To connect your phone:
+
+1. On your phone, turn **mobile data ON** — hotspot needs a data connection
+   to share with the Pi.
+2. Turn **WiFi OFF** on the phone so its tethering routes via mobile data.
+3. Open the phone's **Bluetooth settings** and tap `oxigotchi` when it
+   appears in the nearby-devices list.
+4. When the pair popup shows a 6-digit code, confirm it matches the code
+   shown in the web dashboard (Phone Tethering card) and tap **Pair** on
+   the phone within a few seconds.
+5. Done. The daemon auto-trusts the bond, calls `Network1.Connect("nap")`,
+   runs DHCP on bnep0, and adds the default route. The whole thing takes
+   about 1 second after the phone confirms.
+
+No buttons to press on the web UI during pairing. No scan step. The Pi
+stays discoverable by default so you can pair a second phone later without
+toggling anything.
+
+## What the daemon does under the hood
+
+1. **Boot**: power on BT adapter, assert `pairable=true` and
+   `discoverable=true` on the adapter via D-Bus.
+2. **Register Agent1** so incoming pair requests get auto-confirmed in
+   NoInputNoOutput mode (the phone's user confirms the passkey; the Pi
+   auto-accepts on its side).
+3. **Register a PropertiesChanged watcher** on `org.bluez.Device1` that
+   fires the moment a new bond transitions to `Paired=true`. The main
+   loop catches the event and calls `trust_device()` on that path so the
+   bond ends up `Paired=true, Trusted=true` without any user intervention.
+4. **Auto-connect loop** — every epoch, if a paired device exists and the
+   adapter isn't already tethered, the daemon calls
+   `org.bluez.Network1.Connect("nap")`, runs `dhcpcd` on the returned
+   interface (`bnep0`), and flips the daemon state to `Connected`.
+5. **Auto-adoption** — if `bnep0` already exists at boot (from a previous
+   session, or because a system service manages the tether outside the
+   daemon), the daemon adopts it instead of re-connecting.
+6. **Bus-death recovery** — all of the above routes through `ensure_dbus()`
+   which health-checks the existing D-Bus connection (`is_bus_alive`),
+   tears down and re-creates on `bluetoothd` restart, and re-registers
+   Agent1 + the PropertiesChanged watcher on the new connection.
+
+## Boot order
+
+The daemon sets up BT tethering **before** starting WiFi monitor mode at
+boot so there's no SDIO↔UART coexistence weirdness:
 
 ```
-1. Power on BT adapter (bluetoothctl power on)
-2. Connect to paired phone via D-Bus Network1.Connect("nap")
-3. Run DHCP on the PAN interface (bnep0)
-4. THEN start WiFi monitor mode (iw phy0 interface add wlan0mon type monitor)
-5. THEN start AngryOxide
+1. Power on BT adapter
+2. Assert pairable + discoverable (via bluetoothctl, not btmgmt — btmgmt hangs without a TTY)
+3. Connect to the paired phone via Network1.Connect("nap") OR adopt existing bnep0
+4. Run dhcpcd on bnep0
+5. THEN start WiFi monitor mode and AngryOxide
 ```
-
-This order is important — starting WiFi monitor mode first can sometimes interfere with BT initialization. The daemon handles this automatically in `boot()` (see `rust/src/main.rs`).
-
-> **Default boot mode (v3.2):** The daemon boots into SAFE mode by default. Users can override this by setting `default_mode = "RAGE"` in `/etc/oxigotchi/config.toml` under `[main]`.
 
 ## Config
 
@@ -33,102 +79,116 @@ In `/etc/oxigotchi/config.toml`:
 ```toml
 [bluetooth]
 enabled = true
-phone_name = "Phone Name"          # Display name for dashboard (optional)
+phone_name = "Phone Name"          # Optional display label
 auto_connect = true                # Auto-connect to paired phone at boot
-hide_after_connect = true          # Hide BT adapter after connecting
+# Stay discoverable even after a successful tether so users can add a second
+# phone later without toggling anything in the web UI. Set to true if you
+# prefer the adapter to go invisible once a tether is live.
+hide_after_connect = false
 ```
 
-No MAC address is needed in the config. The daemon discovers paired devices via D-Bus `ObjectManager` and connects to the best candidate automatically. iOS and Android MAC randomization is handled transparently through BlueZ bonding (the IRK exchanged during pairing resolves randomized addresses).
+No MAC address is needed. The daemon picks the best candidate via
+`ObjectManager` and prefers devices that:
 
-## Pairing Your Phone
+1. Match `phone_name` as a substring (case-insensitive)
+2. Are currently connected
+3. Advertise the NAP UUID (`00001116-0000-1000-8000-00805f9b34fb`) — paired
+   headsets, watches, and smart speakers are filtered out so they can't
+   starve auto-connect
 
-### Via Web Dashboard (recommended)
+## Auto-reconnect
 
-1. Open the web dashboard at `http://<pi-ip>:8080`
-2. In the **Phone Tethering** section, click **Scan for Devices**
-3. Make your phone discoverable (Bluetooth settings → visible/discoverable)
-4. Your phone appears in the device list — click **Pair**
-5. Confirm the passkey on both the Pi dashboard and your phone
-6. The daemon connects automatically after pairing
+If the BT connection drops, the daemon reconnects with exponential
+backoff:
 
-### Via SSH (fallback)
-
-1. SSH into the Pi
-2. Run `sudo bluetoothctl` → `power on` → `scan on`
-3. When your phone appears, run `pair XX:XX:XX:XX:XX:XX`
-4. Confirm the passkey on your phone
-5. Run `trust XX:XX:XX:XX:XX:XX`
-6. The daemon picks up the paired device automatically on next epoch
-
-## Auto-Reconnect
-
-The daemon auto-reconnects with exponential backoff if the BT connection drops:
-
-- **Schedule:** 30s → 60s → 120s → 300s (caps at 5 minutes)
+- **Schedule**: 30s → 60s → 120s → 300s (caps at 5 minutes)
 - **No max retry limit** — keeps trying indefinitely
 - Reconnect runs every epoch in all modes (RAGE, BT, SAFE)
-- If the user explicitly disconnects via the dashboard, auto-reconnect is paused until manually re-enabled
+- If the user explicitly disconnects via the dashboard, auto-reconnect is
+  paused until manually re-enabled
 
-## Recovery: BT Adapter Stuck DOWN
+## Dashboard Controls
 
-If the BT adapter is stuck in DOWN state (common after WiFi monitor mode was started before BT):
+The web dashboard's **Phone Tethering** section shows:
 
-1. **Reboot the Pi** — this is the only reliable way to reset the BCM43436B0 UART
-2. The daemon will handle the correct boot order on restart
+- **Instructions** for the 4-step phone-initiated pairing flow
+- **Passkey display** — when the phone initiates a pair and Agent1 gets a
+  `RequestConfirmation`, the 6-digit code shows here so you can verify it
+  matches your phone before tapping Pair
+- **Disconnect** button — manually drops the tether and suppresses
+  auto-reconnect until re-enabled
+- **Reset pairings** button — nuclear option, forgets every paired device
+  in BlueZ and starts fresh
 
-There is no software-only way to recover the UART once it's timed out. `systemctl restart bluetooth`, `hciconfig hci0 reset`, and `hciattach` all fail.
+There is intentionally **no** "Scan for Devices" or "Pair from Pi" button.
+The Pi-initiated outgoing pair flow used to exist but was fragile across
+different Android and MIUI builds. The phone-initiated flow is simpler
+and reliable.
 
-However, the v3 daemon handles this automatically: when switching from RAGE to SAFE mode, it reloads the `hci_uart` kernel module (`rmmod hci_uart` + `modprobe hci_uart`) before bringing up BT. This gives the UART a clean reset without requiring a full reboot. The reload takes about 4 seconds (1s for rmmod + 3s for hci0 to re-register with the kernel).
+## Troubleshooting
 
-## For SD Card Image Flashers
+### "I paired but the Pi never connects"
 
-When someone flashes a new SD card with the oxigotchi image:
+- **Check that mobile data is actually ON on the phone**. Without it the
+  phone's BNEP service refuses the connection with `Connection refused`.
+- **Check that the phone's "Bluetooth tethering" toggle is ON** (usually
+  under Portable Hotspot settings).
+- **Toggle Bluetooth tethering OFF then ON** on the phone — some MIUI
+  builds need this to re-bind the BNEP service to a fresh bond.
+- **Reboot the phone entirely**. Sounds drastic, but when the phone's BT
+  stack is in a stuck state from previous failed attempts, a full power
+  cycle is the only reliable fix.
 
-1. The daemon starts with `bluetooth.enabled = true` and no paired devices
-2. BT tethering is skipped — WiFi monitor mode starts normally
-3. The user pairs their phone via the web dashboard:
-   - Open `http://<pi-ip>:8080` (connect via USB at `10.0.0.2:8080`)
-   - Click **Scan for Devices** in the Phone Tethering section
-   - Select their phone and click **Pair**
-   - Confirm the passkey on both devices
-4. From then on, the daemon auto-connects to the paired phone at every boot
+### "I see `oxigotchi` in my phone's BT list, tap it, then nothing happens"
 
-No config file editing required. No MAC address needed.
+- Watch the phone screen for a passkey confirmation popup. If it appears,
+  tap **Pair** within a few seconds. MIUI auto-dismisses the popup if you
+  don't respond.
+- If no popup appears, the Pi may already have a stale bond for this
+  phone. Click **Reset pairings** in the web UI and try again.
+
+### "Pair works but bond doesn't survive reboot"
+
+- This was a real bug in v3.3.0 and earlier: `list_paired_devices` filtered
+  out `Paired=true, Trusted=false` bonds, and phone-initiated pairs produce
+  exactly that state. Fixed in v3.3.1 — the PropertiesChanged watcher
+  auto-trusts the moment Paired becomes true.
+
+### "I want the tether to stop being discoverable after it connects"
+
+Set `hide_after_connect = true` in `/etc/oxigotchi/config.toml` under
+`[bluetooth]`. Restart the daemon. The adapter will `hide()` itself after
+a successful `Network1.Connect`.
 
 ## Mode Transitions and BT Tethering
 
 ### RAGE Mode (BT tether stays connected)
-BT tethering remains active during RAGE mode. The daemon auto-reconnects each epoch if the connection drops. WiFi monitor mode and BT PAN coexist on independent buses.
+BT tethering remains active during RAGE mode. The daemon auto-reconnects
+each epoch if the connection drops. WiFi monitor mode and BT PAN coexist
+on independent buses.
 
-### BT Attack Mode (BT tether disconnects)
-Switching to BT attack mode disconnects phone tethering — the UART is reclaimed for the attack patchram. A warning appears in the web dashboard: "BT mode disconnects phone tethering. You will lose remote access until switching back to RAGE or SAFE."
-
-When returning from BT attack mode to RAGE or SAFE, the daemon automatically reconnects BT tethering.
+### BT Offensive Mode (BT tether disconnects)
+Switching to BT offensive mode disconnects phone tethering — the UART is
+reclaimed for custom firmware. A warning appears in the web dashboard.
+When returning from BT offensive mode to RAGE or SAFE, the daemon
+automatically reconnects BT tethering.
 
 ### SAFE Mode (BT tether active)
-BT tethering is fully active. WiFi is in managed mode (no monitor, no attacks).
-
-## Dashboard Controls
-
-The web dashboard's **Phone Tethering** section provides:
-- **Scan for Devices** — discovers nearby BT devices
-- **Pair** — pairs and connects to a selected device
-- **Disconnect** — manually disconnects the phone tether (pauses auto-reconnect)
-- **Forget** — removes a paired device from BlueZ
-- **Passkey confirmation** — shows passkey during pairing for user confirmation
-
-## Known Issues
-
-- **BT attack mode**: Switching to BT attack mode drops your phone tether — you lose SSH/web access over BT until switching back.
-- **Agent1 auto-accepts**: The D-Bus Agent1 handler auto-accepts pairing requests (headless mode). The web UI displays the passkey for visual confirmation but the pairing proceeds automatically.
-- **BT health monitoring**: In all modes, the daemon checks BT connection status each epoch and auto-reconnects if the connection drops.
+BT tethering is fully active. WiFi is in managed mode (no monitor, no
+attacks).
 
 ## Python Pwnagotchi Comparison
 
-The Python `bt-tether` plugin handled BT differently:
-1. Running `hciconfig hci0 up` in a retry loop
-2. Using `dbus` to manage BlueZ directly (not bluetoothctl)
-3. Having its own keepalive mechanism
-4. Requiring a hardcoded MAC address in config
+The Python `bt-tether` plugin required a hardcoded MAC address in config,
+used retry loops, and had its own keepalive daemon. The Rust version:
 
-The Rust daemon uses D-Bus BlueZ directly (like the Python version) but improves on it: no MAC address needed (auto-discovers paired devices), exponential backoff reconnect, web UI pairing, and transparent iOS/Android MAC randomization handling via BlueZ bonding IRK exchange.
+- No MAC address needed — auto-discovers via `ObjectManager` and filters
+  by NAP UUID
+- Exponential backoff reconnect instead of hammer-loops
+- Phone-initiated pairing (no fragile Pi-initiated Pair() with state
+  machines)
+- Auto-trust on PropertiesChanged so phone-initiated bonds are first-class
+- Transparent iOS/Android MAC randomization via BlueZ bonding IRK exchange
+- Automatic bnep0 adoption if the interface already exists at boot
+- Bus-death recovery routes through `ensure_dbus` so Agent1 and the
+  watcher are always re-registered after a `bluetoothd` restart

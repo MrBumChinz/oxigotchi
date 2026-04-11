@@ -39,65 +39,6 @@ pub enum BtState {
     Error,
 }
 
-/// State machine for the web-initiated pair+trust flow.
-/// Each state transitions to the next on an epoch tick after verification
-/// conditions are met. Spans multiple epochs because of the background
-/// pair thread and the post-pair property wait loops.
-#[derive(Debug, Clone)]
-pub enum PairFlowState {
-    /// No pair flow in progress.
-    Idle,
-    /// Scan is running; waiting for BlueZ to publish the Device1 object
-    /// for the requested MAC via ObjectManager. Prevents racing Pair()
-    /// against a stale/nonexistent path.
-    WaitingForDeviceObject {
-        path: String,
-        mac: String,
-        started: std::time::Instant,
-    },
-    /// D-Bus Pair() running in a background thread. The main thread polls
-    /// `pair_thread_result` each epoch until the thread reports done.
-    PairingInThread {
-        path: String,
-        started: std::time::Instant,
-    },
-    /// Background thread reported Pair() returned Ok. Main thread now polls
-    /// GetProperty(Paired) until it sees true or times out.
-    WaitingForPaired {
-        path: String,
-        started: std::time::Instant,
-    },
-    /// Paired=true confirmed. About to call trust_device on the main conn.
-    Trusting { path: String },
-    /// trust_device returned Ok. Main thread polls GetProperty(Trusted)
-    /// to verify the property was actually accepted.
-    WaitingForTrusted {
-        path: String,
-        started: std::time::Instant,
-    },
-    /// Trusted=true verified. Wait 2 seconds for BlueZ's debounced
-    /// store_device_info_cb to flush the bond to /var/lib/bluetooth/.
-    BondFlushGrace {
-        path: String,
-        started: std::time::Instant,
-    },
-    /// Pair flow complete. Caller will collect the result.
-    Complete { path: String },
-    /// Pair flow failed at some step.
-    Failed { error: String },
-}
-
-/// Result of a single tick of the pair flow state machine.
-#[derive(Debug, Clone)]
-pub enum PairFlowOutcome {
-    /// Still running — no state change to report.
-    InProgress,
-    /// Flow reached Complete. State was reset to Idle.
-    Done(String),
-    /// Flow reached Failed. State was reset to Idle.
-    Failed(String),
-}
-
 /// Configuration for Bluetooth tethering.
 #[derive(Debug, Clone)]
 pub struct BtConfig {
@@ -108,6 +49,11 @@ pub struct BtConfig {
     /// Whether to auto-connect on boot.
     pub auto_connect: bool,
     /// Whether to hide BT discoverability after connecting.
+    ///
+    /// Default is `false` — fresh images stay discoverable after a successful
+    /// tether so users can add a second phone later without toggling anything.
+    /// Users who care about discoverability churn can flip this via the web UI
+    /// toggle or in config.toml.
     pub hide_after_connect: bool,
 }
 
@@ -117,7 +63,7 @@ impl Default for BtConfig {
             enabled: false,
             phone_name: String::new(),
             auto_connect: true,
-            hide_after_connect: true,
+            hide_after_connect: false,
         }
     }
 }
@@ -127,15 +73,6 @@ const BACKOFF_SCHEDULE: &[u64] = &[30, 60, 120, 300];
 
 /// Max backoff interval (seconds).
 const BACKOFF_CAP: u64 = 300;
-
-/// How long to poll for NAP UUID after pairing (seconds).
-const NAP_WAIT_SECS: u64 = 15;
-
-/// How many times to retry ConnectProfile on PhoneBusy.
-const BUSY_RETRIES: u32 = 3;
-
-/// Delay between PhoneBusy retries (seconds).
-const BUSY_RETRY_DELAY_SECS: u64 = 3;
 
 // ---------------------------------------------------------------------------
 // Command builders (pure functions, testable on any platform)
@@ -311,10 +248,6 @@ pub struct BtTether {
     pub user_disconnected: bool,
     /// Receiver for Agent1 pairing events (passkey display/confirmation).
     pub pairing_rx: Option<std::sync::mpsc::Receiver<dbus::PairingEvent>>,
-    /// State machine for the web pair flow. Persists across epochs.
-    pub pair_flow_state: PairFlowState,
-    /// Result handoff from the background pair thread to the state machine.
-    pub pair_thread_result: std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>,
 }
 
 fn ip_is_routable(ip: &str) -> bool {
@@ -335,14 +268,20 @@ impl BtTether {
             dbus: None,
             user_disconnected: false,
             pairing_rx: None,
-            pair_flow_state: PairFlowState::Idle,
-            pair_thread_result: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
     /// Whether the D-Bus connection has been initialized.
     pub fn dbus_ready(&self) -> bool {
         self.dbus.is_some()
+    }
+
+    /// Borrow the underlying D-Bus connection, if initialized. Used by the
+    /// main loop's pairing-event handler to call `trust_device` on devices
+    /// that transitioned to `Paired=true` via the PropertiesChanged watcher
+    /// (phone-initiated pairs).
+    pub fn dbus_ref(&self) -> Option<&dbus::DbusBluez> {
+        self.dbus.as_ref()
     }
 
     /// Ensure D-Bus + Agent1 are initialized (ignores config.enabled).
@@ -390,25 +329,49 @@ impl BtTether {
             if let Err(e) = dbus.register_agent() {
                 warn!("BT: Agent1 registration failed: {e}");
             }
+            // The Agent1 crossroads handler and the PropertiesChanged watcher
+            // both send into the same `pairing_rx` channel. Only register the
+            // watcher if the Agent1 handler was successfully installed and
+            // `pairing_rx` is now live — otherwise DeviceNewlyPaired events
+            // would be sent into a dropped receiver and auto-trust would
+            // silently stop working.
             let (tx, rx) = std::sync::mpsc::channel();
-            if let Err(e) = dbus.setup_agent_handler(tx) {
-                warn!("BT: Agent1 crossroads setup failed: {e}");
-            } else {
-                self.pairing_rx = Some(rx);
+            match dbus.setup_agent_handler(tx.clone()) {
+                Ok(()) => {
+                    self.pairing_rx = Some(rx);
+                    // Watch for Device1.Paired=true transitions so we can
+                    // auto-trust phone-initiated pairs. Without this, a
+                    // phone-side pair leaves the device
+                    // Paired=true,Trusted=false and subsequent auto-connect
+                    // silently drops it. Non-fatal if this fails — the
+                    // Agent1 flow still delivers pair events.
+                    if let Err(e) = dbus.register_paired_watcher(tx) {
+                        warn!("BT: Paired watcher registration failed: {e}");
+                    }
+                }
+                Err(e) => {
+                    warn!("BT: Agent1 crossroads setup failed: {e}");
+                    warn!("BT: skipping Paired watcher — no receiver for events");
+                }
             }
         }
         #[cfg(unix)]
         {
             let _ = run_bluetoothctl(&["power".into(), "on".into()]);
-            // Reduce BT page timeout from the default 5120ms to 1280ms.
-            // BlueZ pages a device up to ~9 times when establishing an
-            // ACL connection during Pair(); with the default, 9 retries
-            // take ~46 seconds before the phone's RequestConfirmation
-            // even appears. 1280ms cuts this to roughly ~12s and makes
-            // web UI pairing feel responsive.
-            let _ = std::process::Command::new("hciconfig")
-                .args(["hci0", "pageto", "2048"])
-                .output();
+            // Ensure critical BT adapter settings are ON. Without `pairable`
+            // (== mgmt-layer `bondable`), BlueZ cannot write bonds to disk and
+            // every Pair() fails with Authentication Failed — this is the
+            // primary cause of pair-then-no-persist. We intentionally use
+            // bluetoothctl instead of btmgmt: btmgmt hangs indefinitely when
+            // invoked without a TTY (no --index, no stdin close), which would
+            // freeze the entire daemon main thread inside ensure_dbus.
+            // bluetoothctl returns immediately and covers what we need:
+            // pairable implies connectable inside bluetoothd, and discoverable
+            // we set explicitly. Fast-connectable is a page-scan speedup and
+            // is not required for pairing to succeed.
+            let _ = run_bluetoothctl(&["pairable".into(), "on".into()]);
+            let _ = run_bluetoothctl(&["discoverable".into(), "on".into()]);
+            info!("BT: adapter settings asserted (pairable, discoverable)");
         }
         if self.state == BtState::Off {
             self.state = BtState::Disconnected;
@@ -427,13 +390,11 @@ impl BtTether {
         // Try to connect to a paired device
         if self.config.auto_connect {
             // If no paired devices, make discoverable so phone can find us
-            let has_paired = self.dbus.as_ref()
-                .and_then(|d| d.list_paired_devices().ok())
-                .map_or(false, |devs| !devs.is_empty());
-            if !has_paired {
-                info!("BT: no paired devices — making discoverable for phone pairing");
-                self.show();
-            }
+            // Always stay discoverable at boot so users can pair a new phone
+            // at any time without toggling anything. hide_after_connect still
+            // takes effect after a successful tether if that config is on.
+            info!("BT: making adapter discoverable for phone pairing");
+            self.show();
             let _ = self.connect();
         }
 
@@ -464,18 +425,17 @@ impl BtTether {
             return Ok(());
         }
 
-        // Re-initialize D-Bus if it was dropped (bus death recovery)
-        if self.dbus.is_none() {
-            match dbus::DbusBluez::new() {
-                Ok(conn) => {
-                    info!("BT: D-Bus connection re-established");
-                    self.dbus = Some(conn);
-                }
-                Err(e) => {
-                    self.on_error();
-                    return Err(format!("D-Bus re-init failed: {e}"));
-                }
-            }
+        // Route through ensure_dbus — single source of truth for D-Bus
+        // lifecycle. It performs a health check on any existing connection
+        // (detects bluetoothd restart via is_bus_alive), tears down if dead,
+        // re-creates the connection, and re-registers Agent1, the crossroads
+        // handler, AND the PropertiesChanged paired watcher. The old ad-hoc
+        // path here called DbusBluez::new() directly and skipped all three
+        // registrations, leaving a connection that could not handle pair
+        // requests or auto-trust newly paired devices after a bus restart.
+        if let Err(e) = self.ensure_dbus() {
+            self.on_error();
+            return Err(format!("D-Bus re-init failed: {e}"));
         }
 
         // List paired devices (release borrow before find_best_device)
@@ -492,23 +452,57 @@ impl BtTether {
             Some(d) => d.clone(),
             None => {
                 self.state = BtState::Disconnected;
-                return Err("No paired+trusted devices found".into());
+                return Err("No paired devices found".into());
             }
         };
 
         info!("BT: connecting to {} ({})", device.name, device.mac);
 
-        // Wait for NAP UUID before ConnectProfile (like bt-tether plugin)
-        if !self.wait_for_nap_uuid(&device.path) {
-            warn!("BT: NAP UUID not found on {}", device.name);
-            self.on_error();
-            return Err("NAP profile not available on device".into());
+        let device_path = device.path.clone();
+        let dbus = self.dbus.as_mut().ok_or("D-Bus not initialized")?;
+        match dbus.connect_pan(&device_path) {
+            Ok(pan) => {
+                info!("BT: PAN connected on {}", pan.interface);
+                self.pan_interface = Some(pan.interface.clone());
+                self.state = BtState::Connected;
+                self.retry_count = 0;
+                self.user_disconnected = false;
+                self.run_dhcp(&pan.interface);
+                self.refresh_ip();
+                if let Some(ref ip) = self.ip_address {
+                    if ip_is_routable(ip) {
+                        self.internet_available = true;
+                    }
+                }
+                if self.config.hide_after_connect {
+                    self.hide();
+                }
+                Ok(())
+            }
+            Err(dbus::PanConnectError::PhoneUnpaired) => {
+                warn!("BT: phone unpaired us — removing stale bond");
+                if let Some(ref d) = self.dbus {
+                    let _ = d.remove_device(&device_path);
+                }
+                self.on_error();
+                Err("Phone unpaired Pi — removed stale bond, will re-pair".into())
+            }
+            Err(e) => {
+                warn!("BT: Network1.Connect failed: {e}");
+                self.on_error();
+                Err(e.to_string())
+            }
         }
-
-        self.do_connect_profile(&device.path)
     }
 
     /// Find the best device to connect to.
+    ///
+    /// Filters out bonds that don't advertise the NAP UUID (e.g. paired
+    /// headsets, watches, smart speakers) so auto-connect can't pick them
+    /// and then burn through reconnect backoff when Network1.Connect fails.
+    /// After NAP-filtering, preference order is: phone_name substring match,
+    /// then currently-connected, then the first remaining device.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     fn find_best_device<'a>(
         &self,
         devices: &'a [dbus::BlueZDevice],
@@ -516,19 +510,33 @@ impl BtTether {
         if devices.is_empty() {
             return None;
         }
+        #[cfg(target_os = "linux")]
+        let nap_capable: Vec<&dbus::BlueZDevice> = {
+            let dbus = self.dbus.as_ref()?;
+            devices
+                .iter()
+                .filter(|d| dbus.has_nap_uuid(&d.path))
+                .collect()
+        };
+        #[cfg(not(target_os = "linux"))]
+        let nap_capable: Vec<&dbus::BlueZDevice> = devices.iter().collect();
+
+        if nap_capable.is_empty() {
+            return None;
+        }
         if !self.config.phone_name.is_empty() {
             let name_lower = self.config.phone_name.to_lowercase();
-            if let Some(d) = devices
+            if let Some(d) = nap_capable
                 .iter()
                 .find(|d| d.name.to_lowercase().contains(&name_lower))
             {
                 return Some(d);
             }
         }
-        if let Some(d) = devices.iter().find(|d| d.connected) {
+        if let Some(d) = nap_capable.iter().find(|d| d.connected) {
             return Some(d);
         }
-        devices.first()
+        nap_capable.first().copied()
     }
 
     /// Disconnect PAN via Network1.Disconnect.
@@ -682,483 +690,6 @@ impl BtTether {
         self.state
     }
 
-    /// Pair, trust, and connect a device via D-Bus.
-    pub fn pair_and_connect(&mut self, device_path: &str) -> Result<(), String> {
-        self.state = BtState::Pairing;
-
-        let dbus = self.dbus.as_ref().ok_or("D-Bus not initialized")?;
-
-        info!("BT: pairing {device_path}");
-        match dbus.pair_device(device_path) {
-            Ok(()) => {}
-            Err(e) if e.contains("Already Exists") => {
-                info!("BT: device already paired, skipping to trust+connect");
-            }
-            Err(e) => return Err(e),
-        }
-        dbus.trust_device(device_path)?;
-        info!("BT: device trusted");
-
-        self.connect_after_pair(device_path)
-    }
-
-    /// Spawn a background thread that calls Pair() on a fresh D-Bus connection.
-    /// Returns immediately. Writes the result into `self.pair_thread_result`
-    /// once the pair call returns.
-    ///
-    /// This is intentionally split from the post-pair steps (trust, verify)
-    /// because:
-    /// 1. Pair() blocks for up to 90s waiting for Agent1 callbacks
-    /// 2. Those callbacks arrive on the MAIN D-Bus connection
-    /// 3. The main thread must keep pumping `process_dbus` while Pair blocks
-    /// 4. Post-pair steps (trust, read-back verify, bond flush wait) run on
-    ///    the main thread in the pair flow state machine.
-    ///
-    /// Unlike the old implementation, this does NOT treat `AlreadyExists`
-    /// as success. That error means BlueZ has a concurrent pair in flight,
-    /// not that the device is already bonded. On `AlreadyExists`, the thread
-    /// returns Ok to let the state machine poll `Paired=true` — if the
-    /// concurrent pair never completes, the wait will time out cleanly.
-    ///
-    /// Returns Ok(()) on successful thread spawn, Err on spawn failure
-    /// (propagated — no .expect() panics).
-    #[allow(dead_code)]
-    fn spawn_pair_thread(&self, device_path: String) -> Result<(), String> {
-        let result_slot = std::sync::Arc::clone(&self.pair_thread_result);
-        let path_for_thread = device_path.clone();
-        std::thread::Builder::new()
-            .name("bt-pair".into())
-            .spawn(move || {
-                let outcome = (|| -> Result<String, String> {
-                    #[cfg(target_os = "linux")]
-                    {
-                        let pair_dbus = dbus::DbusBluez::new()
-                            .map_err(|e| format!("pair thread D-Bus init: {e}"))?;
-                        log::info!("BT pair thread: calling Pair on {path_for_thread}");
-                        match pair_dbus.pair_device(&path_for_thread) {
-                            Ok(()) => {
-                                log::info!("BT pair thread: Pair returned Ok for {path_for_thread}");
-                                Ok(path_for_thread)
-                            }
-                            Err(e) if e.contains("Already Exists") => {
-                                log::info!(
-                                    "BT pair thread: AlreadyExists — state machine will wait for Paired=true"
-                                );
-                                Ok(path_for_thread)
-                            }
-                            Err(e) => Err(e),
-                        }
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        Ok(path_for_thread)
-                    }
-                })();
-                let mut slot = result_slot.lock().unwrap();
-                *slot = Some(outcome);
-            })
-            .map_err(|e| format!("failed to spawn bt-pair thread: {e}"))?;
-        Ok(())
-    }
-
-    /// Begin the pair+trust state machine for a user-provided MAC.
-    /// Validates the MAC, normalizes it to BlueZ's expected path format
-    /// (uppercase hex, underscores), ensures D-Bus + Agent are ready,
-    /// starts discovery (Pairable=true), and transitions state to
-    /// WaitingForDeviceObject. The tick function will poll ObjectManager
-    /// until BlueZ publishes the Device1 object, THEN spawn the Pair thread.
-    /// This avoids racing Pair() against a stale/missing device path.
-    ///
-    /// Returns Ok(()) if the flow started, Err with a user-facing message otherwise.
-    pub fn pair_and_trust_flow_start(&mut self, mac: &str) -> Result<(), String> {
-        if !matches!(self.pair_flow_state, PairFlowState::Idle) {
-            return Err("another pair flow is already in progress".into());
-        }
-
-        // Validate MAC shape: 6 octets of ASCII hex separated by colons.
-        let mac_upper = mac.to_uppercase();
-        let octets: Vec<&str> = mac_upper.split(':').collect();
-        if octets.len() != 6
-            || octets
-                .iter()
-                .any(|o| o.len() != 2 || !o.chars().all(|c| c.is_ascii_hexdigit()))
-        {
-            return Err(format!("invalid MAC: {mac}"));
-        }
-        let path = format!("/org/bluez/hci0/dev_{}", mac_upper.replace(':', "_"));
-
-        self.ensure_dbus()?;
-
-        // Start scan so BlueZ discovers the device and publishes its Device1
-        // object on D-Bus. Kept active through pair+trust+grace.
-        #[cfg(target_os = "linux")]
-        {
-            if let Some(ref dbus) = self.dbus {
-                dbus.start_scan()?;
-            }
-        }
-
-        // Clear any stale thread result from previous flows.
-        {
-            let mut slot = self.pair_thread_result.lock().unwrap();
-            *slot = None;
-        }
-
-        self.pair_flow_state = PairFlowState::WaitingForDeviceObject {
-            path,
-            mac: mac_upper,
-            started: std::time::Instant::now(),
-        };
-        log::info!("BT pair flow: start, state=WaitingForDeviceObject");
-        Ok(())
-    }
-
-    /// Called each epoch from process_web_commands. Advances the pair flow
-    /// state machine one step. Returns `PairFlowOutcome::Done(path)` or
-    /// `PairFlowOutcome::Failed(err)` when the flow terminates, otherwise
-    /// `PairFlowOutcome::InProgress`.
-    ///
-    /// Note: each call advances by at most one state. A complete flow takes
-    /// roughly 7 epochs (WaitingForDeviceObject -> PairingInThread -> WaitingForPaired
-    /// -> Trusting -> WaitingForTrusted -> BondFlushGrace -> Complete).
-    /// Epochs run every few hundred ms, so visible latency is ~2 seconds once
-    /// Pair() returns.
-    pub fn pair_and_trust_flow_tick(&mut self) -> PairFlowOutcome {
-        // Take the current state out so we can rebuild it without fighting the borrow checker.
-        let state = std::mem::replace(&mut self.pair_flow_state, PairFlowState::Idle);
-        match state {
-            PairFlowState::Idle => PairFlowOutcome::InProgress,
-
-            PairFlowState::WaitingForDeviceObject { path, mac, started } => {
-                // Poll ObjectManager until the Device1 path exists.
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref dbus) = self.dbus {
-                        dbus.process_messages(std::time::Duration::from_millis(50));
-                    }
-                    let device_present = self
-                        .dbus
-                        .as_ref()
-                        .map(|d| {
-                            d.list_all_devices()
-                                .map(|devs| devs.iter().any(|x| x.path == path))
-                                .unwrap_or(false)
-                        })
-                        .unwrap_or(false);
-                    if device_present {
-                        log::info!("BT pair flow: device object present, spawning pair thread");
-                        if let Err(e) = self.spawn_pair_thread(path.clone()) {
-                            log::warn!("BT pair flow: spawn failed: {e}");
-                            self.pair_flow_state = PairFlowState::Failed { error: e };
-                            return PairFlowOutcome::InProgress;
-                        }
-                        self.pair_flow_state = PairFlowState::PairingInThread {
-                            path,
-                            started: std::time::Instant::now(),
-                        };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    if started.elapsed() > std::time::Duration::from_secs(10) {
-                        log::warn!("BT pair flow: device {mac} not found after 10s scan");
-                        self.pair_flow_state = PairFlowState::Failed {
-                            error: format!("device {mac} did not appear in scan (10s)"),
-                        };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    self.pair_flow_state = PairFlowState::WaitingForDeviceObject { path, mac, started };
-                    PairFlowOutcome::InProgress
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    // Stub path: skip waiting, spawn thread immediately.
-                    let _ = mac;
-                    let _ = started;
-                    if let Err(e) = self.spawn_pair_thread(path.clone()) {
-                        self.pair_flow_state = PairFlowState::Failed { error: e };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    self.pair_flow_state = PairFlowState::PairingInThread {
-                        path,
-                        started: std::time::Instant::now(),
-                    };
-                    PairFlowOutcome::InProgress
-                }
-            }
-
-            PairFlowState::PairingInThread { path, started } => {
-                let result_opt = {
-                    let mut slot = self.pair_thread_result.lock().unwrap();
-                    slot.take()
-                };
-                match result_opt {
-                    None => {
-                        // Thread still running. Timeout after 120s as a safety net.
-                        if started.elapsed() > std::time::Duration::from_secs(120) {
-                            log::warn!("BT pair flow: pair thread timed out after 120s");
-                            self.pair_flow_state = PairFlowState::Failed {
-                                error: "pair thread timed out".into(),
-                            };
-                        } else {
-                            self.pair_flow_state = PairFlowState::PairingInThread { path, started };
-                        }
-                        PairFlowOutcome::InProgress
-                    }
-                    Some(Ok(_returned_path)) => {
-                        log::info!("BT pair flow: pair thread returned Ok, state=WaitingForPaired");
-                        self.pair_flow_state = PairFlowState::WaitingForPaired {
-                            path,
-                            started: std::time::Instant::now(),
-                        };
-                        PairFlowOutcome::InProgress
-                    }
-                    Some(Err(e)) => {
-                        log::warn!("BT pair flow: pair thread failed: {e}");
-                        self.pair_flow_state = PairFlowState::Failed { error: e };
-                        PairFlowOutcome::InProgress
-                    }
-                }
-            }
-
-            PairFlowState::WaitingForPaired { path, started } => {
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref dbus) = self.dbus {
-                        dbus.process_messages(std::time::Duration::from_millis(50));
-                    }
-                    let paired_ok = self
-                        .dbus
-                        .as_ref()
-                        .map(|d| d.get_device_property_bool(&path, "Paired").unwrap_or(false))
-                        .unwrap_or(false);
-                    if paired_ok {
-                        log::info!("BT pair flow: Paired=true confirmed, state=Trusting");
-                        self.pair_flow_state = PairFlowState::Trusting { path };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    if started.elapsed() > std::time::Duration::from_secs(30) {
-                        log::warn!("BT pair flow: wait_for_paired timed out (30s)");
-                        self.pair_flow_state = PairFlowState::Failed {
-                            error: "pair did not complete within 30s".into(),
-                        };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    self.pair_flow_state = PairFlowState::WaitingForPaired { path, started };
-                    PairFlowOutcome::InProgress
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = started;
-                    self.pair_flow_state = PairFlowState::Trusting { path };
-                    PairFlowOutcome::InProgress
-                }
-            }
-
-            PairFlowState::Trusting { path } => {
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref dbus) = self.dbus {
-                        match dbus.trust_device(&path) {
-                            Ok(()) => {
-                                log::info!("BT pair flow: trust_device Ok, state=WaitingForTrusted");
-                                self.pair_flow_state = PairFlowState::WaitingForTrusted {
-                                    path,
-                                    started: std::time::Instant::now(),
-                                };
-                            }
-                            Err(e) => {
-                                log::warn!("BT pair flow: trust_device failed: {e}");
-                                self.pair_flow_state = PairFlowState::Failed { error: e };
-                            }
-                        }
-                    } else {
-                        // self.dbus is None — cannot trust. Fail cleanly instead
-                        // of silently dropping back to Idle (which would happen
-                        // because mem::replace already took the state).
-                        log::warn!("BT pair flow: trust_device called with no D-Bus connection");
-                        self.pair_flow_state = PairFlowState::Failed {
-                            error: "no D-Bus connection available for trust".into(),
-                        };
-                    }
-                    PairFlowOutcome::InProgress
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    self.pair_flow_state = PairFlowState::WaitingForTrusted {
-                        path,
-                        started: std::time::Instant::now(),
-                    };
-                    PairFlowOutcome::InProgress
-                }
-            }
-
-            PairFlowState::WaitingForTrusted { path, started } => {
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref dbus) = self.dbus {
-                        dbus.process_messages(std::time::Duration::from_millis(50));
-                    }
-                    let trusted_ok = self
-                        .dbus
-                        .as_ref()
-                        .map(|d| d.get_device_property_bool(&path, "Trusted").unwrap_or(false))
-                        .unwrap_or(false);
-                    if trusted_ok {
-                        log::info!("BT pair flow: Trusted=true confirmed, state=BondFlushGrace");
-                        self.pair_flow_state = PairFlowState::BondFlushGrace {
-                            path,
-                            started: std::time::Instant::now(),
-                        };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    if started.elapsed() > std::time::Duration::from_secs(5) {
-                        log::warn!("BT pair flow: wait_for_trusted timed out (5s)");
-                        self.pair_flow_state = PairFlowState::Failed {
-                            error: "trust did not persist within 5s".into(),
-                        };
-                        return PairFlowOutcome::InProgress;
-                    }
-                    self.pair_flow_state = PairFlowState::WaitingForTrusted { path, started };
-                    PairFlowOutcome::InProgress
-                }
-                #[cfg(not(target_os = "linux"))]
-                {
-                    let _ = started;
-                    self.pair_flow_state = PairFlowState::BondFlushGrace {
-                        path,
-                        started: std::time::Instant::now(),
-                    };
-                    PairFlowOutcome::InProgress
-                }
-            }
-
-            PairFlowState::BondFlushGrace { path, started } => {
-                if started.elapsed() >= std::time::Duration::from_secs(2) {
-                    log::info!("BT pair flow: bond flush grace complete, state=Complete");
-                    // Stop the scan now that the bond is safely on disk.
-                    #[cfg(target_os = "linux")]
-                    {
-                        if let Some(ref dbus) = self.dbus {
-                            let _ = dbus.stop_scan();
-                        }
-                    }
-                    self.pair_flow_state = PairFlowState::Complete { path };
-                    PairFlowOutcome::InProgress
-                } else {
-                    // Pump D-Bus during the grace period too.
-                    #[cfg(target_os = "linux")]
-                    {
-                        if let Some(ref dbus) = self.dbus {
-                            dbus.process_messages(std::time::Duration::from_millis(50));
-                        }
-                    }
-                    self.pair_flow_state = PairFlowState::BondFlushGrace { path, started };
-                    PairFlowOutcome::InProgress
-                }
-            }
-
-            PairFlowState::Complete { path } => {
-                // Caller picks up the result. Reset state to Idle.
-                self.pair_flow_state = PairFlowState::Idle;
-                PairFlowOutcome::Done(path)
-            }
-
-            PairFlowState::Failed { error } => {
-                // Stop the scan if it was running, so the adapter returns to normal.
-                #[cfg(target_os = "linux")]
-                {
-                    if let Some(ref dbus) = self.dbus {
-                        let _ = dbus.stop_scan();
-                    }
-                }
-                self.pair_flow_state = PairFlowState::Idle;
-                PairFlowOutcome::Failed(error)
-            }
-        }
-    }
-
-    /// Connect PAN after pair+trust completed. Waits for NAP UUID,
-    /// then calls ConnectProfile with retry on PhoneBusy.
-    pub fn connect_after_pair(&mut self, device_path: &str) -> Result<(), String> {
-        self.state = BtState::Connecting;
-
-        // Wait for NAP UUID to appear (phone needs time to expose services)
-        if !self.wait_for_nap_uuid(device_path) {
-            warn!("BT: NAP UUID not found after pairing");
-            self.state = BtState::Disconnected;
-            return Err("NAP profile not available on device".into());
-        }
-
-        self.do_connect_profile(device_path)
-    }
-
-    /// Internal: call Network1.Connect with retry logic for PhoneBusy errors.
-    fn do_connect_profile(&mut self, device_path: &str) -> Result<(), String> {
-        self.state = BtState::Connecting;
-
-        for attempt in 0..BUSY_RETRIES {
-            let dbus = self.dbus.as_mut().ok_or("D-Bus not initialized")?;
-            match dbus.connect_pan(device_path) {
-                Ok(pan) => {
-                    info!("BT: PAN connected on {}", pan.interface);
-                    self.pan_interface = Some(pan.interface.clone());
-                    self.state = BtState::Connected;
-                    self.retry_count = 0;
-                    self.user_disconnected = false;
-                    self.run_dhcp(&pan.interface);
-                    self.refresh_ip();
-                    if let Some(ref ip) = self.ip_address {
-                        if ip_is_routable(ip) {
-                            self.internet_available = true;
-                        }
-                    }
-                    if self.config.hide_after_connect {
-                        self.hide();
-                    }
-                    return Ok(());
-                }
-                Err(dbus::PanConnectError::PhoneBusy) => {
-                    // Check if bnep is already up (connection exists from outside)
-                    if let Some(iface) = Self::find_existing_bnep() {
-                        info!("BT: adopting existing PAN interface {iface}");
-                        self.pan_interface = Some(iface.clone());
-                        self.state = BtState::Connected;
-                        self.retry_count = 0;
-                        self.user_disconnected = false;
-                        self.refresh_ip();
-                        if let Some(ref ip) = self.ip_address {
-                            if ip_is_routable(ip) {
-                                self.internet_available = true;
-                            }
-                        }
-                        if self.config.hide_after_connect {
-                            self.hide();
-                        }
-                        return Ok(());
-                    }
-                    if attempt + 1 < BUSY_RETRIES {
-                        info!("BT: connection busy, retry {}/{BUSY_RETRIES}...", attempt + 1);
-                        std::thread::sleep(std::time::Duration::from_secs(BUSY_RETRY_DELAY_SECS));
-                        continue;
-                    }
-                }
-                Err(dbus::PanConnectError::PhoneUnpaired) => {
-                    warn!("BT: phone unpaired us — removing stale bond");
-                    if let Some(ref d) = self.dbus {
-                        let _ = d.remove_device(device_path);
-                    }
-                    self.on_error();
-                    return Err("Phone unpaired Pi — removed stale bond, will re-pair".into());
-                }
-                Err(e) => {
-                    warn!("BT: Network1.Connect failed: {e}");
-                    self.on_error();
-                    return Err(e.to_string());
-                }
-            }
-        }
-        self.on_error();
-        Err("Network1.Connect: max retries exhausted".into())
-    }
 
     /// Check if a bnep interface already exists (e.g. from a previous session).
     pub fn find_existing_bnep() -> Option<String> {
@@ -1177,24 +708,6 @@ impl BtTether {
         None
     }
 
-    /// Poll for NAP UUID on the device (up to NAP_WAIT_SECS).
-    /// Returns true if NAP is available.
-    fn wait_for_nap_uuid(&self, device_path: &str) -> bool {
-        let dbus = match &self.dbus {
-            Some(d) => d,
-            None => return false,
-        };
-        for i in 0..NAP_WAIT_SECS {
-            if dbus.has_nap_uuid(device_path) {
-                if i > 0 {
-                    info!("BT: NAP UUID found after {i}s");
-                }
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-        false
-    }
 
     /// Remove a device from BlueZ (untrust + remove).
     pub fn forget_device(&mut self, device_path: &str) -> Result<(), String> {
@@ -1339,6 +852,7 @@ impl BtTether {
             dbus.process_messages(std::time::Duration::from_millis(0));
         }
     }
+
 
     /// Make BT adapter discoverable (visible to other devices).
     pub fn show(&mut self) {
@@ -1668,7 +1182,8 @@ mod tests {
         assert!(!cfg.enabled);
         assert!(cfg.phone_name.is_empty());
         assert!(cfg.auto_connect);
-        assert!(cfg.hide_after_connect);
+        // Fresh images stay discoverable after connect.
+        assert!(!cfg.hide_after_connect);
     }
 
     // ===== IP getter tests =====
@@ -1991,138 +1506,5 @@ mod pair_flow_prep_tests {
     fn new_bttether_has_no_dbus() {
         let bt = BtTether::default();
         assert!(bt.dbus.is_none());
-    }
-
-    #[test]
-    fn new_bttether_starts_in_idle_pair_flow_state() {
-        let bt = BtTether::default();
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
-    }
-
-    #[test]
-    fn new_bttether_has_empty_pair_thread_result() {
-        let bt = BtTether::default();
-        let slot = bt.pair_thread_result.lock().unwrap();
-        assert!(slot.is_none());
-    }
-}
-
-#[cfg(test)]
-mod pair_flow_state_machine_tests {
-    use super::*;
-
-    #[test]
-    fn pair_flow_idle_tick_returns_in_progress() {
-        let mut bt = BtTether::default();
-        let outcome = bt.pair_and_trust_flow_tick();
-        assert!(matches!(outcome, PairFlowOutcome::InProgress));
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
-    }
-
-    #[test]
-    fn pair_flow_start_rejects_invalid_mac() {
-        let mut bt = BtTether::default();
-        assert!(bt.pair_and_trust_flow_start("not-a-mac").is_err());
-        assert!(bt.pair_and_trust_flow_start("AA:BB").is_err());
-        assert!(bt.pair_and_trust_flow_start("ZZ:BB:CC:DD:EE:FF").is_err());
-        // State must remain Idle on validation failure.
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
-    }
-
-    #[test]
-    fn pair_flow_pairing_in_thread_timeout_transitions_to_failed() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::PairingInThread {
-            path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF".into(),
-            started: std::time::Instant::now() - std::time::Duration::from_secs(121),
-        };
-        let _ = bt.pair_and_trust_flow_tick();
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Failed { .. }));
-    }
-
-    #[test]
-    fn pair_flow_complete_returns_done_and_resets_to_idle() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::Complete {
-            path: "/org/bluez/hci0/dev_AA".into(),
-        };
-        let outcome = bt.pair_and_trust_flow_tick();
-        match outcome {
-            PairFlowOutcome::Done(p) => assert_eq!(p, "/org/bluez/hci0/dev_AA"),
-            _ => panic!("expected Done"),
-        }
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
-    }
-
-    #[test]
-    fn pair_flow_failed_returns_failed_and_resets_to_idle() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::Failed {
-            error: "boom".into(),
-        };
-        let outcome = bt.pair_and_trust_flow_tick();
-        match outcome {
-            PairFlowOutcome::Failed(e) => assert_eq!(e, "boom"),
-            _ => panic!("expected Failed"),
-        }
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Idle));
-    }
-
-    #[test]
-    fn pair_flow_pairing_in_thread_ok_result_transitions_to_waiting_paired() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::PairingInThread {
-            path: "/org/bluez/hci0/dev_AA".into(),
-            started: std::time::Instant::now(),
-        };
-        {
-            let mut slot = bt.pair_thread_result.lock().unwrap();
-            *slot = Some(Ok("dummy".into()));
-        }
-        let _ = bt.pair_and_trust_flow_tick();
-        assert!(matches!(bt.pair_flow_state, PairFlowState::WaitingForPaired { .. }));
-    }
-
-    #[test]
-    fn pair_flow_start_rejects_when_already_running() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::PairingInThread {
-            path: "/org/bluez/hci0/dev_AA".into(),
-            started: std::time::Instant::now(),
-        };
-        assert!(bt.pair_and_trust_flow_start("AA:BB:CC:DD:EE:FF").is_err());
-    }
-
-    #[test]
-    fn pair_flow_waiting_for_device_object_timeout_transitions_to_failed() {
-        let mut bt = BtTether::default();
-        bt.pair_flow_state = PairFlowState::WaitingForDeviceObject {
-            path: "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF".into(),
-            mac: "AA:BB:CC:DD:EE:FF".into(),
-            started: std::time::Instant::now() - std::time::Duration::from_secs(11),
-        };
-        let _ = bt.pair_and_trust_flow_tick();
-        // On non-Linux stub, this immediately spawns the pair thread and
-        // transitions to PairingInThread. On Linux without dbus available,
-        // it times out and transitions to Failed. Either is acceptable.
-        assert!(matches!(
-            bt.pair_flow_state,
-            PairFlowState::Failed { .. } | PairFlowState::PairingInThread { .. }
-        ));
-    }
-
-    #[test]
-    fn pair_flow_trusting_without_dbus_transitions_to_failed() {
-        let mut bt = BtTether::default();
-        // dbus is None by default; the Trusting arm must fail cleanly
-        // rather than silently dropping back to Idle.
-        bt.pair_flow_state = PairFlowState::Trusting {
-            path: "/org/bluez/hci0/dev_AA".into(),
-        };
-        let _ = bt.pair_and_trust_flow_tick();
-        #[cfg(target_os = "linux")]
-        assert!(matches!(bt.pair_flow_state, PairFlowState::Failed { .. }));
-        #[cfg(not(target_os = "linux"))]
-        assert!(matches!(bt.pair_flow_state, PairFlowState::WaitingForTrusted { .. }));
     }
 }

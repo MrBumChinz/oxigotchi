@@ -30,8 +30,6 @@ pub enum PanConnectError {
     PhoneBusy,
     /// Phone not responding (timeout / no reply).
     PhoneNotResponding,
-    /// NAP UUID not found on device after waiting.
-    NapNotReady,
     /// Other / unknown error.
     Other(String),
 }
@@ -44,7 +42,6 @@ impl std::fmt::Display for PanConnectError {
             Self::PhoneOutOfRange => write!(f, "Phone out of range or BT off"),
             Self::PhoneBusy => write!(f, "Connection busy — retry shortly"),
             Self::PhoneNotResponding => write!(f, "Phone not responding (timeout)"),
-            Self::NapNotReady => write!(f, "NAP profile not available on device"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }
@@ -105,6 +102,11 @@ pub enum PairingEvent {
     RequestConfirmation { device: String },
     /// Pairing completed (success or failure).
     PairingComplete { device: String, success: bool },
+    /// A Device1 object transitioned to `Paired=true`. Emitted by the
+    /// PropertiesChanged watcher (not by Agent1). Main loop should react by
+    /// setting `Trusted=true` on this device so future operations that read
+    /// the Trusted flag treat it as a first-class bond.
+    DeviceNewlyPaired { device: String },
 }
 
 // ─── Linux implementation ────────────────────────────────────────────────────
@@ -162,8 +164,6 @@ mod inner {
         pan: Option<PanConnection>,
         /// Device path of the PAN-connected device.
         pan_device: Option<String>,
-        /// Channel for pairing events.
-        pairing_tx: Option<Sender<PairingEvent>>,
     }
 
     impl DbusBluez {
@@ -175,16 +175,19 @@ mod inner {
                 conn,
                 pan: None,
                 pan_device: None,
-                pairing_tx: None,
             })
         }
 
-        /// Set a channel for receiving pairing events.
-        pub fn set_pairing_channel(&mut self, tx: Sender<PairingEvent>) {
-            self.pairing_tx = Some(tx);
-        }
-
-        /// List paired AND trusted devices via ObjectManager.
+        /// List all paired devices via ObjectManager. Caller is responsible
+        /// for any further filtering (e.g. NAP capability for tether selection).
+        ///
+        /// NOTE: we intentionally do NOT filter on `Trusted` here. Trusted is
+        /// a BlueZ authorization flag that gates profile auto-connect when an
+        /// agent is absent; we always register Agent1 and auto-accept
+        /// AuthorizeService, so Trusted is irrelevant to whether a connect
+        /// can succeed. The old filter silently dropped phone-initiated
+        /// pairs (Paired=true, Trusted=false until our watcher promotes them)
+        /// and required users to manually `bluetoothctl trust MAC`.
         pub fn list_paired_devices(&self) -> Result<Vec<BlueZDevice>, String> {
             let proxy = self.conn.with_proxy("org.bluez", "/", Duration::from_secs(5));
             use dbus::blocking::stdintf::org_freedesktop_dbus::ObjectManager;
@@ -196,10 +199,10 @@ mod inner {
             for (path, ifaces) in &objects {
                 if let Some(props) = ifaces.get("org.bluez.Device1") {
                     let paired = prop_bool(props, "Paired").unwrap_or(false);
-                    let trusted = prop_bool(props, "Trusted").unwrap_or(false);
-                    if !paired || !trusted {
+                    if !paired {
                         continue;
                     }
+                    let trusted = prop_bool(props, "Trusted").unwrap_or(false);
                     let mac = prop_str(props, "Address").unwrap_or_default();
                     let name = prop_str(props, "Alias").unwrap_or_else(|| mac.clone());
                     let connected = prop_bool(props, "Connected").unwrap_or(false);
@@ -213,7 +216,7 @@ mod inner {
                     });
                 }
             }
-            info!("[dbus] Found {} paired+trusted devices", devices.len());
+            info!("[dbus] Found {} paired devices", devices.len());
             Ok(devices)
         }
 
@@ -302,12 +305,13 @@ mod inner {
             self.pan.as_ref().map(|p| p.interface.as_str())
         }
 
-        /// Pair with a device.
+        /// Pair with a device. Unused by the daemon's normal flow (phone-initiated
+        /// pairing handled via Agent1); retained for tests and as a fallback.
         pub fn pair_device(&self, device_path: &str) -> Result<(), String> {
             let proxy = self.conn.with_proxy(
                 "org.bluez",
                 device_path,
-                Duration::from_secs(90),
+                Duration::from_secs(30),
             );
             let _: () = proxy
                 .method_call("org.bluez.Device1", "Pair", ())
@@ -444,6 +448,7 @@ mod inner {
             info!("[dbus] Scan stopped on {ADAPTER_PATH}");
             Ok(())
         }
+
 
         /// List ALL devices visible to BlueZ (paired or discovered).
         pub fn list_all_devices(&self) -> Result<Vec<BlueZDevice>, String> {
@@ -582,6 +587,63 @@ mod inner {
         pub fn process_messages(&self, timeout: Duration) {
             let _ = self.conn.process(timeout);
         }
+
+        /// Register a watcher for `org.freedesktop.DBus.Properties.PropertiesChanged`
+        /// signals on `org.bluez.Device1` objects. When we see a device transition
+        /// to `Paired=true`, we send `PairingEvent::DeviceNewlyPaired` so the main
+        /// loop can auto-set `Trusted=true` on it.
+        ///
+        /// This is the mechanism that makes phone-initiated pairing produce a
+        /// first-class bond without any user intervention. Without this, the
+        /// Agent1-only flow leaves `Trusted=false` on the device and every
+        /// subsequent code path that cares about Trusted silently skips it.
+        pub fn register_paired_watcher(
+            &self,
+            tx: Sender<PairingEvent>,
+        ) -> Result<(), String> {
+            use dbus::arg::RefArg;
+            use dbus::blocking::stdintf::org_freedesktop_dbus::PropertiesPropertiesChanged;
+            use dbus::message::MatchRule;
+
+            // Bus-level filter: only signals from org.bluez reach us. Without
+            // this we'd wake up on every PropertiesChanged on the system bus
+            // (systemd, NetworkManager, etc.) and drop them in the callback,
+            // which is wasteful on a Pi Zero.
+            let rule = MatchRule::new_signal(
+                "org.freedesktop.DBus.Properties",
+                "PropertiesChanged",
+            )
+            .with_sender("org.bluez");
+
+            self.conn
+                .add_match(rule, move |pc: PropertiesPropertiesChanged, _, msg| {
+                    // We only care about Device1 objects on org.bluez.
+                    if pc.interface_name != "org.bluez.Device1" {
+                        return true;
+                    }
+                    // Check if `Paired` flipped to true in this update.
+                    if let Some(variant) = pc.changed_properties.get("Paired") {
+                        let paired = variant.0.as_i64().map(|v| v != 0).unwrap_or(false);
+                        if paired {
+                            let path = msg
+                                .path()
+                                .map(|p| p.to_string())
+                                .unwrap_or_default();
+                            if !path.is_empty() {
+                                info!("[dbus] PropertiesChanged: Paired=true on {path}");
+                                let _ = tx.send(PairingEvent::DeviceNewlyPaired {
+                                    device: path,
+                                });
+                            }
+                        }
+                    }
+                    true
+                })
+                .map_err(|e| format!("add_match PropertiesChanged: {e}"))?;
+
+            info!("[dbus] PropertiesChanged watcher registered for Device1.Paired");
+            Ok(())
+        }
     }
 }
 
@@ -593,17 +655,11 @@ mod inner {
     use std::sync::mpsc::Sender;
 
     /// Stub BlueZ D-Bus wrapper for non-Linux platforms.
-    pub struct DbusBluez {
-        pairing_tx: Option<Sender<PairingEvent>>,
-    }
+    pub struct DbusBluez;
 
     impl DbusBluez {
         pub fn new() -> Result<Self, String> {
-            Ok(Self { pairing_tx: None })
-        }
-
-        pub fn set_pairing_channel(&mut self, tx: Sender<PairingEvent>) {
-            self.pairing_tx = Some(tx);
+            Ok(Self)
         }
 
         pub fn list_paired_devices(&self) -> Result<Vec<BlueZDevice>, String> {
@@ -672,6 +728,13 @@ mod inner {
 
         pub fn list_all_devices(&self) -> Result<Vec<BlueZDevice>, String> {
             Ok(vec![])
+        }
+
+        pub fn register_paired_watcher(
+            &self,
+            _tx: Sender<PairingEvent>,
+        ) -> Result<(), String> {
+            Ok(())
         }
 
         pub fn setup_agent_handler(

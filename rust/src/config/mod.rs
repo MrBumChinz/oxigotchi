@@ -144,7 +144,9 @@ pub struct BluetoothConfig {
     #[serde(default = "default_true")]
     pub auto_connect: bool,
     /// Hide the Bluetooth interface after a successful connection.
-    #[serde(default = "default_true")]
+    /// Default `false` — fresh images stay discoverable so users can add a
+    /// second phone later without toggling anything. See BtConfig docs.
+    #[serde(default)]
     pub hide_after_connect: bool,
 }
 
@@ -154,7 +156,7 @@ impl Default for BluetoothConfig {
             enabled: false,
             phone_name: String::new(),
             auto_connect: true,
-            hide_after_connect: true,
+            hide_after_connect: false,
         }
     }
 }
@@ -402,7 +404,9 @@ some_future_option = true
         assert!(!bt.enabled);
         assert_eq!(bt.phone_name, "");
         assert!(bt.auto_connect);
-        assert!(bt.hide_after_connect);
+        // Fresh images stay discoverable after connect so users can add
+        // a second phone later without toggling anything.
+        assert!(!bt.hide_after_connect);
     }
 
     #[test]
@@ -433,7 +437,7 @@ name = "test"
         assert!(!cfg.bluetooth.enabled);
         assert_eq!(cfg.bluetooth.phone_name, "");
         assert!(cfg.bluetooth.auto_connect);
-        assert!(cfg.bluetooth.hide_after_connect);
+        assert!(!cfg.bluetooth.hide_after_connect);
     }
 
     #[test]
@@ -449,7 +453,7 @@ name = "test"
         assert!(config.enabled);
         assert_eq!(config.phone_name, "iPhone");
         assert!(config.auto_connect);
-        assert!(config.hide_after_connect);
+        assert!(!config.hide_after_connect);
     }
 
     #[test]
