@@ -70,6 +70,15 @@ The daemon:
 
 All of this happens in about one second after the phone confirms the pair. You should see `BT:C` on the e-ink display (mini status indicator), and the Bluetooth card shows the live IP and internet status.
 
+### If paired but no internet
+
+If the phone says "Connected" and the Pi shows `Trusted: yes` but the tether never comes up (no `BT:C` on e-ink, no IP on the dashboard):
+
+1. **On the phone**: go to Portable hotspot / Hotspot & tethering → turn **Bluetooth tethering OFF**, wait 2 seconds, turn it **back ON**
+2. The Pi will auto-connect within a few seconds
+
+This re-binds the phone's BNEP service to the new bond. It's needed most often on MIUI/Xiaomi but can happen on any Android after a fresh pair.
+
 ---
 
 ## Confirming the tether works
