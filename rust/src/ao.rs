@@ -701,7 +701,10 @@ fn ao_stdout_reader(
                             });
                             entry.hit_count += 1;
                             entry.channel = current_channel;
-                            ap_count.store(map.len() as u32, Ordering::Relaxed);
+                            // NOTE: do NOT set ap_count from map.len() here.
+                            // map is cumulative (all BSSIDs ever seen this session).
+                            // ap_count should reflect AO's own "Targets: N" status
+                            // line (currently in range), set by parse_ao_line above.
                         }
                     }
                 }

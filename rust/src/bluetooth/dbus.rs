@@ -81,16 +81,20 @@ impl PanConnectError {
 /// Classify a D-Bus PAN connect error string into an actionable error type.
 ///
 /// The `PhoneUnpaired` arm is the one that triggers `remove_device` in
-/// `connect()` so a stale bond gets cleaned up. It must catch every error
-/// that indicates "the phone no longer recognizes this bond":
-/// - "authentication failed" / "rejected" / "refused" — explicit SSP reject
-/// - "input/output error" / "i/o error" — errno EIO (5), the bluez return
-///   when bluetoothd got `Connection reset by peer` from the phone's BNEP
-///   layer during the post-encryption handshake (asymmetric bond state)
-/// - "connection reset" / "reset by peer" — peer tore down ACL mid-setup
-/// - "host is down" — already-paired ACL refused at HCI layer
-/// Without catching all of these, the daemon sits in a backoff loop against
-/// a stale bond forever and blocks incoming fresh pairs from the phone.
+/// `connect()` so a stale bond gets cleaned up. ONLY errors that
+/// *definitively* indicate the phone rejected the bond should land here:
+/// "authentication failed/rejected" is the SSP explicit reject from the
+/// phone's security manager — the bond is dead, period.
+///
+/// Everything else is ambiguous. "Input/output error" (EIO) fires for
+/// transient reasons too: phone BT tethering disabled, phone screen locked
+/// and stack suspended, momentary range loss, BNEP socket teardown during
+/// a radio contention event. Treating these as "unpaired" nukes the bond
+/// and forces the user to re-pair from scratch — the exact behavior
+/// that burned us on the field walk (2026-04-12).
+///
+/// Rule: when in doubt, classify as a transient error that retries.
+/// Only nuke the bond on an unambiguous SSP authentication reject.
 pub fn classify_pan_error(err: &str) -> PanConnectError {
     let lower = err.to_lowercase();
     if lower.contains("create-socket")
@@ -98,19 +102,25 @@ pub fn classify_pan_error(err: &str) -> PanConnectError {
         || lower.contains("does not exist")
     {
         PanConnectError::TetherNotEnabled
+    } else if lower.contains("refused") {
+        // "Connection refused" usually means BT tethering isn't enabled
+        // on the phone, not that the bond is dead.
+        PanConnectError::TetherNotEnabled
     } else if lower.contains("authentication")
         || lower.contains("rejected")
-        || lower.contains("refused")
+    {
+        // Explicit SSP reject — bond is definitely dead.
+        PanConnectError::PhoneUnpaired
+    } else if lower.contains("page-timeout")
+        || lower.contains("host is down")
+        || lower.contains("no route")
         || lower.contains("input/output error")
         || lower.contains("i/o error")
         || lower.contains("connection reset")
         || lower.contains("reset by peer")
     {
-        PanConnectError::PhoneUnpaired
-    } else if lower.contains("page-timeout")
-        || lower.contains("host is down")
-        || lower.contains("no route")
-    {
+        // Transient: phone out of range, tethering off, screen locked,
+        // or radio contention. Retry without removing the bond.
         PanConnectError::PhoneOutOfRange
     } else if lower.contains("busy") || lower.contains("inprogress") || lower.contains("in progress") {
         PanConnectError::PhoneBusy
@@ -872,7 +882,7 @@ mod tests {
         );
         assert_eq!(
             classify_pan_error("Connection refused"),
-            PanConnectError::PhoneUnpaired
+            PanConnectError::TetherNotEnabled
         );
         assert_eq!(
             classify_pan_error("br-connection-page-timeout"),
@@ -880,6 +890,15 @@ mod tests {
         );
         assert_eq!(
             classify_pan_error("Host is down"),
+            PanConnectError::PhoneOutOfRange
+        );
+        // IO errors are transient, NOT bond-removal triggers
+        assert_eq!(
+            classify_pan_error("Input/output error"),
+            PanConnectError::PhoneOutOfRange
+        );
+        assert_eq!(
+            classify_pan_error("Connection reset by peer"),
             PanConnectError::PhoneOutOfRange
         );
         assert_eq!(
