@@ -557,6 +557,32 @@ else
     echo "  WARN: $BT_MAIN not found — skipping BT timeout patch"
 fi
 
+# v3.3.2: replace stale pwnagotchi aliases in /etc/profile with oxigotchi equivalents
+PROFILE="$PI/etc/profile"
+if [ -f "$PROFILE" ] && sudo grep -q "pwnagotchi" "$PROFILE"; then
+    sudo sed -i '/^alias custom=/d;/^alias config=/d;/^alias pwnlog=/d;/^alias pwnkill=/d;/^alias debug=/d;/^alias restart-manu=/d;/^alias restart-auto=/d;/^alias status=/d' "$PROFILE"
+    cat <<'ALIASES' | sudo tee -a "$PROFILE" > /dev/null
+
+# oxigotchi aliases
+alias config='sudo nano /etc/oxigotchi/config.toml'
+alias oxilog='sudo journalctl -u rusty-oxigotchi -f -n 300'
+alias oxikill='sudo systemctl restart rusty-oxigotchi'
+alias status='sudo systemctl status rusty-oxigotchi'
+ALIASES
+    echo "  /etc/profile: replaced pwnagotchi aliases with oxigotchi equivalents"
+else
+    echo "  /etc/profile: no pwnagotchi aliases found (already clean)"
+fi
+
+# v3.3.2: fix safe-shutdown.sh pwnagotchi reference
+SAFE_SD="$PI/usr/local/bin/safe-shutdown.sh"
+if [ -f "$SAFE_SD" ] && sudo grep -q "pwnagotchi" "$SAFE_SD"; then
+    sudo sed -i 's|pwnagotchi-button-msg|oxigotchi-button-msg|g; /systemctl stop pwnagotchi/d' "$SAFE_SD"
+    echo "  safe-shutdown.sh: removed pwnagotchi references"
+else
+    echo "  safe-shutdown.sh: already clean"
+fi
+
 # ─── 17. Create sentinel ───
 echo ""
 echo "=== 17. Create sentinel file ==="

@@ -14,14 +14,13 @@ if echo "$CHARGING" | grep -q "true"; then
     BAT_INT=${BATTERY%.*}
     BAT_INT=${BAT_INT:-0}
     if [ "$BAT_INT" -lt 10 ] 2>/dev/null; then
-        echo "Charging at ${BAT_INT}% — skipping shutdown" > /tmp/.pwnagotchi-button-msg
+        echo "Charging at ${BAT_INT}% — skipping shutdown" > /tmp/.oxigotchi-button-msg
         exit 0
     fi
 fi
 
-echo "Shutting down..." > /tmp/.pwnagotchi-button-msg
+echo "Shutting down..." > /tmp/.oxigotchi-button-msg
 
-systemctl stop pwnagotchi 2>/dev/null
 systemctl stop rusty-oxigotchi 2>/dev/null
 sleep 2
 
