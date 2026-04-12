@@ -646,6 +646,52 @@ PYEOF
     fi
 }
 
+# ─── Patch 11: /etc/bluetooth/main.conf — disable DiscoverableTimeout ───
+# v3.3.2: BlueZ default is 180 seconds, which flips the adapter off three
+# minutes after every boot. Persistent patch in main.conf means the daemon's
+# runtime show() is backed by a config that survives bluetoothd restarts.
+patch_bluetooth_main_conf() {
+    local f="/etc/bluetooth/main.conf"
+    [ -f "$f" ] || { log "SKIP bluetooth/main.conf: $f not found"; SKIPPED=$((SKIPPED+1)); return; }
+
+    local applied_any=0
+
+    if grep -qE '^\s*DiscoverableTimeout\s*=\s*0' "$f"; then
+        log "OK   bluetooth/main.conf: DiscoverableTimeout already 0"
+    else
+        if grep -qE '^\s*#\s*DiscoverableTimeout' "$f"; then
+            sed -i -E 's/^\s*#\s*DiscoverableTimeout\s*=.*/DiscoverableTimeout = 0/' "$f"
+        else
+            sed -i -E '/^\[General\]/a DiscoverableTimeout = 0' "$f"
+        fi
+        applied_any=1
+    fi
+
+    if grep -qE '^\s*PairableTimeout\s*=\s*0' "$f"; then
+        log "OK   bluetooth/main.conf: PairableTimeout already 0"
+    else
+        if grep -qE '^\s*#\s*PairableTimeout' "$f"; then
+            sed -i -E 's/^\s*#\s*PairableTimeout\s*=.*/PairableTimeout = 0/' "$f"
+        else
+            sed -i -E '/^\[General\]/a PairableTimeout = 0' "$f"
+        fi
+        applied_any=1
+    fi
+
+    if [ "$applied_any" -eq 1 ]; then
+        log "DONE bluetooth/main.conf: DiscoverableTimeout=0, PairableTimeout=0"
+        PATCHED=$((PATCHED+1))
+        # Reload bluetoothd so the new config takes effect immediately
+        if systemctl is-active --quiet bluetooth 2>/dev/null; then
+            systemctl reload bluetooth 2>/dev/null \
+                || systemctl restart bluetooth 2>/dev/null \
+                || log "WARN bluetooth reload failed — will take effect on next boot"
+        fi
+    else
+        SKIPPED=$((SKIPPED+1))
+    fi
+}
+
 # ─── Main ───
 main() {
     log "=== Oxigotchi patch check starting ==="
@@ -666,6 +712,7 @@ main() {
     patch_view
     patch_cli
     patch_components
+    patch_bluetooth_main_conf
 
     log "=== Done: $PATCHED applied, $SKIPPED already ok, $FAILED failed ==="
 

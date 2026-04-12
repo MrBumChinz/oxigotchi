@@ -369,20 +369,21 @@ impl BtTether {
         #[cfg(unix)]
         {
             let _ = run_bluetoothctl(&["power".into(), "on".into()]);
-            // Ensure critical BT adapter settings are ON. Without `pairable`
-            // (== mgmt-layer `bondable`), BlueZ cannot write bonds to disk and
-            // every Pair() fails with Authentication Failed — this is the
-            // primary cause of pair-then-no-persist. We intentionally use
-            // bluetoothctl instead of btmgmt: btmgmt hangs indefinitely when
-            // invoked without a TTY (no --index, no stdin close), which would
-            // freeze the entire daemon main thread inside ensure_dbus.
-            // bluetoothctl returns immediately and covers what we need:
-            // pairable implies connectable inside bluetoothd, and discoverable
-            // we set explicitly. Fast-connectable is a page-scan speedup and
-            // is not required for pairing to succeed.
+            // Ensure pairable is on. Without `pairable` (== mgmt-layer
+            // `bondable`), BlueZ cannot write bonds to disk and every
+            // Pair() fails with Authentication Failed — the primary cause
+            // of pair-then-no-persist. We use bluetoothctl instead of btmgmt:
+            // btmgmt hangs indefinitely without a TTY (no --index, no stdin
+            // close), which would freeze the daemon main thread.
+            //
+            // NOTE: we deliberately do NOT set `discoverable on` here. That
+            // is `show()`'s job — it goes through the off→timeout=0→on
+            // sequence that actually cancels the BlueZ 180s timer. Setting
+            // discoverable=on directly arms the default timer and gets us
+            // into the exact stuck-off-after-3-minutes state Rob reported.
+            let _ = run_bluetoothctl(&["pairable-timeout".into(), "0".into()]);
             let _ = run_bluetoothctl(&["pairable".into(), "on".into()]);
-            let _ = run_bluetoothctl(&["discoverable".into(), "on".into()]);
-            info!("BT: adapter settings asserted (pairable, discoverable)");
+            info!("BT: adapter settings asserted (pairable)");
         }
         if self.state == BtState::Off {
             self.state = BtState::Disconnected;
@@ -930,16 +931,28 @@ impl BtTether {
 
 
     /// Make BT adapter discoverable (visible to other devices).
+    ///
+    /// The sequence here is load-bearing. BlueZ's default
+    /// `DiscoverableTimeout` is 180 seconds, and setting `discoverable-timeout`
+    /// to 0 while discoverable is already ON does NOT cancel a timer that is
+    /// already armed — the existing timer still fires at the 180s mark and
+    /// flips discoverable off. Toggling discoverable off first kills any
+    /// running timer; setting timeout=0 then takes effect; toggling
+    /// discoverable on re-arms with the new timeout=0 (i.e. never fires).
     pub fn show(&mut self) {
         #[cfg(unix)]
         {
-            // Disable discoverable timeout so it stays visible until explicitly hidden
+            // 1. Kill any in-flight 180s timer by going off first.
+            let _ = run_bluetoothctl(&build_discoverable_off_args());
+            // 2. Set persistent timeout to 0 (no expiry).
             let _ = run_bluetoothctl(&["discoverable-timeout".into(), "0".into()]);
+            // 3. Re-arm discoverable; BlueZ honors the new timeout=0.
             let _ = run_bluetoothctl(&build_discoverable_on_args());
-            // Also enable pairable so phones can initiate connections
+            // Also enable pairable so phones can initiate connections.
+            let _ = run_bluetoothctl(&["pairable-timeout".into(), "0".into()]);
             let _ = run_bluetoothctl(&["pairable".into(), "on".into()]);
         }
-        info!("BT discoverable + pairable ON");
+        info!("BT discoverable + pairable ON (timeout=0)");
     }
 
     /// Hide BT adapter (turn off discoverability).

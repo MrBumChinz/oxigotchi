@@ -528,6 +528,35 @@ sudo chroot "$PI" systemctl mask bt-keepalive.timer 2>/dev/null || true
 sudo chroot "$PI" systemctl mask bt-keepalive.service 2>/dev/null || true
 echo "  Bloat cleaned (incl. bt-keepalive relic)"
 
+# v3.3.2: patch /etc/bluetooth/main.conf to disable the 180-second
+# DiscoverableTimeout default. Without this, every bluetoothd restart
+# reverts the adapter to the stock 180s timer and discoverable flips off
+# three minutes later, breaking phone pairing for anyone who takes longer
+# than that to open their Bluetooth settings. Persistent patch on disk
+# means the daemon's runtime show() is backed by a config that survives
+# service restarts.
+BT_MAIN="$PI/etc/bluetooth/main.conf"
+if [ -f "$BT_MAIN" ]; then
+    if ! sudo grep -qE '^\s*DiscoverableTimeout\s*=\s*0' "$BT_MAIN"; then
+        # Uncomment existing line or add new one inside [General]
+        if sudo grep -qE '^\s*#\s*DiscoverableTimeout' "$BT_MAIN"; then
+            sudo sed -i -E 's/^\s*#\s*DiscoverableTimeout\s*=.*/DiscoverableTimeout = 0/' "$BT_MAIN"
+        else
+            sudo sed -i -E '/^\[General\]/a DiscoverableTimeout = 0' "$BT_MAIN"
+        fi
+    fi
+    if ! sudo grep -qE '^\s*PairableTimeout\s*=\s*0' "$BT_MAIN"; then
+        if sudo grep -qE '^\s*#\s*PairableTimeout' "$BT_MAIN"; then
+            sudo sed -i -E 's/^\s*#\s*PairableTimeout\s*=.*/PairableTimeout = 0/' "$BT_MAIN"
+        else
+            sudo sed -i -E '/^\[General\]/a PairableTimeout = 0' "$BT_MAIN"
+        fi
+    fi
+    echo "  bluetooth/main.conf patched: DiscoverableTimeout=0, PairableTimeout=0"
+else
+    echo "  WARN: $BT_MAIN not found — skipping BT timeout patch"
+fi
+
 # ─── 17. Create sentinel ───
 echo ""
 echo "=== 17. Create sentinel file ==="
