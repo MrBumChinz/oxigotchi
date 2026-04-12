@@ -79,7 +79,7 @@ Runs on a 30-second `WallTimer` in the daemon loop. Each tick:
    - **Truncated block at EOF** (block length exceeds remaining bytes): roll back `file_offset` to the start of this block boundary and stop. Retry next tick when AO has written more.
    - **Any other block type**: skip by block length.
 4. Update `file_offset` to current position (always on a block boundary).
-5. For each parsed beacon: insert into map only if SSID is non-empty. Never overwrite a non-empty SSID with an empty one (hidden SSIDs are stored as `"(hidden)"` separately from `""`).
+5. For each parsed beacon: insert into map only if SSID is non-empty (length > 0). **Hidden SSIDs (empty SSID in beacon) are not stored** — they carry no useful information for display or naming and would pollute capture filenames with a placeholder string. If a BSSID already has a non-empty SSID in the map, a subsequent empty-SSID beacon does not overwrite it.
 
 ### Persistence
 
@@ -116,9 +116,20 @@ Add `whitelisted: bool` to `ApEntry`. Set by checking:
 
 Both stores are checked (the codebase has two separate stores — this is acknowledged, not a "unified model"). The `whitelisted` field reflects the union of both.
 
-### AO whitelist propagation
+### Whitelist add/remove symmetry
 
-Currently `main.rs` builds the AO whitelist file from `wifi.tracker.ssid_whitelist` only. Change to also include formatted BSSID strings from `attacks.whitelist` so AO itself skips MAC-whitelisted APs too. No `ao.rs` change needed — `ao.rs` just writes `Vec<String>` to the file; the change is in how `main.rs` builds that vector.
+The current codebase has an asymmetry: adding a whitelist entry works for both SSID and MAC, but **removing** only handles MAC entries (`attacks.whitelist`). SSID entries in `wifi.tracker.ssid_whitelist` are not removed by the remove handler. Fix: the `POST /api/whitelist/remove` handler must check both stores and remove from whichever matches.
+
+### AO whitelist propagation (all sites)
+
+Currently `main.rs` builds the AO whitelist file from `wifi.tracker.ssid_whitelist` only. Change to also include formatted BSSID strings from `attacks.whitelist` so AO itself skips MAC-whitelisted APs too. No `ao.rs` change needed — `ao.rs` just writes `Vec<String>` to the file.
+
+This merged build must happen at **all three sites** where `ao.config.whitelist` is assigned:
+1. Initial build before first AO start (~line 506)
+2. Live whitelist add handler (~line 2059)
+3. Live whitelist remove handler (~line 2091)
+
+Extract a helper `fn build_ao_whitelist(&self) -> Vec<String>` that merges both stores, called from all three sites.
 
 ## 4. Capture File Naming (modify capture/mod.rs)
 
@@ -157,7 +168,7 @@ Same `generate_ssid_filename()` function called from both paths.
 
 ### Upload queue consistency
 
-If a file is renamed after being enqueued in `UploadQueue`, the queue entry's path must be updated to match. `generate_ssid_filename()` returns the new path so callers can propagate.
+Renaming must not break queued uploads. The rename + queue update happens **inside** `move_validated_captures()` (verified mode) and `scan_directory()` (collect-all mode) — not by external callers. Both functions already own the `CaptureManager` state including the upload queue, so they can update queue paths atomically with the rename. `move_validated_captures()` return type stays `(usize, usize)` — no API change needed.
 
 ## 5. Dashboard Whitelist Badge (modify web/html.rs)
 
