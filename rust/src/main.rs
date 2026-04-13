@@ -517,7 +517,7 @@ impl Daemon {
         }
 
         // Pass SSID whitelist to AO so it skips our own APs
-        self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
+        self.ao.config.whitelist = self.build_ao_whitelist();
         if !self.ao.config.whitelist.is_empty() {
             info!("AO whitelist: {:?}", self.ao.config.whitelist);
         }
@@ -1581,6 +1581,20 @@ impl Daemon {
         self.update_display();
     }
 
+    /// Build merged whitelist for AO: SSID entries + formatted BSSID entries.
+    fn build_ao_whitelist(&self) -> Vec<String> {
+        let mut wl: Vec<String> = self.wifi.tracker.ssid_whitelist.clone();
+        for mac in &self.attacks.whitelist {
+            wl.push(
+                mac.iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(":"),
+            );
+        }
+        wl
+    }
+
     /// Process commands queued by the web server.
     fn process_web_commands(&mut self) {
         let mut any_command = false;
@@ -2080,7 +2094,7 @@ impl Daemon {
                 }
                 wifi::WhitelistEntry::Ssid(ssid) => {
                     self.wifi.tracker.add_ssid_whitelist(&ssid);
-                    self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
+                    self.ao.config.whitelist = self.build_ao_whitelist();
                     info!("web: whitelist added SSID {ssid}");
                     any_command = true;
                     whitelist_changed = true;
@@ -2107,12 +2121,18 @@ impl Daemon {
                     any_command = true;
                     whitelist_changed = true;
                 }
+            } else {
+                // SSID removal
+                self.wifi.tracker.ssid_whitelist.retain(|s| s != &remove);
+                info!("web: whitelist removed SSID {}", remove);
+                any_command = true;
+                whitelist_changed = true;
             }
         }
 
         // If whitelist changed, restart AO so it picks up the new --whitelist file
         if whitelist_changed && self.ao.state == ao::AoState::Running {
-            self.ao.config.whitelist = self.wifi.tracker.ssid_whitelist.clone();
+            self.ao.config.whitelist = self.build_ao_whitelist();
             info!("web: whitelist changed, restarting AO");
             if let Err(e) = self.ao.restart() {
                 log::error!("web: AO restart failed after whitelist change: {e}");
