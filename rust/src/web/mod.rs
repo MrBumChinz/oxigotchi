@@ -1272,6 +1272,8 @@ pub struct ApEntry {
     pub channel: u8,
     pub clients: u32,
     pub has_handshake: bool,
+    #[serde(default)]
+    pub whitelisted: bool,
 }
 
 /// A whitelist entry returned by /api/whitelist.

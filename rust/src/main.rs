@@ -3061,6 +3061,7 @@ impl Daemon {
                     channel: ap.channel,
                     clients: ap.client_count,
                     has_handshake: has_hs,
+                    whitelisted: ap.whitelisted,
                 }
             })
             .collect();
@@ -3114,6 +3115,13 @@ impl Daemon {
                     .get(&ao_bssid_bytes)
                     .copied()
                     .unwrap_or(-100);
+                let whitelisted = self
+                    .wifi
+                    .tracker
+                    .ssid_whitelist
+                    .iter()
+                    .any(|w| w.eq_ignore_ascii_case(&ssid))
+                    || self.attacks.whitelist.iter().any(|w| *w == ao_bssid_bytes);
                 ap_entries.push(web::ApEntry {
                     bssid: bssid_fmt,
                     ssid,
@@ -3121,6 +3129,7 @@ impl Daemon {
                     channel: ao_ap.channel,
                     clients: ao_ap.hit_count,
                     has_handshake: has_hs,
+                    whitelisted,
                 });
             }
         }

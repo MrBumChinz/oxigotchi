@@ -93,6 +93,7 @@ input:checked+.slider:before{transform:translateX(22px)}
 .wl-btn-add:hover:not(:disabled){background:#00f0bf}
 .wl-btn-danger{background:#e94560;color:#fff}
 .wl-btn-danger:hover:not(:disabled){background:#ff5875}
+.wl-badge{display:inline-block;font-size:10px;background:#444;color:#999;padding:1px 5px;border-radius:8px;margin-left:4px;vertical-align:middle}
 .wl-btn-rm{background:#e94560;color:#fff;padding:4px 10px;font-size:11px;border:none;border-radius:4px;cursor:pointer}
 .wl-btn-rm:active{transform:scale(0.95)}
 .ch-input{background:#0a1628;color:#e0e0e0;border:1px solid #0f3460;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;width:100%}
@@ -1148,7 +1149,7 @@ function refreshAps() {
         el.innerHTML = aps.map(function(ap) {
             var rssiColor = ap.rssi > -50 ? '#00d4aa' : (ap.rssi > -70 ? '#f0c040' : '#e94560');
             var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake or PMKID captured — hash saved, ready to crack">&#9733;</span>' : '';
-            return '<tr><td>' + esc(ap.ssid || '<hidden>') + '</td>' +
+            return '<tr' + (ap.whitelisted ? ' style="opacity:0.5"' : '') + '><td>' + esc(ap.ssid || '<hidden>') + (ap.whitelisted ? '<span class="wl-badge">WL</span>' : '') + '</td>' +
                 '<td style="color:#888;font-size:10px">' + esc(ap.bssid) + '</td>' +
                 '<td style="color:' + rssiColor + '">' + ap.rssi + '</td>' +
                 '<td>' + ap.channel + '</td>' +
@@ -2050,7 +2051,7 @@ function updateApsFromWs(aps) {
     el.innerHTML = aps.map(function(ap) {
         var rssiColor = ap.rssi > -50 ? '#00d4aa' : (ap.rssi > -70 ? '#f0c040' : '#e94560');
         var hsIcon = ap.has_handshake ? '<span style="color:#00d4aa" title="Handshake or PMKID captured — hash saved, ready to crack">&#9733;</span>' : '';
-        return '<tr><td>' + esc(ap.ssid || '<hidden>') + '</td>' +
+        return '<tr' + (ap.whitelisted ? ' style="opacity:0.5"' : '') + '><td>' + esc(ap.ssid || '<hidden>') + (ap.whitelisted ? '<span class="wl-badge">WL</span>' : '') + '</td>' +
             '<td style="color:#888;font-size:10px">' + esc(ap.bssid) + '</td>' +
             '<td style="color:' + rssiColor + '">' + ap.rssi + '</td>' +
             '<td>' + ap.channel + '</td>' +
