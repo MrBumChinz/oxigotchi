@@ -167,6 +167,12 @@ No. Oxigotchi uses SSP (Secure Simple Pairing) numeric comparison. The 6-digit c
 **Q: Can I pair multiple phones?**
 Yes. Fresh images stay discoverable after a successful tether (the new `hide_after_connect = false` default in v3.3.1+). Pair a second phone the same way. Whichever phone the daemon sees first with a matching NAP UUID will be used for auto-connect. You can bias it with `phone_name` in `/etc/oxigotchi/config.toml` to prefer a specific device.
 
+**Q: Can I hardcode my phone's MAC address?**
+Yes — set `phone_mac = "AA:BB:CC:DD:EE:FF"` in the `[bluetooth]` section of `/etc/oxigotchi/config.toml`. When set, the daemon skips NAP capability checks and name matching and connects directly to that MAC. Useful for iOS devices with randomized MACs or when you want to lock to a specific phone. If the MAC isn't found in the paired list, it falls back to `phone_name` matching.
+
+**Q: How does the daemon verify internet?**
+After connecting PAN and getting a DHCP lease, the daemon runs three checks in sequence: (1) IP is routable (not link-local 169.254.*), (2) default route goes through the PAN interface (bnep0), (3) `ping 1.1.1.1` succeeds within 3 seconds. Only if all three pass does the dashboard show `Internet: Yes`. If your phone has signal but no data, the daemon will correctly report `Connected: true` but `Internet: No`.
+
 **Q: What if I want the adapter to go invisible after pairing?**
 Set `hide_after_connect = true` in `[bluetooth]` in `/etc/oxigotchi/config.toml` and restart the daemon. The adapter will `hide()` itself after each successful connect.
 
