@@ -427,97 +427,19 @@ pub struct ParsedBeacon {
 
 /// Parse radiotap + 802.11 beacon/probe response from raw bytes.
 ///
-/// Expected layout:
-/// - Radiotap header: variable length (length at bytes 2-3, little-endian)
-/// - 802.11 management frame header: 24 bytes
-///   - frame_control[0..2], duration[2..4], DA[4..10], SA[10..16], BSSID[16..22], seq[22..24]
-/// - Fixed params: timestamp(8) + beacon_interval(2) + capability(2) = 12 bytes
-/// - Tagged parameters: (tag_id, tag_len, tag_data) ...
+/// Delegates to [`crate::ieee80211::parse_beacon`] for the actual parsing.
+/// The `rssi_override` parameter, when `Some`, replaces the RSSI value
+/// extracted from the radiotap header (used when the caller has a more
+/// reliable RSSI source, e.g. from AngryOxide's parsed output).
 ///
 /// Returns None if the frame is not a beacon or probe response, or is malformed.
 pub fn parse_beacon_frame(raw: &[u8], rssi_override: Option<i8>) -> Option<ParsedBeacon> {
-    // Need at least 4 bytes for radiotap header length field
-    if raw.len() < 4 {
-        return None;
-    }
-
-    // Parse radiotap header length (bytes 2-3, little-endian)
-    let rt_len = u16::from_le_bytes([raw[2], raw[3]]) as usize;
-    if raw.len() < rt_len {
-        return None;
-    }
-
-    // Try to extract RSSI from radiotap header.
-    // The radiotap "present" bitmask is at bytes 4-7.
-    // Bit 5 = dBm Antenna Signal. We do a simplified extraction:
-    // walk the present flags and if bit 5 is set, find the offset.
-    let rssi = rssi_override.unwrap_or_else(|| extract_radiotap_rssi(raw, rt_len).unwrap_or(-128));
-
-    let dot11 = &raw[rt_len..];
-
-    // Need at least 24 bytes for 802.11 management header
-    if dot11.len() < 24 {
-        return None;
-    }
-
-    let frame_control = dot11[0];
-    let frame_type = frame_control & 0x0C; // bits 3:2
-    let frame_subtype = frame_control & 0xF0; // bits 7:4
-
-    // Check for management frame type
-    if frame_type != IEEE80211_TYPE_MGMT {
-        return None;
-    }
-
-    // Check for beacon (0x80) or probe response (0x50)
-    if frame_subtype != IEEE80211_SUBTYPE_BEACON && frame_subtype != IEEE80211_SUBTYPE_PROBE_RESP {
-        return None;
-    }
-
-    // BSSID is at offset 16..22 in the 802.11 header
-    let mut bssid = [0u8; 6];
-    bssid.copy_from_slice(&dot11[16..22]);
-
-    // Skip 24-byte header + 12-byte fixed params = offset 36
-    let tagged_start = 36;
-    if dot11.len() < tagged_start {
-        return None;
-    }
-
-    let mut ssid = String::new();
-    let mut channel: u8 = 0;
-
-    // Parse tagged parameters
-    let mut pos = tagged_start;
-    while pos + 2 <= dot11.len() {
-        let tag_id = dot11[pos];
-        let tag_len = dot11[pos + 1] as usize;
-        pos += 2;
-
-        if pos + tag_len > dot11.len() {
-            break; // malformed
-        }
-
-        match tag_id {
-            TAG_SSID => {
-                ssid = String::from_utf8_lossy(&dot11[pos..pos + tag_len]).to_string();
-            }
-            TAG_DS_PARAM => {
-                if tag_len >= 1 {
-                    channel = dot11[pos];
-                }
-            }
-            _ => {} // skip other tags
-        }
-
-        pos += tag_len;
-    }
-
+    let info = crate::ieee80211::parse_beacon(raw)?;
     Some(ParsedBeacon {
-        bssid,
-        ssid,
-        channel,
-        rssi,
+        bssid: info.bssid,
+        ssid: info.ssid,
+        channel: info.channel,
+        rssi: rssi_override.unwrap_or(info.rssi as i8),
     })
 }
 

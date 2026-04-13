@@ -5,6 +5,7 @@
 // Modules are the public API surface for Rusty Oxigotchi.
 mod ao;
 mod attacks;
+mod ieee80211;
 mod bluetooth;
 mod capture;
 mod config;
