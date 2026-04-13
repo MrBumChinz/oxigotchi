@@ -1132,6 +1132,66 @@ pub fn auto_backup(
 }
 
 // ---------------------------------------------------------------------------
+// SSID-based filename helpers
+// ---------------------------------------------------------------------------
+
+/// Sanitize an SSID for use in filenames.
+fn sanitize_ssid(ssid: &str) -> String {
+    let sanitized: String = ssid
+        .chars()
+        .map(|c| {
+            if c == '/'
+                || c == '\\'
+                || c == ':'
+                || c == '*'
+                || c == '?'
+                || c == '"'
+                || c == '<'
+                || c == '>'
+                || c == '|'
+                || c.is_control()
+            {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    if sanitized.len() > 32 {
+        sanitized[..32].to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Generate a capture filename stem: {SSID}_{BSSID}_{TIMESTAMP}
+pub fn generate_ssid_filename(ssid: &str, bssid_hex: &str, timestamp: &str) -> String {
+    let safe_ssid = sanitize_ssid(ssid);
+    if safe_ssid.is_empty() {
+        format!("unknown_{bssid_hex}_{timestamp}")
+    } else {
+        format!("{safe_ssid}_{bssid_hex}_{timestamp}")
+    }
+}
+
+/// If path exists, append _01, _02, etc. until it doesn't.
+fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+    let ext = path.extension().unwrap().to_string_lossy().to_string();
+    let parent = path.parent().unwrap();
+    for i in 1..=99 {
+        let candidate = parent.join(format!("{stem}_{i:02}.{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    path.to_path_buf()
+}
+
+// ---------------------------------------------------------------------------
 // tmpfs capture pipeline: validate in RAM, move handshakes to SD
 // ---------------------------------------------------------------------------
 
@@ -1143,6 +1203,7 @@ pub fn move_validated_captures(
     tmpfs_dir: &Path,
     permanent_dir: &Path,
     manager: &mut CaptureManager,
+    ssid_lookup: impl Fn(&[u8; 6]) -> Option<String>,
 ) -> (usize, usize) {
     use std::fs;
     let mut moved = 0;
@@ -1172,6 +1233,35 @@ pub fn move_validated_captures(
                     log::info!(
                         "capture: moved validated {} to SD",
                         path.file_name().unwrap().to_string_lossy()
+                    );
+
+                    // Rename with SSID — extract BSSID+SSID from .22000, fall
+                    // back to resolver snapshot, then to "unknown".
+                    let (bssid, ssid_22k) = parse_22000_metadata(&pcapng_dest);
+                    let ssid = if !ssid_22k.is_empty() {
+                        ssid_22k
+                    } else {
+                        ssid_lookup(&bssid).unwrap_or_default()
+                    };
+                    let bssid_hex: String =
+                        bssid.iter().map(|b| format!("{b:02x}")).collect();
+                    let ts = chrono::Local::now()
+                        .format("%Y%m%d-%H%M%S")
+                        .to_string();
+                    let stem = generate_ssid_filename(&ssid, &bssid_hex, &ts);
+                    let new_pcapng = permanent_dir.join(format!("{stem}.pcapng"));
+                    let final_pcapng = resolve_collision(&new_pcapng);
+                    let final_companion = final_pcapng.with_extension("22000");
+                    let _ = std::fs::rename(&pcapng_dest, &final_pcapng);
+                    if companion_dest.exists() {
+                        let _ = std::fs::rename(&companion_dest, &final_companion);
+                    }
+                    log::info!(
+                        "capture: renamed to {}",
+                        final_pcapng
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
                     );
                 }
             } else {
@@ -1217,6 +1307,7 @@ pub fn move_validated_captures(
     _tmpfs_dir: &Path,
     _permanent_dir: &Path,
     _manager: &mut CaptureManager,
+    _ssid_lookup: impl Fn(&[u8; 6]) -> Option<String>,
 ) -> (usize, usize) {
     (0, 0)
 }
@@ -2264,5 +2355,33 @@ mod tests {
         assert_eq!(removed, 2); // removed the 2 unconverted files
         assert_eq!(cm.count(), 3);
         assert_eq!(cm.verified_count(), 3);
+    }
+
+    // ---- SSID filename helpers ----
+
+    #[test]
+    fn test_sanitize_ssid() {
+        assert_eq!(sanitize_ssid("Normal"), "Normal");
+        assert_eq!(sanitize_ssid("Has/Slash"), "Has_Slash");
+        assert_eq!(sanitize_ssid("Has:Colon"), "Has_Colon");
+        assert_eq!(sanitize_ssid("A\"B*C?D"), "A_B_C_D");
+        assert_eq!(sanitize_ssid(""), "");
+        assert_eq!(sanitize_ssid(&"A".repeat(50)).len(), 32);
+    }
+
+    #[test]
+    fn test_generate_ssid_filename() {
+        assert_eq!(
+            generate_ssid_filename("TestNet", "aabbccddeeff", "20260412-153000"),
+            "TestNet_aabbccddeeff_20260412-153000"
+        );
+    }
+
+    #[test]
+    fn test_generate_ssid_filename_unknown() {
+        assert_eq!(
+            generate_ssid_filename("", "aabbccddeeff", "20260412-153000"),
+            "unknown_aabbccddeeff_20260412-153000"
+        );
     }
 }
