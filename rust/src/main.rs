@@ -22,6 +22,7 @@ mod qpu;
 mod radio;
 mod rage;
 mod recovery;
+mod ssid;
 mod timer;
 mod web;
 mod wifi;
