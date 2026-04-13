@@ -203,8 +203,13 @@ impl ApTracker {
 
     /// Remove APs not seen for more than `max_age` seconds.
     pub fn prune(&mut self, max_age_secs: u64) {
-        let cutoff = Instant::now() - std::time::Duration::from_secs(max_age_secs);
-        self.aps.retain(|_, ap| ap.last_seen >= cutoff);
+        let cutoff = Instant::now()
+            .checked_sub(std::time::Duration::from_secs(max_age_secs));
+        if let Some(cutoff) = cutoff {
+            self.aps.retain(|_, ap| ap.last_seen >= cutoff);
+        }
+        // If checked_sub returns None (overflow), max_age exceeds uptime —
+        // all entries are younger than max_age, so keep everything.
     }
 
     /// Filter out whitelisted APs and those below min RSSI, returning only attackable ones.

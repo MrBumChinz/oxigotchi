@@ -682,7 +682,12 @@ impl Daemon {
         // ---- Bluetooth health (SAFE and RAGE modes) ----
         // Deferred setup: first epoch initializes BT (hardware not ready at boot).
         // Runs BEFORE scan so BT coexistence rate cap can protect the combo chip.
-        if self.mode == OperatingMode::Safe || self.mode == OperatingMode::Rage {
+        // Skip entirely if BT is disabled in config — otherwise setup() returns
+        // Ok(()) without initializing D-Bus, dbus_ready() stays false, and the
+        // health block spams "BT tether initialized: BT OFF" every epoch.
+        if (self.mode == OperatingMode::Safe || self.mode == OperatingMode::Rage)
+            && self.bluetooth.config.enabled
+        {
             if self.bluetooth.dbus_ready() {
                 self.bluetooth.check_status();
                 if self.bluetooth.should_connect() {
