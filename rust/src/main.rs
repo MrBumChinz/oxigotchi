@@ -847,7 +847,9 @@ impl Daemon {
 
         // ---- SSID resolver: parse new beacon frames from AO pcapng ----
         if self.ssid_resolve_timer.due() {
-            let ao_dir = std::path::Path::new(&self.ao.config.output_dir);
+            // ao.config.output_dir is a file prefix (e.g. "/tmp/ao_captures/capture"),
+            // not a directory. Use tmpfs_capture_dir for the actual directory.
+            let ao_dir = std::path::Path::new(&self.tmpfs_capture_dir);
             self.ssid_resolver.tick(ao_dir);
         }
         // Flush SSID map to disk periodically
