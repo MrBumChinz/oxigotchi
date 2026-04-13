@@ -242,6 +242,7 @@ impl Daemon {
         let bt_config = bluetooth::BtConfig {
             enabled: config.bluetooth.enabled,
             phone_name: config.bluetooth.phone_name.clone(),
+            phone_mac: config.bluetooth.phone_mac.clone(),
             auto_connect: config.bluetooth.auto_connect,
             hide_after_connect: config.bluetooth.hide_after_connect,
         };

@@ -140,6 +140,10 @@ pub struct BluetoothConfig {
     /// Display name of the phone (used for scan matching).
     #[serde(default)]
     pub phone_name: String,
+    /// Optional hardcoded phone MAC (e.g. "AA:BB:CC:DD:EE:FF").
+    /// If set, skip NAP capability check and connect directly.
+    #[serde(default)]
+    pub phone_mac: String,
     /// Automatically connect when the device is seen.
     #[serde(default = "default_true")]
     pub auto_connect: bool,
@@ -155,6 +159,7 @@ impl Default for BluetoothConfig {
         Self {
             enabled: false,
             phone_name: String::new(),
+            phone_mac: String::new(),
             auto_connect: true,
             hide_after_connect: false,
         }

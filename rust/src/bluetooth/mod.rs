@@ -46,6 +46,9 @@ pub struct BtConfig {
     pub enabled: bool,
     /// Display name of the phone (used for scan matching).
     pub phone_name: String,
+    /// Optional hardcoded phone MAC address (e.g. "AA:BB:CC:DD:EE:FF").
+    /// If set, skip scan and connect directly to this device.
+    pub phone_mac: String,
     /// Whether to auto-connect on boot.
     pub auto_connect: bool,
     /// Whether to hide BT discoverability after connecting.
@@ -62,6 +65,7 @@ impl Default for BtConfig {
         Self {
             enabled: false,
             phone_name: String::new(),
+            phone_mac: String::new(),
             auto_connect: true,
             hide_after_connect: false,
         }
@@ -259,6 +263,43 @@ fn ip_is_routable(ip: &str) -> bool {
     !ip.starts_with("169.254")
 }
 
+/// Check if the default route goes through the given interface.
+#[cfg(unix)]
+fn has_default_route(iface: &str) -> bool {
+    std::process::Command::new("ip")
+        .args(["route", "show", "default"])
+        .output()
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.contains(iface)
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn has_default_route(_iface: &str) -> bool {
+    false
+}
+
+/// Active internet connectivity check: try to reach a public DNS server.
+/// Returns true if we get a response within 3 seconds.
+#[cfg(unix)]
+fn probe_internet() -> bool {
+    // Ping 1.1.1.1 with a 3-second timeout, single packet
+    std::process::Command::new("ping")
+        .args(["-c", "1", "-W", "3", "1.1.1.1"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn probe_internet() -> bool {
+    false
+}
+
 impl BtTether {
     /// Create a new Bluetooth tether manager with the given configuration.
     pub fn new(config: BtConfig) -> Self {
@@ -429,11 +470,7 @@ impl BtTether {
             self.retry_count = 0;
             self.user_disconnected = false;
             self.refresh_ip();
-            if let Some(ref ip) = self.ip_address {
-                if ip_is_routable(ip) {
-                    self.internet_available = true;
-                }
-            }
+            self.internet_available = self.verify_internet(&iface);
             if self.config.hide_after_connect {
                 self.hide();
             }
@@ -484,11 +521,7 @@ impl BtTether {
                 self.user_disconnected = false;
                 let dhcp_hint = self.run_dhcp(&pan.interface);
                 self.refresh_ip();
-                if let Some(ref ip) = self.ip_address {
-                    if ip_is_routable(ip) {
-                        self.internet_available = true;
-                    }
-                }
+                self.internet_available = self.verify_internet(&pan.interface);
                 // DHCP failures don't fail the connect (the PAN link is
                 // still up), but we want the hint visible so the user can
                 // act on it.
@@ -532,6 +565,21 @@ impl BtTether {
         if devices.is_empty() {
             return None;
         }
+
+        // If phone_mac is set, skip all heuristics and use it directly.
+        if !self.config.phone_mac.is_empty() {
+            let mac_upper = self.config.phone_mac.to_uppercase();
+            if let Some(d) = devices.iter().find(|d| d.mac.to_uppercase() == mac_upper) {
+                return Some(d);
+            }
+            // MAC configured but not found in paired list — fall through
+            // to name matching so the user isn't stuck.
+            info!(
+                "BT: configured phone_mac {} not found in paired devices, trying name match",
+                self.config.phone_mac
+            );
+        }
+
         #[cfg(target_os = "linux")]
         let nap_capable: Vec<&dbus::BlueZDevice> = {
             let dbus = self.dbus.as_ref()?;
@@ -559,6 +607,28 @@ impl BtTether {
             return Some(d);
         }
         nap_capable.first().copied()
+    }
+
+    /// Verify internet connectivity after PAN + DHCP: check IP is routable,
+    /// default route goes through the PAN interface, and we can reach a
+    /// public host. Returns true only if all three pass.
+    fn verify_internet(&self, iface: &str) -> bool {
+        let ip_ok = self
+            .ip_address
+            .as_ref()
+            .is_some_and(|ip| ip_is_routable(ip));
+        if !ip_ok {
+            return false;
+        }
+        if !has_default_route(iface) {
+            info!("BT: IP is routable but no default route via {iface}");
+            return false;
+        }
+        let reachable = probe_internet();
+        if !reachable {
+            info!("BT: route OK but internet unreachable (phone may have no carrier)");
+        }
+        reachable
     }
 
     /// Disconnect PAN via Network1.Disconnect.
