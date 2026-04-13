@@ -3099,9 +3099,14 @@ impl Daemon {
                         .iter()
                         .any(|f| f.has_handshake && f.bssid == ao_bssid_bytes);
                 let ssid = self
-                    .captures
-                    .ssid_for(&ao_bssid_bytes)
+                    .ssid_resolver
+                    .get(&ao_bssid_bytes)
                     .map(|s| s.to_string())
+                    .or_else(|| {
+                        self.captures
+                            .ssid_for(&ao_bssid_bytes)
+                            .map(|s| s.to_string())
+                    })
                     .unwrap_or_else(|| "(AO)".into());
                 let rssi = self
                     .captures
