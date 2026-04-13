@@ -148,6 +148,9 @@ struct Daemon {
     wifi: wifi::WifiManager,
     attacks: attacks::AttackScheduler,
     captures: capture::CaptureManager,
+    ssid_resolver: ssid::SsidResolver,
+    ssid_resolve_timer: timer::WallTimer,
+    ssid_flush_timer: timer::WallTimer,
     bluetooth: bluetooth::BtTether,
     bt_feature: bluetooth::supervisor::BtSupervisor,
     bt_discovery: bluetooth::discovery::BtDiscoveryWorker,
@@ -273,6 +276,11 @@ impl Daemon {
             wifi,
             attacks,
             captures,
+            ssid_resolver: ssid::SsidResolver::new(
+                std::path::PathBuf::from("/home/pi/bssid_ssid.json")
+            ),
+            ssid_resolve_timer: timer::WallTimer::new(Duration::from_secs(30)),
+            ssid_flush_timer: timer::WallTimer::new(Duration::from_secs(60)),
             bluetooth,
             bt_feature,
             bt_discovery: bluetooth::discovery::BtDiscoveryWorker::new(),
@@ -439,6 +447,10 @@ impl Daemon {
             Ok(n) => info!("found {n} existing captures"),
             Err(e) => log::warn!("capture scan failed: {e}"),
         }
+
+        // Load cached BSSID->SSID map
+        self.ssid_resolver.load();
+        info!("SSID resolver: loaded {} cached entries", self.ssid_resolver.entry_count());
 
         // Load Lua plugins — read persisted positions from plugins.toml, fall back to defaults
         let plugin_defaults = vec![
@@ -831,6 +843,16 @@ impl Daemon {
                     s.qpu_dominant_class = format!("{:?}", rf.dominant_class);
                 }
             }
+        }
+
+        // ---- SSID resolver: parse new beacon frames from AO pcapng ----
+        if self.ssid_resolve_timer.due() {
+            let ao_dir = std::path::Path::new(&self.ao.config.output_dir);
+            self.ssid_resolver.tick(ao_dir);
+        }
+        // Flush SSID map to disk periodically
+        if self.ssid_flush_timer.due() {
+            self.ssid_resolver.flush();
         }
 
         // ---- Display phase ----
