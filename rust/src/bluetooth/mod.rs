@@ -825,12 +825,18 @@ impl BtTether {
                     }
                     return self.state;
                 }
-                // Interface gone — use backoff to avoid hammering the combo chip
+                // Interface gone — phone toggled BT off or went out of range.
+                // Transition to Disconnected (not Error) so reconnect fires
+                // immediately on the next epoch instead of waiting through the
+                // backoff schedule. The backoff is for failed *connect attempts*,
+                // not for carrier loss from a previously-working link. Rob's
+                // field report: phone BT off/on didn't reconnect for 5 min.
                 warn!("BT: PAN interface {iface} disappeared (carrier lost)");
                 self.pan_interface = None;
                 self.ip_address = None;
                 self.internet_available = false;
-                self.on_error();
+                self.state = BtState::Disconnected;
+                self.retry_count = 0;
             }
         }
         self.state

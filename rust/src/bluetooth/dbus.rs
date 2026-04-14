@@ -175,7 +175,7 @@ mod inner {
     use dbus::blocking::Connection;
     use dbus::channel::MatchingReceiver;
     use dbus_crossroads::Crossroads;
-    use log::info;
+    use log::{info, warn};
     use std::collections::HashMap;
     use std::sync::mpsc::Sender;
     use std::time::Duration;
@@ -277,33 +277,119 @@ mod inner {
             Ok(devices)
         }
 
-        /// Connect to a device's PAN via Network1.Connect("nap").
+        /// NAP profile UUID used by ConnectProfile fallback.
+        const NAP_UUID: &'static str = "00001116-0000-1000-8000-00805f9b34fb";
+
+        /// Connect to a device's PAN.
         ///
-        /// Network1.Connect is the correct BlueZ API for PAN tethering — it
-        /// internally sets up the BNEP bridge and returns the interface name.
-        /// ConnectProfile requires a registered profile handler which BlueZ
-        /// doesn't provide for PANU/NAP by default.
+        /// Primary path: `Network1.Connect("nap")` — the standard BlueZ API
+        /// for PAN tethering. Returns the BNEP interface name directly.
+        ///
+        /// Fallback: if Network1 fails with `profile-unavailable` (common on
+        /// iOS which doesn't advertise NAP in SDP), try
+        /// `Device1.ConnectProfile(NAP_UUID)` which uses a lower-level path
+        /// that can succeed when Network1 refuses. The interface name must
+        /// then be discovered from sysfs since ConnectProfile doesn't return
+        /// it. This is the approach the wsvdmeer Python plugin uses for iOS.
         pub fn connect_pan(&mut self, device_path: &str) -> Result<PanConnection, PanConnectError> {
             let proxy = self.conn.with_proxy(
                 "org.bluez",
                 device_path,
                 Duration::from_secs(30),
             );
-            let (iface_name,): (String,) = proxy
-                .method_call("org.bluez.Network1", "Connect", ("nap",))
-                .map_err(|e| {
+
+            // Try Network1.Connect first (standard path, returns interface name)
+            match proxy.method_call::<(String,), _, _, _>(
+                "org.bluez.Network1",
+                "Connect",
+                ("nap",),
+            ) {
+                Ok((iface_name,)) => {
+                    info!("[dbus] PAN connected on {iface_name} via {device_path} (Network1)");
+                    let pc = PanConnection {
+                        interface: iface_name,
+                    };
+                    self.pan = Some(pc.clone());
+                    self.pan_device = Some(device_path.to_string());
+                    return Ok(pc);
+                }
+                Err(e) => {
                     let err_str = format!("{e}");
                     info!("[dbus] Network1.Connect error: {err_str}");
+
+                    // If profile-unavailable (iOS), try ConnectProfile fallback
+                    if err_str.contains("profile-unavailable")
+                        || err_str.contains("ProfileUnavailable")
+                        || err_str.contains("does not exist")
+                    {
+                        info!("[dbus] Trying ConnectProfile(NAP_UUID) fallback (iOS path)");
+                        return self.connect_pan_via_profile(device_path);
+                    }
+
+                    return Err(classify_pan_error(&err_str));
+                }
+            }
+        }
+
+        /// Fallback PAN connect via Device1.ConnectProfile(NAP_UUID).
+        /// Used when Network1.Connect fails (e.g. iOS devices).
+        fn connect_pan_via_profile(
+            &mut self,
+            device_path: &str,
+        ) -> Result<PanConnection, PanConnectError> {
+            let proxy = self.conn.with_proxy(
+                "org.bluez",
+                device_path,
+                Duration::from_secs(30),
+            );
+
+            proxy
+                .method_call::<(), _, _, _>(
+                    "org.bluez.Device1",
+                    "ConnectProfile",
+                    (Self::NAP_UUID,),
+                )
+                .map_err(|e| {
+                    let err_str = format!("{e}");
+                    info!("[dbus] ConnectProfile(NAP) error: {err_str}");
                     classify_pan_error(&err_str)
                 })?;
 
-            info!("[dbus] PAN connected on {iface_name} via {device_path}");
-            let pc = PanConnection {
-                interface: iface_name,
-            };
-            self.pan = Some(pc.clone());
-            self.pan_device = Some(device_path.to_string());
-            Ok(pc)
+            info!("[dbus] ConnectProfile(NAP) succeeded, discovering PAN interface...");
+
+            // ConnectProfile doesn't return the interface name — discover it
+            // from sysfs. Wait briefly for the BNEP interface to appear.
+            for _ in 0..10 {
+                std::thread::sleep(Duration::from_millis(500));
+                if let Some(iface) = Self::find_pan_interface() {
+                    info!("[dbus] PAN interface discovered: {iface} via ConnectProfile");
+                    let pc = PanConnection {
+                        interface: iface,
+                    };
+                    self.pan = Some(pc.clone());
+                    self.pan_device = Some(device_path.to_string());
+                    return Ok(pc);
+                }
+            }
+
+            warn!("[dbus] ConnectProfile succeeded but no PAN interface appeared");
+            Err(PanConnectError::Other(
+                "ConnectProfile OK but no bnep interface found".into(),
+            ))
+        }
+
+        /// Find a bnep*/bt-pan* interface in sysfs.
+        fn find_pan_interface() -> Option<String> {
+            let net_dir = std::path::Path::new("/sys/class/net");
+            if let Ok(entries) = std::fs::read_dir(net_dir) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name.starts_with("bnep") || name.starts_with("bt-pan") {
+                        return Some(name);
+                    }
+                }
+            }
+            None
         }
 
         /// Disconnect the active PAN connection via Network1.Disconnect.
