@@ -300,6 +300,69 @@ fn probe_internet() -> bool {
     false
 }
 
+/// Kill stale dhclient processes for a specific interface.
+/// Avoids killing dhclient on other interfaces (e.g. eth0).
+#[cfg(unix)]
+fn kill_stale_dhclient(iface: &str) {
+    // Get all dhclient PIDs
+    let pids = match std::process::Command::new("pidof")
+        .arg("dhclient")
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).trim().to_string()
+        }
+        _ => return, // no dhclient running
+    };
+
+    for pid in pids.split_whitespace() {
+        // Read cmdline to check if this dhclient is for our interface
+        let cmdline_path = format!("/proc/{pid}/cmdline");
+        if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+            // cmdline has NUL-separated args
+            let args: Vec<&str> = cmdline.split('\0').collect();
+            if args.iter().any(|a| *a == iface) {
+                log::debug!("BT: killing stale dhclient PID {pid} for {iface}");
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", pid])
+                    .output();
+            }
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_stale_dhclient(_iface: &str) {}
+
+/// Last-resort recovery: restart the entire bluetooth systemd service.
+/// Called when D-Bus re-init fails repeatedly, indicating bluetoothd is
+/// hung or in a bad state.
+#[cfg(unix)]
+fn restart_bluetoothd() -> bool {
+    log::warn!("BT: restarting bluetooth.service (last-resort recovery)");
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "bluetoothctl"])
+        .output();
+    let ok = std::process::Command::new("systemctl")
+        .args(["restart", "bluetooth"])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        // Give bluetoothd time to re-initialize
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        info!("BT: bluetooth.service restarted successfully");
+    } else {
+        log::error!("BT: failed to restart bluetooth.service");
+    }
+    ok
+}
+
+#[cfg(not(unix))]
+fn restart_bluetoothd() -> bool {
+    false
+}
+
 impl BtTether {
     /// Create a new Bluetooth tether manager with the given configuration.
     pub fn new(config: BtConfig) -> Self {
@@ -486,8 +549,17 @@ impl BtTether {
         // registrations, leaving a connection that could not handle pair
         // requests or auto-trust newly paired devices after a bus restart.
         if let Err(e) = self.ensure_dbus() {
-            self.on_error();
-            return Err(format!("D-Bus re-init failed: {e}"));
+            // Last resort: restart bluetoothd and try once more.
+            warn!("BT: D-Bus init failed ({e}), attempting bluetoothd restart");
+            if restart_bluetoothd() {
+                if let Err(e2) = self.ensure_dbus() {
+                    self.on_error();
+                    return Err(format!("D-Bus re-init failed after bluetoothd restart: {e2}"));
+                }
+            } else {
+                self.on_error();
+                return Err(format!("D-Bus re-init failed: {e}"));
+            }
         }
 
         // List paired devices (release borrow before find_best_device)
@@ -713,6 +785,12 @@ impl BtTether {
             let _ = std::process::Command::new("dhcpcd")
                 .args(["-k", iface])
                 .output();
+
+            // Kill any stale dhclient process that might be holding the
+            // interface. A leftover dhclient from a previous PAN session
+            // can block new lease acquisition. We target by interface name
+            // so we don't kill dhclient on other interfaces (e.g. eth0).
+            kill_stale_dhclient(iface);
 
             let result = std::process::Command::new("dhcpcd")
                 .args(["-4", "-n", iface])
