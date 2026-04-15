@@ -1179,15 +1179,19 @@ fn resolve_collision(path: &std::path::Path) -> std::path::PathBuf {
     if !path.exists() {
         return path.to_path_buf();
     }
-    let stem = path.file_stem().unwrap().to_string_lossy().to_string();
-    let ext = path.extension().unwrap().to_string_lossy().to_string();
-    let parent = path.parent().unwrap();
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let ext = path.extension().unwrap_or_default().to_string_lossy();
+    let parent = match path.parent() {
+        Some(p) => p,
+        None => return path.to_path_buf(),
+    };
     for i in 1..=99 {
         let candidate = parent.join(format!("{stem}_{i:02}.{ext}"));
         if !candidate.exists() {
             return candidate;
         }
     }
+    log::warn!("resolve_collision: exhausted 99 candidates for {:?}", path);
     path.to_path_buf()
 }
 
@@ -1203,7 +1207,7 @@ pub fn move_validated_captures(
     tmpfs_dir: &Path,
     permanent_dir: &Path,
     manager: &mut CaptureManager,
-    ssid_lookup: impl Fn(&[u8; 6]) -> Option<String>,
+    ssid_resolver: &crate::ssid::SsidResolver,
 ) -> (usize, usize) {
     use std::fs;
     let mut moved = 0;
@@ -1241,7 +1245,7 @@ pub fn move_validated_captures(
                     let ssid = if !ssid_22k.is_empty() {
                         ssid_22k
                     } else {
-                        ssid_lookup(&bssid).unwrap_or_default()
+                        ssid_resolver.get(&bssid).unwrap_or_default().to_string()
                     };
                     let bssid_hex: String =
                         bssid.iter().map(|b| format!("{b:02x}")).collect();
@@ -1307,7 +1311,7 @@ pub fn move_validated_captures(
     _tmpfs_dir: &Path,
     _permanent_dir: &Path,
     _manager: &mut CaptureManager,
-    _ssid_lookup: impl Fn(&[u8; 6]) -> Option<String>,
+    _ssid_resolver: &crate::ssid::SsidResolver,
 ) -> (usize, usize) {
     (0, 0)
 }

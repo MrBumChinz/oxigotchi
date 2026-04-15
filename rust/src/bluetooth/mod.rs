@@ -281,23 +281,15 @@ fn has_default_route(_iface: &str) -> bool {
     false
 }
 
-/// Active internet connectivity check: try to reach a public DNS server.
-/// Returns true if we get a response within 3 seconds.
-#[cfg(unix)]
+/// Active internet connectivity check — reuses network::run_ping.
 fn probe_internet() -> bool {
-    // Ping 1.1.1.1 with a 3-second timeout, single packet
-    std::process::Command::new("ping")
-        .args(["-c", "1", "-W", "3", "1.1.1.1"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-fn probe_internet() -> bool {
-    false
+    #[cfg(unix)]
+    {
+        let args = crate::network::build_ping_args("1.1.1.1", 3);
+        crate::network::run_ping(&args)
+    }
+    #[cfg(not(unix))]
+    { false }
 }
 
 /// Kill stale dhclient processes for a specific interface.

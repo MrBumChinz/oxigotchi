@@ -1302,15 +1302,11 @@ impl Daemon {
 
             // 3. Move validated captures to SD, delete junk from tmpfs
             let permanent_dir = self.captures.capture_dir.clone();
-            // Snapshot resolver to avoid borrow conflict: self.captures is
-            // mutably borrowed by move_validated_captures, so we can't also
-            // borrow self.ssid_resolver inside the closure.
-            let ssid_snap = self.ssid_resolver.snapshot();
             let (moved, deleted) = capture::move_validated_captures(
                 tmpfs_dir,
                 &permanent_dir,
                 &mut self.captures,
-                |bssid| ssid_snap.get(bssid).cloned(),
+                &self.ssid_resolver,
             );
             if moved > 0 || deleted > 0 {
                 info!("capture pipeline: {moved} saved to SD, {deleted} junk deleted from RAM");

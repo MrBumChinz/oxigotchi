@@ -221,7 +221,7 @@ fn run_ip(args: &[String]) -> Result<String, String> {
 
 /// Run `ping` with the given arguments. Returns true if exit code 0.
 #[cfg(unix)]
-fn run_ping(args: &[String]) -> bool {
+pub fn run_ping(args: &[String]) -> bool {
     std::process::Command::new("ping")
         .args(args)
         .stdout(std::process::Stdio::null())

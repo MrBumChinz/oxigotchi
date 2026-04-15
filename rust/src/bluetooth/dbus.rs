@@ -306,18 +306,12 @@ mod inner {
             ) {
                 Ok((iface_name,)) => {
                     info!("[dbus] PAN connected on {iface_name} via {device_path} (Network1)");
-                    let pc = PanConnection {
-                        interface: iface_name,
-                    };
-                    self.pan = Some(pc.clone());
-                    self.pan_device = Some(device_path.to_string());
-                    return Ok(pc);
+                    Ok(self.commit_pan(device_path, iface_name))
                 }
                 Err(e) => {
                     let err_str = format!("{e}");
                     info!("[dbus] Network1.Connect error: {err_str}");
 
-                    // If profile-unavailable (iOS), try ConnectProfile fallback
                     if err_str.contains("profile-unavailable")
                         || err_str.contains("ProfileUnavailable")
                         || err_str.contains("does not exist")
@@ -326,7 +320,7 @@ mod inner {
                         return self.connect_pan_via_profile(device_path);
                     }
 
-                    return Err(classify_pan_error(&err_str));
+                    Err(classify_pan_error(&err_str))
                 }
             }
         }
@@ -358,18 +352,14 @@ mod inner {
             info!("[dbus] ConnectProfile(NAP) succeeded, discovering PAN interface...");
 
             // ConnectProfile doesn't return the interface name — discover it
-            // from sysfs. Wait briefly for the BNEP interface to appear.
-            for _ in 0..10 {
-                std::thread::sleep(Duration::from_millis(500));
-                if let Some(iface) = Self::find_pan_interface() {
+            // from sysfs. Check immediately first, then poll with increasing
+            // delays. Interface typically appears within ~100ms of the call.
+            for i in 0..10 {
+                if let Some(iface) = crate::bluetooth::BtTether::find_existing_bnep() {
                     info!("[dbus] PAN interface discovered: {iface} via ConnectProfile");
-                    let pc = PanConnection {
-                        interface: iface,
-                    };
-                    self.pan = Some(pc.clone());
-                    self.pan_device = Some(device_path.to_string());
-                    return Ok(pc);
+                    return Ok(self.commit_pan(device_path, iface));
                 }
+                std::thread::sleep(Duration::from_millis(if i == 0 { 100 } else { 500 }));
             }
 
             warn!("[dbus] ConnectProfile succeeded but no PAN interface appeared");
@@ -378,18 +368,12 @@ mod inner {
             ))
         }
 
-        /// Find a bnep*/bt-pan* interface in sysfs.
-        fn find_pan_interface() -> Option<String> {
-            let net_dir = std::path::Path::new("/sys/class/net");
-            if let Ok(entries) = std::fs::read_dir(net_dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with("bnep") || name.starts_with("bt-pan") {
-                        return Some(name);
-                    }
-                }
-            }
-            None
+        /// Store PAN connection state after a successful connect.
+        fn commit_pan(&mut self, device_path: &str, iface: String) -> PanConnection {
+            let pc = PanConnection { interface: iface };
+            self.pan = Some(pc.clone());
+            self.pan_device = Some(device_path.to_string());
+            pc
         }
 
         /// Disconnect the active PAN connection via Network1.Disconnect.
@@ -405,20 +389,6 @@ mod inner {
             }
             self.pan = None;
             Ok(())
-        }
-
-        /// Discover a bnep* interface by reading /sys/class/net/.
-        fn find_bnep_interface() -> Option<String> {
-            let net_dir = std::path::Path::new("/sys/class/net");
-            if let Ok(entries) = std::fs::read_dir(net_dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.starts_with("bnep") || name.starts_with("bt-pan") {
-                        return Some(name);
-                    }
-                }
-            }
-            None
         }
 
         /// Read the UUIDs property from a Device1 to check for NAP support.

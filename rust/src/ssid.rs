@@ -184,13 +184,6 @@ impl SsidResolver {
         self.map.len()
     }
 
-    /// Return a cloned snapshot of all BSSID->SSID mappings.
-    /// Used to avoid borrow conflicts when passing a lookup closure alongside
-    /// a mutable borrow of another Daemon field.
-    pub fn snapshot(&self) -> HashMap<[u8; 6], String> {
-        self.map.iter().map(|(k, v)| (*k, v.ssid.clone())).collect()
-    }
-
     /// Prune oldest entries if map exceeds max_entries.
     fn prune(&mut self) {
         while self.map.len() > self.max_entries {
