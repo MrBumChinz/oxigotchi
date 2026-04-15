@@ -104,7 +104,7 @@ Reflash if:
 - The release notes say "reflash recommended" (new systemd services, filesystem layout changes)
 - Your SD card is corrupted or you want a clean slate
 
-For minor version bumps (v3.3.3 → v3.3.4), the binary swap + patch script is all you need.
+For minor version bumps (v3.3.4 → v3.3.5), the binary swap + patch script is all you need.
 
 ---
 

@@ -33,6 +33,8 @@ On the phone side, you need three things:
 
 On the Pi side, a fresh v3.3.1+ image boots with the BT adapter **discoverable by default** — no config needed. The dashboard's Bluetooth card will show `Discoverable: on` and the adapter will be visible to phones within a few meters.
 
+> **Already paired a phone?** Your existing phone reconnects automatically without discoverable being on — it goes straight to the MAC address it memorized during pairing. Discoverable is only required when you want to pair a *new* phone. See [Adding a second phone](#adding-a-second-phone) below.
+
 ---
 
 ## Step-by-step: pair your phone
@@ -159,13 +161,32 @@ These hints are generated from `classify_pan_error` in the daemon and are the sa
 
 ---
 
+## Adding a second phone
+
+Once a phone is paired, the Pi turns off discoverability by default when `hide_after_connect = true` is set (fresh images default to discoverable-always-on, so this section mostly applies if you set that config option). Either way, here's what to know:
+
+**Why your first phone still connects with discoverable off:**
+Paired devices remember each other's MAC address. When your phone reconnects after a BT toggle or reboot, it reaches out directly — no scan needed. Discoverable mode only affects whether *new* unpaired devices can find the Pi.
+
+**To pair a second phone:**
+
+1. Open the web dashboard → **Bluetooth** card
+2. Toggle **Discoverable** ON
+3. On the second phone, open Bluetooth settings and scan for `oxigotchi`
+4. Follow the same [pair steps above](#step-by-step-pair-your-phone)
+5. After pairing, toggle **Discoverable** back OFF (or leave it on — it doesn't affect existing connections)
+
+Both phones will be trusted and the daemon will auto-connect to whichever it sees first. To prefer a specific phone, set `phone_name` in `/etc/oxigotchi/config.toml`.
+
+---
+
 ## FAQ
 
 **Q: Do I need to enter a PIN or password?**
 No. Oxigotchi uses SSP (Secure Simple Pairing) numeric comparison. The 6-digit code on the phone and the web dashboard are two independent computations of the same value — if they match, the bond is secure. You tap Pair on the phone and that's it.
 
 **Q: Can I pair multiple phones?**
-Yes. Fresh images stay discoverable after a successful tether (the new `hide_after_connect = false` default in v3.3.1+). Pair a second phone the same way. Whichever phone the daemon sees first with a matching NAP UUID will be used for auto-connect. You can bias it with `phone_name` in `/etc/oxigotchi/config.toml` to prefer a specific device.
+Yes. See [Adding a second phone](#adding-a-second-phone) above for the full walkthrough. The short version: toggle **Discoverable** ON in the dashboard, pair from the phone, then toggle it back OFF. Your first phone is not affected — it reconnects by MAC regardless of the discoverable state.
 
 **Q: Can I hardcode my phone's MAC address?**
 Yes — set `phone_mac = "AA:BB:CC:DD:EE:FF"` in the `[bluetooth]` section of `/etc/oxigotchi/config.toml`. When set, the daemon skips NAP capability checks and name matching and connects directly to that MAC. Useful for iOS devices with randomized MACs or when you want to lock to a specific phone. If the MAC isn't found in the paired list, it falls back to `phone_name` matching.

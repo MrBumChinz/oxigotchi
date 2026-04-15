@@ -536,7 +536,7 @@ Warning: Collect All bypasses RAM buffering and writes everything directly to SD
 <div class="label">Contention</div><div class="value" id="bt-contention">-</div>
 </div>
 <div class="toggle-row">
-<div class="toggle-info"><div class="toggle-label">Discoverable</div><div class="toggle-desc">Make device visible for BT pairing</div></div>
+<div class="toggle-info"><div class="toggle-label">Discoverable</div><div class="toggle-desc">Only needed to pair an additional phone — your already-paired phone reconnects automatically</div></div>
 <label class="switch"><input type="checkbox" id="bt-visible" onchange="toggleBtVisible(this.checked)"><span class="slider"></span></label>
 </div>
 <div class="card-section" style="border-top:1px solid #0f3460;padding-top:10px;margin-top:10px">
