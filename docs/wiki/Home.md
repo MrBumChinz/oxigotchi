@@ -16,6 +16,7 @@
 
 - **[Web Dashboard](Web-Dashboard)** — 26 live cards, REST API, mobile-friendly control panel
 - **[Bull Faces Reference](Bull-Faces)** — All 28 faces with trigger conditions and personality logic
+- **[PiSugar 3 Button](PiSugar-Button)** — Button mappings, MCU-native tap detection, CTR2 latch fix, board temperature in Lua
 - **[Troubleshooting & FAQ](Troubleshooting-and-FAQ)** — Common issues, apt safety, XP system
 
 ## Deep Dives
