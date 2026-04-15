@@ -149,6 +149,12 @@ These hints are generated from `classify_pan_error` in the daemon and are the sa
 - MIUI auto-dismisses the pair confirmation dialog if you don't respond quickly. Be ready to tap Pair the moment it appears.
 - MIUI's Bluetooth tethering toggle sometimes "forgets" to bind to new bonds. If a fresh pair doesn't produce internet, toggle **Portable hotspot → Bluetooth tethering** off and back on. That re-binds the BNEP service to the new bond.
 - Battery optimization on MIUI can kill background Bluetooth services. Go to Settings → Battery → Bluetooth share → **No restrictions** to keep hotspot running reliably.
+- **"Can't communicate" / BNEP rejected loop:** If the phone shows *"Can't communicate with [Pi]"* and the Pi log shows `Invalid exchange` errors repeating, the BNEP security context is corrupted — both sides have the bond but disagree at the protocol level. Toggling tethering alone won't fix it. Full reset required:
+  1. Pi dashboard → Bluetooth → **Reset pairings** → confirm
+  2. Phone → Bluetooth settings → tap the Pi entry → **Forget this device**
+  3. Phone → turn Bluetooth **off**, wait 5 seconds, back **on**
+  4. Phone → Portable hotspot → Bluetooth tethering → toggle **off** then **on**
+  5. Pair fresh from the phone's Bluetooth scan
 
 ### OneUI (Samsung)
 
