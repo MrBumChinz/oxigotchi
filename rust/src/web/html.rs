@@ -1529,45 +1529,15 @@ function btDisconnect() {
 }
 
 function resetAllBtPairings() {
-    // Two-step fetch: POST refresh triggers the daemon to scan BlueZ
-    // on demand, then after a short delay GET returns the cached list.
-    // This avoids any side effect from passive dashboard polling.
-    api('POST', '/api/bluetooth/refresh-paired').then(function(r) {
-        if (!r || !r.ok) {
-            toast('Could not refresh paired list');
-            return;
+    if (!confirm('This will forget ALL paired Bluetooth devices.\n\nYou will need to re-pair from scratch. Continue?')) {
+        return;
+    }
+    api('POST', '/api/bluetooth/reset-pairings').then(function(r) {
+        if (r && r.ok) {
+            toast('All BT pairings reset \u2014 re-pair when ready');
+        } else {
+            toast('Reset failed \u2014 check logs');
         }
-        // Wait ~1.5s for the daemon to process the refresh in the next epoch.
-        setTimeout(function() {
-            fetch('/api/bluetooth/paired').then(function(r) { return r.json(); }).then(function(devices) {
-                if (!Array.isArray(devices) || devices.length === 0) {
-                    toast('No paired BT devices to reset');
-                    return;
-                }
-                var listText = devices.map(function(d) {
-                    return '\u2022 ' + d.name + ' (' + d.mac + ')';
-                }).join('\n');
-                var msg = 'This will forget ALL paired Bluetooth devices:\n\n' +
-                          listText + '\n\n' +
-                          'You will need to re-pair from scratch. Continue?';
-                if (!confirm(msg)) {
-                    return;
-                }
-                api('POST', '/api/bluetooth/reset-pairings').then(function(r2) {
-                    if (r2 && r2.ok) {
-                        toast('All BT pairings reset \u2014 re-pair when ready');
-                    } else {
-                        toast('Reset failed \u2014 check logs');
-                    }
-                });
-            }).catch(function() {
-                if (confirm('Could not read paired device list. Reset all pairings anyway?')) {
-                    api('POST', '/api/bluetooth/reset-pairings').then(function(r2) {
-                        if (r2 && r2.ok) toast('All BT pairings reset');
-                    });
-                }
-            });
-        }, 1500);
     });
 }
 
