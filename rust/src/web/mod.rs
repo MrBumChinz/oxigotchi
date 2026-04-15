@@ -2155,6 +2155,18 @@ async fn face_packs_post_handler(
     State(state): State<SharedState>,
     Json(body): Json<FacePackSelect>,
 ) -> Json<ActionResponse> {
+    // Validate pack name: reject path traversal (../, /, \) and control chars.
+    // Only allow alphanumeric, dash, underscore, space, dot.
+    let name = &body.pack;
+    if name.contains("..") || name.contains('/') || name.contains('\\')
+        || name.chars().any(|c| c.is_control())
+        || name.is_empty()
+    {
+        return Json(ActionResponse {
+            ok: false,
+            message: "Invalid pack name".into(),
+        });
+    }
     let mut s = state.lock().unwrap();
     s.pending_face_pack = Some(body.pack.clone());
     Json(ActionResponse {

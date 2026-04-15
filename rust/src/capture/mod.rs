@@ -1226,48 +1226,59 @@ pub fn move_validated_captures(
         if path.extension().map(|e| e == "pcapng").unwrap_or(false) {
             let companion = path.with_extension("22000");
             if companion.exists() && companion.metadata().map(|m| m.len() > 0).unwrap_or(false) {
-                // Valid handshake — move both files to permanent storage
+                // Valid handshake — move both files to permanent storage.
+                // Transactional: both copies must succeed before we delete
+                // sources or count as moved. Roll back partial copy on failure.
                 let pcapng_dest = permanent_dir.join(path.file_name().unwrap());
                 let companion_dest = permanent_dir.join(companion.file_name().unwrap());
-                if fs::copy(&path, &pcapng_dest).is_ok() {
-                    let _ = fs::copy(&companion, &companion_dest);
-                    let _ = fs::remove_file(&path);
-                    let _ = fs::remove_file(&companion);
-                    moved += 1;
-                    log::info!(
-                        "capture: moved validated {} to SD",
-                        path.file_name().unwrap().to_string_lossy()
-                    );
-
-                    // Rename with SSID — extract BSSID+SSID from .22000, fall
-                    // back to resolver snapshot, then to "unknown".
-                    let (bssid, ssid_22k) = parse_22000_metadata(&pcapng_dest);
-                    let ssid = if !ssid_22k.is_empty() {
-                        ssid_22k
-                    } else {
-                        ssid_resolver.get(&bssid).unwrap_or_default().to_string()
-                    };
-                    let bssid_hex: String =
-                        bssid.iter().map(|b| format!("{b:02x}")).collect();
-                    let ts = chrono::Local::now()
-                        .format("%Y%m%d-%H%M%S")
-                        .to_string();
-                    let stem = generate_ssid_filename(&ssid, &bssid_hex, &ts);
-                    let new_pcapng = permanent_dir.join(format!("{stem}.pcapng"));
-                    let final_pcapng = resolve_collision(&new_pcapng);
-                    let final_companion = final_pcapng.with_extension("22000");
-                    let _ = std::fs::rename(&pcapng_dest, &final_pcapng);
-                    if companion_dest.exists() {
-                        let _ = std::fs::rename(&companion_dest, &final_companion);
-                    }
-                    log::info!(
-                        "capture: renamed to {}",
-                        final_pcapng
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                    );
+                let pcapng_ok = fs::copy(&path, &pcapng_dest).is_ok();
+                let companion_ok = pcapng_ok && fs::copy(&companion, &companion_dest).is_ok();
+                if !pcapng_ok {
+                    continue; // pcapng copy failed, skip entirely
                 }
+                if !companion_ok {
+                    // .22000 copy failed — roll back the pcapng copy
+                    let _ = fs::remove_file(&pcapng_dest);
+                    log::warn!("capture: .22000 copy failed for {}, rolled back", path.file_name().unwrap().to_string_lossy());
+                    continue;
+                }
+                // Both copies succeeded — safe to delete sources
+                let _ = fs::remove_file(&path);
+                let _ = fs::remove_file(&companion);
+                moved += 1;
+                log::info!(
+                    "capture: moved validated {} to SD",
+                    path.file_name().unwrap().to_string_lossy()
+                );
+
+                // Rename with SSID — extract BSSID+SSID from .22000, fall
+                // back to resolver, then to "unknown".
+                let (bssid, ssid_22k) = parse_22000_metadata(&pcapng_dest);
+                let ssid = if !ssid_22k.is_empty() {
+                    ssid_22k
+                } else {
+                    ssid_resolver.get(&bssid).unwrap_or_default().to_string()
+                };
+                let bssid_hex: String =
+                    bssid.iter().map(|b| format!("{b:02x}")).collect();
+                let ts = chrono::Local::now()
+                    .format("%Y%m%d-%H%M%S")
+                    .to_string();
+                let stem = generate_ssid_filename(&ssid, &bssid_hex, &ts);
+                let new_pcapng = permanent_dir.join(format!("{stem}.pcapng"));
+                let final_pcapng = resolve_collision(&new_pcapng);
+                let final_companion = final_pcapng.with_extension("22000");
+                let _ = std::fs::rename(&pcapng_dest, &final_pcapng);
+                if companion_dest.exists() {
+                    let _ = std::fs::rename(&companion_dest, &final_companion);
+                }
+                log::info!(
+                    "capture: renamed to {}",
+                    final_pcapng
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                );
             } else {
                 // Check if conversion was attempted (file is old enough).
                 // Only delete if file hasn't been modified in last 60 seconds

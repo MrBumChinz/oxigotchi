@@ -260,7 +260,16 @@ impl AoManager {
             // think it's writing to a terminal (line-buffered) instead of
             // a pipe (full-buffered). stdbuf -oL doesn't work reliably
             // with Rust binaries that use BufWriter internally.
-            let script_cmd = format!("{} {}", &self.config.binary, args.join(" "));
+            //
+            // Shell-escape each arg to prevent injection via config values
+            // (binary path, whitelist file, output dir could contain
+            // metacharacters). Single-quote wrapping with internal quote
+            // escaping is the POSIX-safe approach.
+            let escaped_args: Vec<String> = std::iter::once(&self.config.binary)
+                .chain(args.iter())
+                .map(|a| format!("'{}'", a.replace('\'', "'\\''")))
+                .collect();
+            let script_cmd = escaped_args.join(" ");
             match std::process::Command::new("script")
                 .args(["-qc", &script_cmd, "/dev/null"])
                 .stdout(std::process::Stdio::piped())
