@@ -204,6 +204,7 @@ struct Daemon {
     xp_save_timer: WallTimer,
     psm_reset_timer: WallTimer,
     wpasec_fetch_timer: WallTimer,
+    bt_internet_recheck_timer: WallTimer,
     ws_broadcast_timer: WallTimer,
     cpu_sample_timer: WallTimer,
     lua_tick_timer: WallTimer,
@@ -333,6 +334,7 @@ impl Daemon {
             xp_save_timer: WallTimer::new(Duration::from_secs(150)),
             psm_reset_timer: WallTimer::new(Duration::from_secs(900)),
             wpasec_fetch_timer: WallTimer::new(Duration::from_secs(1500)),
+            bt_internet_recheck_timer: WallTimer::new(Duration::from_secs(120)),
             ws_broadcast_timer: WallTimer::new(Duration::from_secs(2)),
             cpu_sample_timer: WallTimer::new(Duration::from_secs(5)),
             lua_tick_timer: WallTimer::new(Duration::from_secs(5)),
@@ -722,6 +724,13 @@ impl Daemon {
         {
             if self.bluetooth.dbus_ready() {
                 self.bluetooth.check_status();
+                if self.bluetooth.pan_interface.is_some() && !self.bluetooth.internet_available {
+                    if self.bt_internet_recheck_timer.due() {
+                        let _ = self.bluetooth.refresh_internet_status();
+                    }
+                } else {
+                    self.bt_internet_recheck_timer.reset();
+                }
                 if self.bluetooth.should_connect() {
                     match self.bluetooth.connect() {
                         Ok(()) => info!("bluetooth reconnected: {}", self.bluetooth.status_str()),
@@ -1386,10 +1395,16 @@ impl Daemon {
         if self.ao_paused_for_bt_scan {
             log::debug!("WPA-SEC upload skipped: BT scan owns the radio");
         } else {
+            let internet_available = self.network.internet == network::InternetStatus::Online
+                || self.bluetooth.internet_available;
+            if !internet_available {
+                log::debug!("WPA-SEC upload skipped: internet unavailable");
+            }
             let (uploaded, upload_failed) = capture::upload_all_pending(
                 &mut self.captures,
                 &self.wpasec_config,
                 &mut self.upload_queue,
+                internet_available,
             );
             if uploaded > 0 {
                 info!("WPA-SEC: uploaded {uploaded} files");

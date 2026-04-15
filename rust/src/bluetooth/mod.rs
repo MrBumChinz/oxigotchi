@@ -731,6 +731,30 @@ impl BtTether {
         reachable
     }
 
+    /// Re-check internet reachability on an already-connected PAN link.
+    ///
+    /// Used when PAN + DHCP succeeded earlier but the phone initially had no
+    /// carrier. This refreshes the cached IP and updates `internet_available`
+    /// so higher-level code can resume queued uploads once the phone regains
+    /// internet without forcing a full BT reconnect.
+    pub fn refresh_internet_status(&mut self) -> bool {
+        let Some(iface) = self.pan_interface.clone() else {
+            self.internet_available = false;
+            return false;
+        };
+
+        self.refresh_ip();
+        let was_available = self.internet_available;
+        let is_available = self.verify_internet(&iface);
+        self.internet_available = is_available;
+
+        if is_available && !was_available {
+            info!("BT: internet restored on {iface}");
+        }
+
+        is_available
+    }
+
     /// Disconnect PAN via Network1.Disconnect.
     pub fn disconnect(&mut self) {
         if let Some(ref mut dbus) = self.dbus {

@@ -732,8 +732,9 @@ pub fn upload_all_pending(
     manager: &mut CaptureManager,
     config: &WpaSecConfig,
     queue: &mut UploadQueue,
+    network_available: bool,
 ) -> (usize, usize) {
-    if !config.enabled || config.api_key.is_empty() {
+    if !config.enabled || config.api_key.is_empty() || !network_available {
         return (0, 0);
     }
 
@@ -2195,7 +2196,7 @@ mod tests {
         let mut cm = CaptureManager::new("/tmp/captures");
         let cfg = WpaSecConfig::default();
         let mut queue = UploadQueue::new();
-        let (uploaded, failed) = upload_all_pending(&mut cm, &cfg, &mut queue);
+        let (uploaded, failed) = upload_all_pending(&mut cm, &cfg, &mut queue, true);
         assert_eq!(uploaded, 0);
         assert_eq!(failed, 0);
     }
@@ -2209,9 +2210,35 @@ mod tests {
             ..Default::default()
         };
         let mut queue = UploadQueue::new();
-        let (uploaded, failed) = upload_all_pending(&mut cm, &cfg, &mut queue);
+        let (uploaded, failed) = upload_all_pending(&mut cm, &cfg, &mut queue, true);
         assert_eq!(uploaded, 0);
         assert_eq!(failed, 0);
+    }
+
+    #[test]
+    fn test_upload_all_pending_skips_when_network_unavailable() {
+        let mut cm = CaptureManager::new("/tmp/captures");
+        cm.register(CaptureFile {
+            path: PathBuf::from("/tmp/captures/a.pcapng"),
+            ssid: "A".into(),
+            bssid: [0; 6],
+            has_handshake: true,
+            uploaded: false,
+            size: 100,
+            mtime: None,
+            converted: true,
+        });
+        let cfg = WpaSecConfig {
+            enabled: true,
+            api_key: "test-key".into(),
+            ..Default::default()
+        };
+        let mut queue = UploadQueue::new();
+        let (uploaded, failed) = upload_all_pending(&mut cm, &cfg, &mut queue, false);
+        assert_eq!(uploaded, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(queue.pending(), 0, "offline skip must not enqueue retry work");
+        assert_eq!(cm.pending_upload_count(), 1, "capture should remain pending for later");
     }
 
     // ---- Find by path tests ----
