@@ -78,6 +78,12 @@ No config changes required. All fixes are behavioural.
 
 ---
 
+## Credits
+
+- **MrBumChinz [BASI]** — found and reported three on-device issues: `wlan-keepalive` missing from deployed Pi (WiFi keepalive for BCM43436B0 SDIO bus), `config.txt` duplicate `spi0-2cs` entries from repeated bake runs, and `eth0` unconfigured on Ethernet HAT setups. The wlan-keepalive gap was the most impactful — without it, the WiFi chip can halt under AO crash/restart scenarios. Solid field testing.
+
+---
+
 ## Verification
 
 - All host tests pass
