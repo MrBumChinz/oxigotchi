@@ -512,6 +512,24 @@ mod inner {
             Ok(())
         }
 
+        /// Disconnect the ACL link to a device via Device1.Disconnect.
+        ///
+        /// Called after BnepRejected (EBADE) to flush the phone's stale BNEP
+        /// state. The phone will auto-reconnect ACL for trusted devices, and
+        /// the next Network1.Connect will start with a fresh BNEP context.
+        /// Errors are non-fatal — device may already be disconnected.
+        pub fn disconnect_device(&self, device_path: &str) {
+            let proxy =
+                self.conn
+                    .with_proxy("org.bluez", device_path, Duration::from_secs(5));
+            let result: Result<(), _> =
+                proxy.method_call("org.bluez.Device1", "Disconnect", ());
+            match result {
+                Ok(()) => info!("[dbus] Device1.Disconnect OK for {device_path}"),
+                Err(e) => info!("[dbus] Device1.Disconnect ignored: {e}"),
+            }
+        }
+
         /// Whether a PAN connection is active.
         pub fn is_connected(&self) -> bool {
             self.pan.is_some()
@@ -876,6 +894,8 @@ mod inner {
         pub fn is_connected(&self) -> bool {
             false
         }
+
+        pub fn disconnect_device(&self, _device_path: &str) {}
 
         pub fn is_bus_alive(&self) -> bool {
             true

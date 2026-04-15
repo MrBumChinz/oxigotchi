@@ -606,6 +606,23 @@ impl BtTether {
                 self.on_error();
                 Err("Phone unpaired Pi — removed stale bond, will re-pair".into())
             }
+            Err(dbus::PanConnectError::BnepRejected) => {
+                // EBADE: phone accepted ACL but rejected BNEP setup. The ACL
+                // link stays up in BlueZ after the failure, keeping the phone's
+                // BNEP service in a stale state — every retry hits the same
+                // rejection. Force Device1.Disconnect to tear down the ACL so
+                // the phone resets its BNEP context. The phone will auto-
+                // reconnect ACL (trusted device), and the next attempt gets a
+                // fresh BNEP handshake.
+                warn!("BT: BNEP rejected (EBADE) — forcing ACL disconnect to reset phone state");
+                let hint = dbus::PanConnectError::BnepRejected.hint();
+                if let Some(ref d) = self.dbus {
+                    d.disconnect_device(&device_path);
+                }
+                self.last_error_hint = Some(hint);
+                self.on_error();
+                Err("BNEP rejected — ACL torn down, will retry with fresh handshake".into())
+            }
             Err(e) => {
                 warn!("BT: Network1.Connect failed: {e}");
                 let hint = e.hint();
