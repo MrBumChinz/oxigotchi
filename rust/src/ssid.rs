@@ -322,6 +322,19 @@ impl SsidResolver {
                 break;
             }
 
+            // Validate trailing block length matches leading length (non-SHB only,
+            // since endian may not be set yet when processing SHB).
+            if block_type != BLOCK_SHB {
+                let trailing_len_offset = pos + block_len - 4;
+                if trailing_len_offset + 4 <= data.len() {
+                    let trailing = read_u32(&data[trailing_len_offset..], self.endian);
+                    if trailing != block_len as u32 {
+                        // Corrupted block — stop parsing this file.
+                        break;
+                    }
+                }
+            }
+
             let body = &data[pos + 8..pos + block_len - 4];
 
             match block_type {

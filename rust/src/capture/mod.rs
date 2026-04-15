@@ -1147,6 +1147,18 @@ pub fn auto_backup(
 // SSID-based filename helpers
 // ---------------------------------------------------------------------------
 
+/// Truncate a string to at most `max_bytes` bytes on a valid UTF-8 char boundary.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Sanitize an SSID for use in filenames.
 fn sanitize_ssid(ssid: &str) -> String {
     let sanitized: String = ssid
@@ -1170,7 +1182,7 @@ fn sanitize_ssid(ssid: &str) -> String {
         })
         .collect();
     if sanitized.len() > 32 {
-        sanitized[..32].to_string()
+        safe_truncate(&sanitized, 32).to_string()
     } else {
         sanitized
     }

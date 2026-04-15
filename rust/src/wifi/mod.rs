@@ -1071,7 +1071,7 @@ impl ChannelScorer {
     /// Advance the epoch: increment epochs_since_visit for all channels.
     pub fn tick_epoch(&mut self) {
         for ch in 1..=13 {
-            self.stats[ch].epochs_since_visit += 1;
+            self.stats[ch].epochs_since_visit = self.stats[ch].epochs_since_visit.saturating_add(1);
         }
     }
 

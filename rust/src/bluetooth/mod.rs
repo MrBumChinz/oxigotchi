@@ -1140,7 +1140,7 @@ impl BtTether {
     /// Handle a connection failure.
     pub fn on_error(&mut self) {
         self.state = BtState::Error;
-        self.retry_count += 1;
+        self.retry_count = self.retry_count.saturating_add(1);
         self.internet_available = false;
         self.ip_address = None;
     }

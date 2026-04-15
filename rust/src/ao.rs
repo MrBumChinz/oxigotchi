@@ -9,6 +9,18 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// Truncate a string to at most `max_bytes` bytes on a valid UTF-8 char boundary.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// AP info parsed from AO stdout attack/status lines.
 #[derive(Debug, Clone)]
 pub struct AoApInfo {
@@ -708,7 +720,7 @@ fn ao_stdout_reader(
                                 hit_count: 0,
                                 captured: false,
                             });
-                            entry.hit_count += 1;
+                            entry.hit_count = entry.hit_count.saturating_add(1);
                             entry.channel = current_channel;
                             // NOTE: do NOT set ap_count from map.len() here.
                             // map is cumulative (all BSSIDs ever seen this session).
@@ -733,7 +745,7 @@ fn ao_stdout_reader(
                     || lower.contains("hash")
                     || (lower.contains("new eapol") && lower.contains("message 4"));
                 if is_capture {
-                    info!("AO capture event: {}", &line[..line.len().min(120)]);
+                    info!("AO capture event: {}", safe_truncate(&line, 120));
                     // Mark the AP in this line as captured
                     if let Some(bssid) = extract_bssid(&line) {
                         if let Ok(mut map) = ap_list.lock() {

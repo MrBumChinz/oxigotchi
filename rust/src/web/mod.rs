@@ -24,6 +24,18 @@ use tokio::sync::broadcast;
 mod html;
 use html::DASHBOARD_HTML;
 
+/// Truncate a string to at most `max_bytes` bytes on a valid UTF-8 char boundary.
+fn safe_truncate(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 // ---------------------------------------------------------------------------
 // Shared daemon state (the web server reads/writes this via Arc<Mutex>)
 // ---------------------------------------------------------------------------
@@ -2311,7 +2323,7 @@ async fn wpasec_get_handler(State(state): State<SharedState>) -> Json<WpaSecResp
     let s = state.lock().unwrap();
     let key = &s.wpasec_api_key;
     let masked = if key.len() > 4 {
-        format!("{}****", &key[..4])
+        format!("{}****", safe_truncate(key, 4))
     } else if !key.is_empty() {
         "****".into()
     } else {
@@ -2346,7 +2358,7 @@ async fn discord_get_handler(State(state): State<SharedState>) -> Json<DiscordRe
     let s = state.lock().unwrap();
     let url = &s.discord_webhook_url;
     let masked = if url.len() > 30 {
-        format!("{}****", &url[..30])
+        format!("{}****", safe_truncate(url, 30))
     } else if !url.is_empty() {
         "****".into()
     } else {
