@@ -610,9 +610,16 @@ impl Daemon {
 
         // ---- Bluetooth D-Bus message processing (all modes — Agent1 pairing events) ----
         self.bluetooth.process_dbus();
-        if let Some(ref rx) = self.bluetooth.pairing_rx {
-            while let Ok(event) = rx.try_recv() {
-                match event {
+        // Collect events first so we drop the borrow on pairing_rx before
+        // processing — some arms call self.bluetooth.connect() (mutable).
+        let bt_events: Vec<_> = self
+            .bluetooth
+            .pairing_rx
+            .as_ref()
+            .map(|rx| std::iter::from_fn(|| rx.try_recv().ok()).collect())
+            .unwrap_or_default();
+        for event in bt_events {
+            match event {
                     bluetooth::dbus::PairingEvent::ConfirmPasskey { device, passkey }
                     | bluetooth::dbus::PairingEvent::DisplayPasskey { device, passkey } => {
                         let mut s = self.shared_state.lock().unwrap();
@@ -633,16 +640,7 @@ impl Daemon {
                         // Phone-initiated pair just completed. Auto-set Trusted=true
                         // so the daemon's connect path (and any user-facing logic
                         // that cares about Trusted) sees a clean, first-class bond.
-                        // Without this, Rob's Discord symptom hits: pair works but
-                        // PAN auto-connect silently skips the device until the user
-                        // manually runs `bluetoothctl trust MAC`.
                         info!("BT: auto-trusting newly paired device {device}");
-                        // Also clear the dashboard passkey box: PairingComplete
-                        // (Agent1 Release/Cancel) doesn't always fire on a
-                        // successful numeric-comparison pair, so without this
-                        // clear the passkey stays visible until the next epoch
-                        // nulls it indirectly. Two-line clear right here is
-                        // the reliable path.
                         {
                             let mut s = self.shared_state.lock().unwrap();
                             s.bt_passkey = None;
@@ -657,8 +655,28 @@ impl Daemon {
                             log::warn!("BT: auto-trust skipped — D-Bus not initialized");
                         }
                     }
+                    bluetooth::dbus::PairingEvent::DeviceReconnected { device } => {
+                        // Phone re-established ACL link (e.g. after BT toggle).
+                        // BlueZ auto-connects trusted devices at ACL level but
+                        // does NOT re-establish PAN. Force an immediate reconnect
+                        // attempt so bnep0 comes up without waiting for the next
+                        // health check cycle. Reset state to Disconnected so
+                        // should_connect() fires on the very next epoch.
+                        info!("BT: device reconnected (ACL up): {device} — triggering PAN reconnect");
+                        self.bluetooth.state = bluetooth::BtState::Disconnected;
+                        self.bluetooth.retry_count = 0;
+                        // Try connecting right now instead of waiting for next epoch
+                        match self.bluetooth.connect() {
+                            Ok(()) => info!("BT: PAN reconnected after ACL restore: {}", self.bluetooth.status_str()),
+                            Err(e) => {
+                                // PAN not ready yet — that's OK, health block
+                                // will retry on the next epoch with no backoff
+                                // since retry_count is 0.
+                                log::debug!("BT: PAN connect after ACL restore failed (will retry): {e}");
+                            }
+                        }
+                    }
                 }
-            }
         }
 
         // ---- BT mode: run BT epoch instead of WiFi phases ----

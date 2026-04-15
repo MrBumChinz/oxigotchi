@@ -164,6 +164,11 @@ pub enum PairingEvent {
     /// setting `Trusted=true` on this device so future operations that read
     /// the Trusted flag treat it as a first-class bond.
     DeviceNewlyPaired { device: String },
+    /// A Device1 object transitioned to `Connected=true`. The phone
+    /// re-established the BT ACL link (e.g. after toggling BT off/on).
+    /// The daemon should attempt Network1.Connect to bring up PAN/bnep0,
+    /// since ACL reconnect doesn't automatically re-establish PAN.
+    DeviceReconnected { device: String },
 }
 
 // ─── Linux implementation ────────────────────────────────────────────────────
@@ -739,12 +744,13 @@ mod inner {
                     // confirm the watcher is firing — the most common silent
                     // failure mode is the watcher being registered on a dead
                     // connection and never seeing the signal at all.
+                    let path = msg
+                        .path()
+                        .map(|p| p.to_string())
+                        .unwrap_or_default();
+
                     if let Some(variant) = pc.changed_properties.get("Paired") {
                         let paired = variant.0.as_i64().map(|v| v != 0).unwrap_or(false);
-                        let path = msg
-                            .path()
-                            .map(|p| p.to_string())
-                            .unwrap_or_default();
                         info!(
                             "[dbus] PropertiesChanged: Paired={} on {}",
                             paired,
@@ -752,10 +758,30 @@ mod inner {
                         );
                         if paired && !path.is_empty() {
                             let _ = tx.send(PairingEvent::DeviceNewlyPaired {
+                                device: path.clone(),
+                            });
+                        }
+                    }
+
+                    // Detect ACL reconnect: phone toggled BT off/on and the
+                    // link came back. BlueZ auto-connects trusted devices at
+                    // the ACL level but does NOT re-establish PAN. Without
+                    // this signal the daemon sits in Disconnected waiting for
+                    // should_connect() while the phone shows "connected".
+                    if let Some(variant) = pc.changed_properties.get("Connected") {
+                        let connected = variant.0.as_i64().map(|v| v != 0).unwrap_or(false);
+                        info!(
+                            "[dbus] PropertiesChanged: Connected={} on {}",
+                            connected,
+                            if path.is_empty() { "<unknown>" } else { &path }
+                        );
+                        if connected && !path.is_empty() {
+                            let _ = tx.send(PairingEvent::DeviceReconnected {
                                 device: path,
                             });
                         }
                     }
+
                     true
                 })
                 .map_err(|e| format!("add_match PropertiesChanged: {e}"))?;
