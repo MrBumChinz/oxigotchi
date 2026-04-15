@@ -137,6 +137,8 @@ The PiSugar 3 has two buttons on the edge and a reset button near the magnets. T
 
 All actions are also available from the web dashboard.
 
+→ **[Full PiSugar button deep-dive](PiSugar-Button)** — register map, MCU-native detection, CTR2 latch fix, board temperature in Lua.
+
 ## Next Steps
 
 - **[Web Dashboard](Web-Dashboard)** — Full guide to all 26 dashboard cards

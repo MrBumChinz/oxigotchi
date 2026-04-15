@@ -4,6 +4,20 @@
 
 ---
 
+## v3.3.1 rewrite
+
+The PiSugar 3 button handling was completely rewritten in v3.3.1. Here's what was wrong before and what changed.
+
+**The button didn't work.** The daemon was reading tap events from register `0x04` and temperature from `0x08` — the exact opposite of the correct register map. Temperature never holds `0x01`, `0x02`, or `0x03`, so every tap was silently discarded. The button appeared to do nothing.
+
+**Events were being dropped on top of that.** A software `ButtonDebouncer` in the daemon loop timed and counted taps itself. On slow loop cycles it missed rapid events entirely. The MCU already debounces and classifies taps — the software layer was redundant and harmful.
+
+**Shutdown left a latched register.** CTR2 bit 3 (`CTR2_SOFT_SHUTDOWN_STATE`) stays high after a soft shutdown until power is fully cut. If the Pi rebooted instead (watchdog, kernel panic), the latch stayed set on the next boot and the daemon tried to complete the previous shutdown immediately. The fix: detect and clear the stale latch on startup before doing anything else.
+
+After the rewrite: the button registers correctly, events are MCU-classified and dispatched immediately, e-ink refreshes on every press, and the CTR2 latch is handled cleanly. The software debouncer is gone.
+
+---
+
 ## Button mappings
 
 | Press | Action |
