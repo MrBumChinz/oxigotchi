@@ -247,6 +247,9 @@ impl CaptureManager {
                 }
             }
         }
+        // Prune entries for files that no longer exist on disk
+        self.files.retain(|f| seen_paths.contains(&f.path));
+        self.tracked_mtimes.retain(|p, _| seen_paths.contains(p));
         self.refresh_bssid_info();
         Ok(count)
     }
@@ -263,6 +266,10 @@ impl CaptureManager {
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.extension().is_some_and(|e| e == "pcapng") {
+                continue;
+            }
+            // Skip files that already have complete metadata — avoids expensive hcxpcapngtool call
+            if self.files.iter().any(|f| f.path == path && !f.ssid.is_empty() && f.bssid != [0u8; 6]) {
                 continue;
             }
             let output = match std::process::Command::new("hcxpcapngtool")
@@ -334,12 +341,17 @@ impl CaptureManager {
         }
         let to_remove = self.files.len() - self.max_files;
 
-        // Collect indices of non-verified files, oldest first
-        let removable_indices: Vec<usize> = self
+        // Collect indices of non-verified files, sorted oldest first, then take to_remove
+        let mut removable: Vec<(usize, Option<std::time::SystemTime>)> = self
             .files
             .iter()
             .enumerate()
             .filter(|(_, f)| !f.converted)
+            .map(|(i, f)| (i, f.mtime))
+            .collect();
+        removable.sort_by(|a, b| a.1.cmp(&b.1));
+        let removable_indices: Vec<usize> = removable
+            .into_iter()
             .map(|(i, _)| i)
             .take(to_remove)
             .collect();

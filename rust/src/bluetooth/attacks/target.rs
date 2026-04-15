@@ -86,8 +86,14 @@ impl TargetSelector {
             }
         }
 
-        // 6. Sort descending by priority, take max
+        // 6. Sort descending by priority, then deduplicate by device_id (one attack
+        //    slot per device per epoch — highest-priority attack wins), then take max
         candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
+        // Stable sort keeps the first (highest-priority) entry for each device_id
+        // dedup_by_key removes consecutive duplicates, so sort by device_id first,
+        // but that would destroy priority order. Instead use a seen-set approach.
+        let mut seen = std::collections::HashSet::new();
+        candidates.retain(|c| seen.insert(c.device_id.clone()));
         candidates.truncate(max);
         candidates
     }
@@ -371,12 +377,14 @@ mod tests {
             BtTransport::Dual, BtDeviceAttackState::Untouched,
         );
         let devices = vec![&dev];
-        // A BLE attack + a Classic attack — both applicable to Dual
+        // A BLE attack + a Classic attack — both applicable to Dual.
+        // Deduplication keeps only the highest-priority attack per device per epoch,
+        // so even though 2 attacks are applicable, only 1 target slot is returned.
         let attacks = vec![BtAttackType::BleAdvInjection, BtAttackType::Knob];
         let config = default_config();
 
         let targets = TargetSelector::select(&devices, &attacks, &config, 10);
-        assert_eq!(targets.len(), 2);
+        assert_eq!(targets.len(), 1);
     }
 
     #[test]
