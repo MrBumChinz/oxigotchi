@@ -2079,6 +2079,10 @@ impl Daemon {
                 Ok(n) => info!("web: BT reset pairings removed {n} device(s)"),
                 Err(e) => log::warn!("web: BT reset pairings failed: {e}"),
             }
+            // Clear stale error hint and connection state — no devices left to connect to.
+            self.bluetooth.last_error_hint = None;
+            self.bluetooth.state = bluetooth::BtState::Disconnected;
+            self.bluetooth.retry_count = 0;
         }
 
         // Process pending plugin position updates
