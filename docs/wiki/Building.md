@@ -88,8 +88,53 @@ cargo build --release --target aarch64-unknown-linux-gnu
 scp target/aarch64-unknown-linux-gnu/release/oxigotchi pi@10.0.0.2:/home/pi/
 
 # On the Pi — stop, copy, restart
-ssh pi@10.0.0.2 'sudo systemctl stop rusty-oxigotchi && sudo cp /home/pi/oxigotchi /usr/local/bin/ && sudo systemctl restart rusty-oxigotchi'
+ssh pi@10.0.0.2 'sudo systemctl stop rusty-oxigotchi && sudo cp /home/pi/oxigotchi /usr/local/bin/rusty-oxigotchi && sudo systemctl start rusty-oxigotchi'
 ```
+
+## Updating Without Reflashing
+
+You don't need to reflash your SD card for every release. The oxigotchi binary is a single file — just replace it and restart:
+
+### Option 1: Download a pre-built binary from GitHub Releases
+
+```bash
+# On the Pi (requires internet — BT tether or USB)
+curl -L -o /home/pi/oxigotchi https://github.com/CoderFX/oxigotchi/releases/latest/download/oxigotchi
+sudo systemctl stop rusty-oxigotchi
+sudo cp /home/pi/oxigotchi /usr/local/bin/rusty-oxigotchi
+sudo chmod +x /usr/local/bin/rusty-oxigotchi
+sudo systemctl start rusty-oxigotchi
+```
+
+### Option 2: Cross-compile and SCP from your PC
+
+```bash
+# On your PC (Linux/WSL)
+cargo build --release --target aarch64-unknown-linux-gnu
+scp target/aarch64-unknown-linux-gnu/release/oxigotchi pi@10.0.0.2:/home/pi/
+
+# On the Pi (or via SSH)
+ssh pi@10.0.0.2 'sudo systemctl stop rusty-oxigotchi && sudo cp /home/pi/oxigotchi /usr/local/bin/rusty-oxigotchi && sudo systemctl start rusty-oxigotchi'
+```
+
+### After updating the binary
+
+Some releases include config patches (e.g. v3.3.2 patched `/etc/bluetooth/main.conf` for the discoverable-timeout fix). Run the patch script to pick these up:
+
+```bash
+sudo /usr/local/bin/apply-oxigotchi-patches.sh
+```
+
+This is idempotent — safe to run on every update. It checks each patch before applying and skips anything already present.
+
+### When to reflash instead
+
+Reflash if:
+- You're jumping multiple major versions (e.g. v2.x → v3.x)
+- The release notes say "reflash recommended" (new systemd services, filesystem layout changes)
+- Your SD card is corrupted or you want a clean slate
+
+For minor version bumps (v3.3.3 → v3.3.4), the binary swap + patch script is all you need.
 
 ## Install on Existing Pwnagotchi
 
