@@ -32,6 +32,9 @@ pub enum PanConnectError {
     PhoneBusy,
     /// Phone not responding (timeout / no reply).
     PhoneNotResponding,
+    /// Phone's BNEP layer actively rejected the connection setup (EBADE errno 52).
+    /// Corrupted protocol-level security context — full reset required.
+    BnepRejected,
     /// Other / unknown error.
     Other(String),
 }
@@ -45,6 +48,7 @@ impl std::fmt::Display for PanConnectError {
             Self::TransientRadioError => write!(f, "Transient radio error (retrying)"),
             Self::PhoneBusy => write!(f, "Connection busy — retry shortly"),
             Self::PhoneNotResponding => write!(f, "Phone not responding (timeout)"),
+            Self::BnepRejected => write!(f, "Phone BNEP rejected (protocol mismatch — full reset required)"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }
@@ -75,6 +79,10 @@ impl PanConnectError {
             }
             Self::PhoneNotResponding => {
                 "Phone isn't responding to connection requests. Try: forget the Pi on the phone → toggle Bluetooth tethering off and back on → pair fresh."
+                    .into()
+            }
+            Self::BnepRejected => {
+                "Phone rejected the BNEP connection (protocol mismatch). Full reset required: (1) Forget the Pi on the phone's Bluetooth settings, (2) Toggle BT tethering OFF then ON on the phone, (3) Toggle Bluetooth OFF/ON on the phone, (4) Use 'Reset pairings' on the Pi dashboard, (5) Pair fresh."
                     .into()
             }
             Self::Other(s) => format!("Connect failed: {s}"),
@@ -134,6 +142,12 @@ pub fn classify_pan_error(err: &str) -> PanConnectError {
         PanConnectError::PhoneBusy
     } else if lower.contains("noreply") || lower.contains("timed out") || lower.contains("timeout") {
         PanConnectError::PhoneNotResponding
+    } else if lower.contains("invalid exchange") {
+        // EBADE (errno 52): phone's BNEP layer sent non-success
+        // BNEP_SETUP_CONNECTION_RESPONSE. The bond exists on both sides but
+        // the BNEP security context is corrupted — retrying won't help.
+        // Full clean reset (forget both sides, BT toggle, re-pair) required.
+        PanConnectError::BnepRejected
     } else {
         PanConnectError::Other(err.to_string())
     }
@@ -998,6 +1012,10 @@ mod tests {
         assert_eq!(
             classify_pan_error("org.freedesktop.DBus.Error.NoReply"),
             PanConnectError::PhoneNotResponding
+        );
+        assert_eq!(
+            classify_pan_error("connect error Invalid exchange (52)"),
+            PanConnectError::BnepRejected
         );
         matches!(
             classify_pan_error("something unknown"),
