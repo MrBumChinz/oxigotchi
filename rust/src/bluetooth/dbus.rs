@@ -24,8 +24,10 @@ pub enum PanConnectError {
     TetherNotEnabled,
     /// Phone unpaired the Pi — need to remove and re-pair.
     PhoneUnpaired,
-    /// Phone out of range or BT off.
+    /// Phone out of range or BT off (page timeout, host down).
     PhoneOutOfRange,
+    /// Transient radio/stack error — retry silently, no user hint.
+    TransientRadioError,
     /// Connection already in progress — retry after short delay.
     PhoneBusy,
     /// Phone not responding (timeout / no reply).
@@ -40,6 +42,7 @@ impl std::fmt::Display for PanConnectError {
             Self::TetherNotEnabled => write!(f, "BT tethering not enabled on phone"),
             Self::PhoneUnpaired => write!(f, "Phone unpaired Pi — remove and re-pair"),
             Self::PhoneOutOfRange => write!(f, "Phone out of range or BT off"),
+            Self::TransientRadioError => write!(f, "Transient radio error (retrying)"),
             Self::PhoneBusy => write!(f, "Connection busy — retry shortly"),
             Self::PhoneNotResponding => write!(f, "Phone not responding (timeout)"),
             Self::Other(s) => write!(f, "{s}"),
@@ -65,6 +68,7 @@ impl PanConnectError {
                 "Phone is out of range or Bluetooth is off. Unlock the phone and bring it closer."
                     .into()
             }
+            Self::TransientRadioError => String::new(),
             Self::PhoneBusy => {
                 "Phone is busy with another Bluetooth operation. The Pi will retry automatically in a few seconds."
                     .into()
@@ -114,14 +118,18 @@ pub fn classify_pan_error(err: &str) -> PanConnectError {
     } else if lower.contains("page-timeout")
         || lower.contains("host is down")
         || lower.contains("no route")
-        || lower.contains("input/output error")
+    {
+        // Genuine range/availability issue — show user hint.
+        PanConnectError::PhoneOutOfRange
+    } else if lower.contains("input/output error")
         || lower.contains("i/o error")
         || lower.contains("connection reset")
         || lower.contains("reset by peer")
     {
-        // Transient: phone out of range, tethering off, screen locked,
-        // or radio contention. Retry without removing the bond.
-        PanConnectError::PhoneOutOfRange
+        // Transient radio/stack errors — retry silently, no user hint.
+        // These fire constantly during normal reconnect churn and are
+        // not actionable by the user.
+        PanConnectError::TransientRadioError
     } else if lower.contains("busy") || lower.contains("inprogress") || lower.contains("in progress") {
         PanConnectError::PhoneBusy
     } else if lower.contains("noreply") || lower.contains("timed out") || lower.contains("timeout") {
@@ -977,11 +985,11 @@ mod tests {
         // IO errors are transient, NOT bond-removal triggers
         assert_eq!(
             classify_pan_error("Input/output error"),
-            PanConnectError::PhoneOutOfRange
+            PanConnectError::TransientRadioError
         );
         assert_eq!(
             classify_pan_error("Connection reset by peer"),
-            PanConnectError::PhoneOutOfRange
+            PanConnectError::TransientRadioError
         );
         assert_eq!(
             classify_pan_error("br-connection-busy"),

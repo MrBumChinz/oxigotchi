@@ -524,6 +524,7 @@ impl BtTether {
             self.state = BtState::Connected;
             self.retry_count = 0;
             self.user_disconnected = false;
+            self.last_error_hint = None;
             self.refresh_ip();
             self.internet_available = self.verify_internet(&iface);
             if self.config.hide_after_connect {
@@ -588,7 +589,7 @@ impl BtTether {
                 self.internet_available = self.verify_internet(&pan.interface);
                 // DHCP failures don't fail the connect (the PAN link is
                 // still up), but we want the hint visible so the user can
-                // act on it.
+                // act on it. Clear any prior error hint on success.
                 self.last_error_hint = dhcp_hint;
                 if self.config.hide_after_connect {
                     self.hide();
@@ -607,7 +608,10 @@ impl BtTether {
             }
             Err(e) => {
                 warn!("BT: Network1.Connect failed: {e}");
-                self.last_error_hint = Some(e.hint());
+                let hint = e.hint();
+                if !hint.is_empty() {
+                    self.last_error_hint = Some(hint);
+                }
                 self.on_error();
                 Err(e.to_string())
             }
