@@ -656,23 +656,36 @@ impl Daemon {
                         }
                     }
                     bluetooth::dbus::PairingEvent::DeviceReconnected { device } => {
-                        // Phone re-established ACL link (e.g. after BT toggle).
-                        // BlueZ auto-connects trusted devices at ACL level but
-                        // does NOT re-establish PAN. Force an immediate reconnect
-                        // attempt so bnep0 comes up without waiting for the next
-                        // health check cycle. Reset state to Disconnected so
-                        // should_connect() fires on the very next epoch.
-                        info!("BT: device reconnected (ACL up): {device} — triggering PAN reconnect");
+                        // Network1.Connect internally opens the ACL link first,
+                        // which can emit Connected=true before PAN succeeds.
+                        // Never let that signal bypass the normal retry/backoff
+                        // logic after a recent connect failure.
+                        info!("BT: device reconnected (ACL up): {device}");
+
+                        if self.bluetooth.pan_interface.is_some()
+                            || matches!(
+                                self.bluetooth.state,
+                                bluetooth::BtState::Connected | bluetooth::BtState::Connecting
+                            )
+                        {
+                            log::debug!(
+                                "BT: ignoring ACL reconnect for {device} — PAN is already up or connecting"
+                            );
+                            continue;
+                        }
+
+                        if !self.bluetooth.should_connect() {
+                            log::debug!(
+                                "BT: ignoring ACL reconnect for {device} — reconnect backoff/user policy active"
+                            );
+                            continue;
+                        }
+
                         self.bluetooth.state = bluetooth::BtState::Disconnected;
-                        self.bluetooth.retry_count = 0;
-                        // Try connecting right now instead of waiting for next epoch
                         match self.bluetooth.connect() {
                             Ok(()) => info!("BT: PAN reconnected after ACL restore: {}", self.bluetooth.status_str()),
                             Err(e) => {
-                                // PAN not ready yet — that's OK, health block
-                                // will retry on the next epoch with no backoff
-                                // since retry_count is 0.
-                                log::debug!("BT: PAN connect after ACL restore failed (will retry): {e}");
+                                log::debug!("BT: PAN connect after ACL restore failed: {e}");
                             }
                         }
                     }

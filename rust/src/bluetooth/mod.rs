@@ -677,7 +677,22 @@ impl BtTether {
         let nap_capable: Vec<&dbus::BlueZDevice> = devices.iter().collect();
 
         if nap_capable.is_empty() {
-            return None;
+            info!(
+                "BT: no paired device advertises NAP UUID; falling back to generic paired-device selection"
+            );
+            if !self.config.phone_name.is_empty() {
+                let name_lower = self.config.phone_name.to_lowercase();
+                if let Some(d) = devices
+                    .iter()
+                    .find(|d| d.name.to_lowercase().contains(&name_lower))
+                {
+                    return Some(d);
+                }
+            }
+            if let Some(d) = devices.iter().find(|d| d.connected) {
+                return Some(d);
+            }
+            return devices.first();
         }
         if !self.config.phone_name.is_empty() {
             let name_lower = self.config.phone_name.to_lowercase();

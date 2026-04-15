@@ -325,6 +325,16 @@ mod inner {
                 Duration::from_secs(30),
             );
 
+            // Best-effort cleanup: BlueZ's PAN plugin can retain stale
+            // per-device state after a failed session. Clearing any existing
+            // Network1 session before a new Connect helps MIUI devices that
+            // otherwise get stuck returning EBADE on every retry.
+            let cleanup: Result<(), _> =
+                proxy.method_call("org.bluez.Network1", "Disconnect", ());
+            if let Err(e) = cleanup {
+                info!("[dbus] Network1.Disconnect pre-cleanup ignored: {e}");
+            }
+
             // Try Network1.Connect first (standard path, returns interface name)
             match proxy.method_call::<(String,), _, _, _>(
                 "org.bluez.Network1",
@@ -347,7 +357,15 @@ mod inner {
                         return self.connect_pan_via_profile(device_path);
                     }
 
-                    Err(classify_pan_error(&err_str))
+                    let classified = classify_pan_error(&err_str);
+                    if classified == PanConnectError::BnepRejected {
+                        info!("[dbus] Trying ConnectProfile(NAP_UUID) fallback after BNEP reject");
+                        if let Ok(pan) = self.connect_pan_via_profile(device_path) {
+                            return Ok(pan);
+                        }
+                    }
+
+                    Err(classified)
                 }
             }
         }
