@@ -96,6 +96,23 @@ For the Pi to reach the internet via USB, **your computer has to share its own c
 
 Without any of those, USB is just SSH and dashboard access. The normal way oxigotchi gets internet in the field is **Bluetooth tethering to a phone** (see the [Bluetooth wiki page](Bluetooth)). That works stand-alone, no PC required.
 
+### WiFi chip in a zombie state after a crash
+
+**Symptoms:** `wlan0mon` exists but has MAC `00:00:00:00:00:00`, every AP shows RSSI `-100`, the dashboard reports "0 APs" forever, capture stops. Happens after a firmware crash on older versions (≤ v3.3.4).
+
+**Why it used to happen:** previous recovery code ran `modprobe -r brcmfmac` or toggled the WiFi chip's power pin when the driver wedged. Neither is reversible on the Pi Zero 2W from software — the interface comes back but without a working radio, and only a physical power cycle restores it.
+
+**Fixed in v3.3.5:** soft recovery no longer touches the kernel module, and hard recovery no longer toggles the power pin. A true firmware crash now surfaces the **FwCrash** face on the e-ink and waits for you to power cycle. Three background shell services that did the same thing from outside the daemon (`wifi-recovery`, `fix-ndev`, `wifi-watchdog`) have been removed from the release image.
+
+**If you're stuck right now:**
+1. **Fix the current situation:** unplug everything (USB cable **and** PiSugar battery), wait 10 seconds, plug back in. A reboot alone will not work — the chip needs actual power loss.
+2. **Prevent recurrence:** update to v3.3.5+. Binary-only update is enough; reflashing isn't required. See [Building](Building) for the one-command update.
+3. **If you can't update yet:** disable the three legacy services manually:
+   ```bash
+   sudo systemctl disable --now wifi-recovery fix-ndev wifi-watchdog
+   ```
+   Some images never installed them; `Unit ... does not exist` errors are fine.
+
 ### E-ink Display
 
 The daemon supports the **Waveshare 2.13" V4** only. Other versions (V1, V2, V3) use different controllers and will not work out of the box.
