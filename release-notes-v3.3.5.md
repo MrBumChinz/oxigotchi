@@ -1,16 +1,43 @@
-# v3.3.5
-
-Reliability and security fix release. No new features — every change here fixes a real bug or closes a real attack surface.
+Reliability, security, and hardware-safety fix release. No new features — every change here fixes a real bug or closes a real attack surface.
 
 ---
 
-## Bluetooth tether — ACL reconnect fix
+## Bluetooth tethering
 
-**Symptom:** Phone's Bluetooth settings show `oxigotchi — Connected`, but the web dashboard says `Status: Disconnected` or no IP. Reported on Samsung OneUI; can affect any Android.
+### MIUI/Xiaomi "Invalid exchange" fix
 
-**Root cause:** BlueZ automatically re-establishes the ACL (radio) link when a trusted device comes back into range (e.g. after phone BT toggle or walking back in range). But BlueZ does *not* re-establish the BNEP/PAN profile on top of that ACL link — that's the daemon's job. Previously the daemon only tried PAN reconnect on its health-check timer (up to 5 minutes later). So the ACL was up, the phone thought it was connected, but bnep0 never came back.
+Xiaomi (MIUI / HyperOS) devices were hitting BNEP rejection (errno 52) on every tether connect attempt, causing a tight reconnect loop and eventually destroying the BlueZ pairing database. Fixed by:
 
-**Fix:** The D-Bus `PropertiesChanged` watcher now also watches `Connected=true` transitions on paired devices. When BlueZ fires that event (ACL up), the daemon immediately calls `Network1.Connect("nap")` instead of waiting for the next health check. If the PAN connect fails (phone not ready yet), `retry_count` is reset to 0 so the next health check retries without backoff.
+- EBADE classified as `BnepRejected` with a clear 5-step hint shown in the dashboard.
+- `Device1.Disconnect` forced after rejection tears down the stale ACL link; phone auto-reconnects with a fresh BNEP context.
+- `Network1.Disconnect` pre-cleanup before each `Connect` call clears stale BlueZ PAN plugin state.
+- `ConnectProfile(NAP_UUID)` second-path fallback after EBADE.
+- `DeviceReconnected` loop closed: the ACL signal fired by `Connect` itself no longer triggers an immediate reconnect that bypasses backoff.
+- NAP UUID fallback for phones that hide the NAP profile until tethering is toggled active.
+
+### ACL reconnect fix
+
+**Symptom:** Phone's Bluetooth settings show `oxigotchi — Connected`, but the web dashboard says `Status: Disconnected` with no IP. Common on Samsung OneUI but not MIUI-specific.
+
+**Root cause:** BlueZ automatically re-establishes the ACL link when a trusted device returns to range, but does *not* re-establish BNEP/PAN on top — that's the daemon's job. Previously the daemon only tried PAN reconnect on its health-check timer (up to 5 minutes later).
+
+**Fix:** The D-Bus `PropertiesChanged` watcher now watches `Connected=true` transitions on paired devices. When BlueZ fires that event, the daemon immediately calls `Network1.Connect("nap")`.
+
+### Carrier + internet handling
+
+- Periodic internet re-probe (every 2 min) when PAN is up but the phone had no carrier at connect time — no longer stuck "BT OK / no internet".
+- WPA-SEC upload gate skips attempts while internet is known offline; pending uploads resume automatically when connectivity returns.
+- Transient radio-error hints are suppressed in the web UI (they fire constantly during normal reconnect churn).
+
+### Phone compatibility
+
+| Phone type | Primary path | Fallback |
+|---|---|---|
+| Android (Pixel, Samsung, OnePlus) | `Network1.Connect("nap")` | — |
+| Xiaomi / MIUI / HyperOS | Primary with pre-cleanup, retry | `ConnectProfile(NAP_UUID)` on EBADE |
+| iPhone / iPad | `ConnectProfile(NAP_UUID)` (iOS never advertised NAP in SDP) | — |
+
+See the [BT-Tethering wiki](https://github.com/CoderFX/oxigotchi/wiki/BT-Tethering) for per-OS setup instructions and the iOS-specific section for Personal Hotspot caveats.
 
 ---
 
@@ -18,9 +45,9 @@ Reliability and security fix release. No new features — every change here fixe
 
 Three high-severity findings from a full codebase audit:
 
-### Shell injection in ao.rs (CVE-class)
+### Shell injection in `ao.rs`
 
-AngryOxide is launched via `script -qc "<command>"`. The command string was built by concatenating user-controlled values (interface name, output path, config path) directly into a shell string. A crafted interface name or path containing `"`, `` ` ``, or `$()` could execute arbitrary commands as root.
+AngryOxide was launched via `script -qc "<command>"`. The command string was built by concatenating user-controlled values (interface name, output path, config path) directly into a shell string. A crafted interface name or path containing `"`, `` ` ``, or `$()` could execute arbitrary commands as root.
 
 **Fix:** All arguments are POSIX single-quote wrapped — each token becomes `'<value>'` with any embedded single-quotes escaped as `'\''`. The shell sees the values as literals regardless of their content.
 
@@ -34,36 +61,48 @@ AngryOxide is launched via `script -qc "<command>"`. The command string was buil
 
 The capture move pipeline (tmpfs → SD card) previously deleted source files before verifying both the `.pcapng` and `.22000` copies succeeded. A mid-copy error (full disk, permission denied) left the source deleted and the destination incomplete — the handshake was lost.
 
-**Fix:** Both copies must complete successfully before either source file is deleted (transactional move). If either copy fails, both source files are kept for the next epoch's retry.
+**Fix:** Both copies must complete successfully before either source file is deleted (transactional move).
+
+---
+
+## WiFi recovery safety
+
+Ends the "wlan0mon MAC all zeros / RSSI -100 everywhere" symptom. Both soft and hard recovery paths were taking actions that could not be undone without a physical power cycle (USB + battery unplug). Soft recovery is now a safe `iw`-only monitor restart; hard recovery surfaces **FwCrash** and logs that a power cycle is required instead of making the state worse.
+
+- Old recovery helpers removed entirely so future code cannot accidentally re-introduce the unsafe operations.
+- `GiveUp` log suppression: the recovery state machine emitted `GiveUp` on every health-check tick after exhaustion, spamming logs forever. Now emits once, then stays silent until WiFi returns to healthy.
+- Release image no longer installs `wifi-recovery`, `fix-ndev`, or `wifi-watchdog` services — the Rust daemon supersedes them safely.
 
 ---
 
 ## Stability fixes
 
-- **UTF-8 boundary panics:** Three sites used byte-offset string slicing on SSID names and log lines. Any non-ASCII character (accented names, emoji SSIDs) caused a panic. Fixed with a `safe_truncate` helper that always splits on char boundaries.
+- **UTF-8 boundary panics:** three sites used byte-offset string slicing on SSID names and log lines. Any non-ASCII character (accented names, emoji SSIDs) caused a panic. Fixed with a `safe_truncate` helper that always splits on char boundaries.
 - **Integer overflow in AP/attack tracking:** `hit_count` and `epochs_since_visit` used wrapping addition. On long-running sessions these would wrap to 0 and corrupt priority scoring. Fixed with `saturating_add`.
-- **Stale SSID entry accumulation:** The SSID resolver's `scan_directory` now prunes entries for files that no longer exist, preventing unbounded map growth on long sessions.
-- **Capture refresh skip:** `refresh_bssid_info` now skips files that already have metadata, so re-scanning a directory with 1000 captures doesn't re-stat every file every epoch.
+- **Stale SSID entry accumulation:** the SSID resolver's `scan_directory` now prunes entries for files that no longer exist, preventing unbounded map growth on long sessions.
+- **Capture refresh skip:** `refresh_bssid_info` now skips files that already have metadata, so re-scanning a directory with 1000 captures doesn't re-stat every file every iteration.
 - **Cleanup sort stability:** `cleanup()` now sorts captures by mtime (oldest-first eviction), not by arbitrary filesystem order.
+- **Reset pairings:** simplified the reset flow in the web UI; clears error hint and state atomically instead of racing with a refresh-and-read chain.
 
 ---
 
 ## Dashboard
 
-- **Discoverable toggle** description updated: *"Only needed to pair an additional phone — your already-paired phone reconnects automatically."* The toggle still works the same way; the label now accurately describes when you actually need it.
+- **Discoverable toggle** description updated: *"Only needed to pair an additional phone — your already-paired phone reconnects automatically."*
+- Transient BT radio errors no longer surface as scary user-facing hints.
 
 ---
 
-## Wiki
+## Wiki / Docs
 
-- **BT Tethering page:** Added "Adding a second phone" section explaining why your existing phone reconnects without discoverable on (it uses the cached MAC), and the exact steps to pair a second phone. FAQ updated to reference the new section.
-- **Building page:** Rewritten with separate Windows/WSL and Linux paths, "Updating Without Reflashing" section at the top (binary swap — no reflash needed for minor bumps), and full image baking instructions.
+- **BT Tethering page:** added "Adding a second phone" section explaining why your existing phone reconnects without discoverable on (cached MAC), and exact steps to pair a second phone. MIUI BNEP reset procedure added.
+- **Building page:** rewritten with separate Windows/WSL and Linux paths, "Updating Without Reflashing" section at the top (binary swap — no reflash needed for minor bumps), and full image baking instructions.
+- **PiSugar 3 button page:** new page documenting button mappings, the CTR2 latch fix, and the v3.3.1 MCU-register rewrite.
+- **Troubleshooting:** new entry for the WiFi zombie-state symptom with manual recovery steps for users on older images.
 
 ---
 
-## Upgrade notes
-
-Binary swap — no reflash needed:
+## Upgrade — binary swap, no reflash
 
 ```bash
 # On the Pi
@@ -71,8 +110,11 @@ curl -L -o /home/pi/oxigotchi https://github.com/CoderFX/oxigotchi/releases/late
 sudo systemctl stop rusty-oxigotchi
 sudo cp /home/pi/oxigotchi /usr/local/bin/rusty-oxigotchi
 sudo chmod +x /usr/local/bin/rusty-oxigotchi
+sudo systemctl disable --now wifi-recovery fix-ndev wifi-watchdog 2>/dev/null
 sudo systemctl start rusty-oxigotchi
 ```
+
+The `systemctl disable` line removes the three legacy services that were doing the unsafe WiFi recovery from outside the daemon. `Unit ... does not exist` errors are fine — means your image never had them.
 
 No config changes required. All fixes are behavioural.
 
@@ -80,12 +122,14 @@ No config changes required. All fixes are behavioural.
 
 ## Credits
 
-- **MrBumChinz [BASI]** — found and reported three on-device issues: `wlan-keepalive` missing from deployed Pi (WiFi keepalive for BCM43436B0 SDIO bus), `config.txt` duplicate `spi0-2cs` entries from repeated bake runs, and `eth0` unconfigured on Ethernet HAT setups. The wlan-keepalive gap was the most impactful — without it, the WiFi chip can halt under AO crash/restart scenarios. Solid field testing.
+- **MrBumChinz [BASI]** — found and reported three on-device issues: missing `wlan-keepalive` binary on deployed Pi (the keepalive for WiFi idle-crash prevention), duplicate `spi0-2cs` entries in `config.txt` from repeated bake runs, and `eth0` unconfigured on Ethernet HAT setups. Solid field testing.
+- **Atomicek1234 [ABI]** — reported the "wlan0mon MAC all zeros / RSSI -100" symptom that led to the WiFi recovery rewrite.
 
 ---
 
 ## Verification
 
-- All host tests pass
+- All 1070 host tests pass
 - Cross-compiled clean for `aarch64-unknown-linux-gnu`
-- ACL reconnect fix verified on Pi Zero 2W: BT toggle on phone → bnep0 back within ~1 second
+- BT tether verified on-device (Xiaomi 13T) post-fix
+- ACL reconnect verified on Pi Zero 2W: BT toggle on phone → bnep0 back within ~1 second
