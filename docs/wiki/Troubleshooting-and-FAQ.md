@@ -112,18 +112,53 @@ sudo ip route del default via 10.0.0.1 dev usb0
 
 After this, `ip route show default` should list only the `bnep0` default, and `ping 8.8.8.8` works without needing `-I bnep0`. Update to v3.3.6+ for a permanent fix.
 
-### WiFi chip in a zombie state after a crash
+### WiFi chip in a zombie state after a crash — the Broken face
 
-**Symptoms:** `wlan0mon` exists but has MAC `00:00:00:00:00:00`, every AP shows RSSI `-100`, the dashboard reports "0 APs" forever, capture stops. Happens after a firmware crash on older versions (≤ v3.3.4).
+**This section is the answer to "my bull shows the Broken face `(X_X)`"** — v3.3.6+ pins the message `ZOMBIE - UNPLUG USB+BATT 10s` on the e-ink status line when this state is reached. Follow the procedure below.
 
-**Why it used to happen:** previous recovery code ran `modprobe -r brcmfmac` or toggled the WiFi chip's power pin when the driver wedged. Neither is reversible on the Pi Zero 2W from software — the interface comes back but without a working radio, and only a physical power cycle restores it.
+**Symptoms:**
+- E-ink shows the **Broken face `(X_X)`** with status `ZOMBIE - UNPLUG USB+BATT 10s` (v3.3.6+)
+- Or on older builds: `wlan0mon` exists but has MAC `00:00:00:00:00:00`, every AP shows RSSI `-100`, the dashboard reports "0 APs" forever, capture stops
+- `dmesg` shows `mmc1: error -22 whilst initialising SDIO card`
+- Happens after a firmware crash on older versions (≤ v3.3.4) or rarely after unusual crashes on v3.3.5+
 
-**Fixed in v3.3.5:** soft recovery no longer touches the kernel module, and hard recovery no longer toggles the power pin. A true firmware crash now surfaces the **FwCrash** face on the e-ink and waits for you to power cycle. Three background shell services that did the same thing from outside the daemon (`wifi-recovery`, `fix-ndev`, `wifi-watchdog`) have been removed from the release image.
+**Why it used to happen:** previous recovery code ran `modprobe -r brcmfmac` or toggled the WiFi chip's power pin when the driver wedged. Neither is reversible on the Pi Zero 2W from software — the interface comes back but without a working radio, and only a true power cut restores it.
 
-**If you're stuck right now:**
-1. **Fix the current situation:** unplug everything (USB cable **and** PiSugar battery), wait 10 seconds, plug back in. A reboot alone will not work — the chip needs actual power loss.
-2. **Prevent recurrence:** update to v3.3.5+. Binary-only update is enough; reflashing isn't required. See [Building](Building) for the one-command update.
-3. **If you can't update yet:** disable the three legacy services manually:
+**Fixed in v3.3.5 / v3.3.6:** soft recovery no longer touches the kernel module, hard recovery no longer toggles the power pin. A true firmware crash surfaces the **Broken face** on the e-ink with the unmissable `ZOMBIE - UNPLUG USB+BATT 10s` sticky message. Three background shell services that did the same thing from outside the daemon (`wifi-recovery`, `fix-ndev`, `wifi-watchdog`) have been removed from the release image.
+
+#### Recovery procedure (the Broken face is telling you to do this)
+
+**A reboot will NOT work.** `sudo reboot` keeps PiSugar powering the Pi continuously — the WiFi chip never loses power, so its corrupted SDIO state survives. **You must physically cut all power.**
+
+**Important:** PiSugar is a UPS. Unplugging USB alone leaves the battery powering everything. Tapping the PiSugar power button just triggers a graceful shutdown — the MCU stays alive and holds power ready to return. You need a **real** power cut.
+
+**Step-by-step:**
+
+1. **`sudo shutdown -h now`** — clean shutdown first (protects the SD card)
+2. **Unplug USB** (data + power)
+3. **Cut PiSugar power** — one of:
+   - **Slide the hardware power switch on the PiSugar 3 HAT to OFF** (easiest if your version has the switch — look on the side of the HAT)
+   - **Or disconnect the battery** by unplugging the small JST connector between the battery pack and the HAT
+4. **Wait 30–60 seconds.** Not 10. The WiFi chip has internal decoupling capacitors that can hold state for 5–10s, and the corrupted SDIO bit stays set until they fully drain. 30s minimum is a safe margin.
+5. **Reconnect in order:** battery / switch ON first, then USB
+6. Wait for boot. Face should return to normal within 30–60s if the chip came back clean.
+
+If the Broken face persists after a proper 30-60s power cut, the chip may be in a deeper state that needs either a longer soak (try 2–3 minutes) or a reflash.
+
+#### Verify it worked
+
+```bash
+ssh pi@10.0.0.2
+ip link show wlan0       # should show real MAC, not 00:00:00:00:00:00
+dmesg | grep brcmfmac    # should NOT show 'error -22 whilst initialising SDIO card'
+```
+
+If `wlan0` exists with a real MAC, the chip is back. The daemon will clear the sticky zombie message and the face will return to normal automatically.
+
+#### Prevent recurrence
+
+- **Update to v3.3.6+** — binary-only update is enough, no reflash required. See [Building](Building).
+- **If you can't update yet:** disable the three legacy services manually (they do the banned operations from shell):
    ```bash
    sudo systemctl disable --now wifi-recovery fix-ndev wifi-watchdog
    ```
