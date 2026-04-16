@@ -105,7 +105,18 @@ pub fn build_link_up_args() -> Vec<String> {
     vec!["link".into(), "set".into(), "usb0".into(), "up".into()]
 }
 
-/// Build `ip route add default via <gw> dev usb0` args.
+/// Metric for the usb0 default route. Deliberately higher than the
+/// metric dhcpcd hands out on bnep0 (typically 1005) so BT tether wins
+/// when both interfaces are up. The usb0 path only works if the host
+/// enables Internet Connection Sharing (Windows ICS, macOS Internet
+/// Sharing, or Linux NAT) — when ICS is off, the route is a black hole
+/// that silently drops all default traffic. Making it the lowest-priority
+/// default route means bnep0 (BT tether) transparently takes over when
+/// available, and usb0 only kicks in as a fallback if the user actually
+/// configured ICS.
+pub const USB_DEFAULT_ROUTE_METRIC: &str = "2000";
+
+/// Build `ip route add default via <gw> dev usb0 metric <N>` args.
 pub fn build_default_route_args(gateway: &str) -> Vec<String> {
     vec![
         "route".into(),
@@ -115,10 +126,12 @@ pub fn build_default_route_args(gateway: &str) -> Vec<String> {
         gateway.into(),
         "dev".into(),
         "usb0".into(),
+        "metric".into(),
+        USB_DEFAULT_ROUTE_METRIC.into(),
     ]
 }
 
-/// Build `ip route replace default via <gw> dev usb0` args.
+/// Build `ip route replace default via <gw> dev usb0 metric <N>` args.
 pub fn build_default_route_replace_args(gateway: &str) -> Vec<String> {
     vec![
         "route".into(),
@@ -128,6 +141,8 @@ pub fn build_default_route_replace_args(gateway: &str) -> Vec<String> {
         gateway.into(),
         "dev".into(),
         "usb0".into(),
+        "metric".into(),
+        USB_DEFAULT_ROUTE_METRIC.into(),
     ]
 }
 
@@ -736,7 +751,10 @@ mod tests {
         let args = build_default_route_args("10.0.0.1");
         assert_eq!(
             args,
-            vec!["route", "add", "default", "via", "10.0.0.1", "dev", "usb0"]
+            vec![
+                "route", "add", "default", "via", "10.0.0.1", "dev", "usb0",
+                "metric", "2000"
+            ]
         );
     }
 
@@ -746,7 +764,8 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "route", "replace", "default", "via", "10.0.0.1", "dev", "usb0"
+                "route", "replace", "default", "via", "10.0.0.1", "dev", "usb0",
+                "metric", "2000"
             ]
         );
     }
@@ -970,7 +989,8 @@ mod tests {
         assert_eq!(
             route,
             vec![
-                "route", "replace", "default", "via", "10.0.0.1", "dev", "usb0"
+                "route", "replace", "default", "via", "10.0.0.1", "dev", "usb0",
+                "metric", "2000"
             ]
         );
 
