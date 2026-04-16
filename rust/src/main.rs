@@ -3616,6 +3616,7 @@ impl Daemon {
                     Ok(()) => {
                         info!("soft recovery: monitor mode restored");
                         self.epoch_loop.personality.clear_override();
+                        self.epoch_loop.personality.clear_sticky_status();
                         self.ao.reset();
                         match self.ao.start() {
                             Ok(()) => info!("soft recovery: AO restarted (PID {})", self.ao.pid),
@@ -3663,6 +3664,14 @@ impl Daemon {
                 self.epoch_loop
                     .personality
                     .set_override(personality::Face::Broken);
+                // Pin an unmissable user instruction. The chip is in the
+                // SDIO zombie state and only a physical power cut (USB +
+                // PiSugar unplug, 10s) brings it back. A reboot won't help.
+                // Without this, the Broken face cycles through generic
+                // "debug" messages that don't tell the user what to do.
+                self.epoch_loop
+                    .personality
+                    .set_sticky_status("ZOMBIE - UNPLUG USB+BATT 10s");
                 self.recovery.log(
                     recovery::DiagLevel::Error,
                     "all recovery attempts exhausted — WiFi offline, daemon continues",

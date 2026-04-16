@@ -440,6 +440,11 @@ pub struct Personality {
     pub(crate) current_status: String,
     /// Set true when mood_tick()'s joke self-healing fires (for callers to query).
     pub joke_triggered_by_mood: bool,
+    /// Sticky status override — when Some, it replaces the variety/joke
+    /// cycling and stays pinned on screen until explicitly cleared. Used
+    /// for terminal error states (e.g. WiFi zombie mode) where the user
+    /// must be told exactly what to do and the message cannot rotate away.
+    sticky_status: Option<String>,
 }
 
 impl Personality {
@@ -477,7 +482,24 @@ impl Personality {
             status_display_until: Some(Instant::now() + Duration::from_secs(45)),
             current_status: boot_status,
             joke_triggered_by_mood: false,
+            sticky_status: None,
         }
+    }
+
+    /// Pin a persistent status message that replaces all other status
+    /// cycling. Used for terminal error states the user must act on
+    /// (e.g. WiFi chip zombie — requires physical power cycle). The
+    /// message stays on screen until `clear_sticky_status()` is called.
+    pub fn set_sticky_status(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.sticky_status = Some(msg.clone());
+        self.current_status = msg;
+    }
+
+    /// Clear the sticky status message. Normal cycling resumes on the
+    /// next `generate_status()` call.
+    pub fn clear_sticky_status(&mut self) {
+        self.sticky_status = None;
     }
 
     /// Get the face to display, considering overrides and variety engine.
@@ -688,6 +710,14 @@ impl Personality {
     /// Uses slow cycling (~45s per message) and mood-dependent chance for two-part jokes.
     pub fn generate_status(&mut self) {
         let now = Instant::now();
+
+        // Sticky status beats everything — terminal error states the user
+        // must act on (e.g. WiFi zombie, physical power cycle required).
+        // Pinned until clear_sticky_status() is called.
+        if let Some(ref msg) = self.sticky_status {
+            self.current_status = msg.clone();
+            return;
+        }
 
         // If milestone is active, show milestone status
         if let Some(status) = self.variety.milestone_status {
