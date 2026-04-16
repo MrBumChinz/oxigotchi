@@ -41,7 +41,7 @@ See the [BT-Tethering wiki](https://github.com/CoderFX/oxigotchi/wiki/BT-Tetheri
 
 ---
 
-## Security fixes (codex audit)
+## Security fixes
 
 Three high-severity findings from a full codebase audit:
 
