@@ -168,14 +168,18 @@ echo "  $(ls "$REPO"/faces/eink/*.png | wc -l) face PNGs installed"
 # ─── 6. Helper scripts ───
 echo ""
 echo "=== 6. Install helper scripts ==="
-# WiFi recovery
-sudo cp "$REPO/tools/wifi-recovery.sh" "$PI/usr/local/bin/wifi-recovery.sh"
 # Boot diagnostics
 sudo cp "$REPO/tools/bootlog.sh" "$PI/usr/local/bin/bootlog.sh"
 # USB0 fallback
 sudo cp "$REPO/scripts/usb0-fallback.sh" "$PI/usr/local/bin/usb0-fallback.sh"
-# WiFi ndev fix
-sudo cp "$REPO/scripts/fix_ndev_on_boot.sh" "$PI/usr/local/bin/fix_ndev_on_boot.sh"
+# NOTE: wifi-recovery.sh and fix_ndev_on_boot.sh intentionally NOT installed
+# from v3.3.6 onwards. Both did `modprobe -r brcmfmac` + GPIO WL_REG_ON toggle
+# on crash, which corrupts the BCM43436B0 SDIO bus and reverts to stock
+# (non-nexmon) firmware — the classic "wlan0mon MAC all zeros / RSSI -100"
+# symptom. The Rust daemon now handles WiFi recovery safely with iw-only
+# monitor restart; hard crashes surface FwCrash and wait for physical power
+# cycle. See memory/feedback_deployment_lessons.md #9 and #11.
+#
 # NOTE: bt-keepalive.sh intentionally not installed — v3.3.1+ handles BT
 # tether reconnect entirely inside rusty-oxigotchi (Network1.Connect via
 # D-Bus with exponential backoff). The old shell script raced with the
@@ -200,9 +204,12 @@ echo "=== 7. Install systemd services ==="
 SVC_DIR="$PI/etc/systemd/system"
 
 # Copy service files from repo
-for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepalive \
-           bootlog usb0-fallback fix-ndev nm-watchdog bt-agent \
-           buffer-cleaner epd-startup wifi-watchdog; do
+# wifi-recovery, fix-ndev, wifi-watchdog removed in v3.3.6 — they did the
+# banned brcmfmac modprobe cycle + GPIO WL_REG_ON toggle that corrupts the
+# BCM43436B0 SDIO bus. Rust daemon handles recovery safely now.
+for svc in rusty-oxigotchi resize-rootfs emergency-ssh wlan-keepalive \
+           bootlog usb0-fallback nm-watchdog bt-agent \
+           buffer-cleaner epd-startup; do
     if [ -f "$REPO/services/${svc}.service" ]; then
         sudo cp "$REPO/services/${svc}.service" "$SVC_DIR/${svc}.service"
         sudo sed -i 's/\r$//' "$SVC_DIR/${svc}.service"
@@ -237,8 +244,8 @@ sudo mkdir -p "$SVC_DIR/multi-user.target.wants"
 sudo mkdir -p "$SVC_DIR/timers.target.wants"
 
 # Core services
-for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepalive \
-           bootlog usb0-fallback fix-ndev bt-agent wifi-watchdog; do
+for svc in rusty-oxigotchi resize-rootfs emergency-ssh wlan-keepalive \
+           bootlog usb0-fallback bt-agent; do
     if [ -f "$SVC_DIR/${svc}.service" ]; then
         sudo ln -sf "/etc/systemd/system/${svc}.service" "$SVC_DIR/multi-user.target.wants/${svc}.service"
         echo "  Enabled: $svc"
@@ -653,8 +660,8 @@ fi
 
 echo ""
 echo "--- Services ---"
-for svc in rusty-oxigotchi resize-rootfs emergency-ssh wifi-recovery wlan-keepalive \
-           bootlog usb0-fallback fix-ndev bt-agent wifi-watchdog; do
+for svc in rusty-oxigotchi resize-rootfs emergency-ssh wlan-keepalive \
+           bootlog usb0-fallback bt-agent; do
     verify "$svc.service" "$PI/etc/systemd/system/${svc}.service"
 done
 
@@ -667,8 +674,7 @@ ls "$PI/etc/systemd/system/timers.target.wants/" 2>/dev/null | sort | sed 's/^/ 
 
 echo ""
 echo "--- Helper scripts ---"
-for f in wifi-recovery.sh bootlog.sh usb0-fallback.sh fix_ndev_on_boot.sh \
-         buffer-cleaner.sh wlan_keepalive; do
+for f in bootlog.sh usb0-fallback.sh buffer-cleaner.sh wlan_keepalive; do
     verify "$f" "$PI/usr/local/bin/$f"
 done
 

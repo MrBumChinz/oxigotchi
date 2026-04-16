@@ -57,10 +57,12 @@ pub struct RecoveryConfig {
     pub check_interval_secs: u64,
     /// Number of soft recovery attempts before hard recovery.
     pub max_soft_retries: u32,
-    /// Number of hard recovery (GPIO power cycle) attempts before giving up.
+    /// Number of hard recovery attempts before giving up. Hard recovery is
+    /// a no-op on BCM43436B0 — it surfaces FwCrash and waits for a physical
+    /// power cycle — but the retry count still drives the escalation from
+    /// HardRecovery to Failed so the state machine eventually stops emitting
+    /// `HardRecover` actions.
     pub max_hard_retries: u32,
-    /// Delay after GPIO power-off before power-on (milliseconds).
-    pub gpio_cycle_delay_ms: u64,
     /// Whether watchdog is enabled.
     pub watchdog_enabled: bool,
     /// Watchdog timeout in seconds.
@@ -79,7 +81,6 @@ impl Default for RecoveryConfig {
             check_interval_secs: 10,
             max_soft_retries: 3,
             max_hard_retries: 2,
-            gpio_cycle_delay_ms: 3000,
             watchdog_enabled: true,
             watchdog_timeout_secs: 60,
             recovery_cooldown_secs: 60,
@@ -216,6 +217,10 @@ pub struct RecoveryManager {
     /// Boot diagnostics log (in-memory ring buffer).
     pub diagnostics: Vec<DiagnosticEntry>,
     pub max_diagnostics: usize,
+    /// True once we have emitted `GiveUp` to the handler. Suppresses repeat
+    /// emissions on every subsequent health check while in `Failed` — otherwise
+    /// the handler logs "WiFi recovery exhausted" every tick forever.
+    pub gave_up: bool,
 }
 
 impl RecoveryManager {
@@ -231,6 +236,7 @@ impl RecoveryManager {
             total_recoveries: 0,
             diagnostics: Vec::new(),
             max_diagnostics: 100,
+            gave_up: false,
         }
     }
 
@@ -294,6 +300,7 @@ impl RecoveryManager {
                 self.state = RecoveryState::Healthy;
                 self.soft_retry_count = 0;
                 self.hard_retry_count = 0;
+                self.gave_up = false;
                 RecoveryAction::None
             }
             (RecoveryState::Healthy, HealthCheck::Unresponsive) => {
@@ -340,6 +347,7 @@ impl RecoveryManager {
                     if self.should_reboot() {
                         RecoveryAction::Reboot
                     } else {
+                        self.gave_up = true;
                         RecoveryAction::GiveUp
                     }
                 } else {
@@ -353,7 +361,11 @@ impl RecoveryManager {
                     RecoveryAction::HardRecover
                 }
             }
-            (RecoveryState::Failed, _) => RecoveryAction::GiveUp,
+            // Failed is a terminal state. GiveUp is emitted exactly once (set
+            // above on the HardRecovery→Failed transition). After that, every
+            // subsequent health check returns None so the handler doesn't spam
+            // the log with "recovery exhausted" on every tick.
+            (RecoveryState::Failed, _) => RecoveryAction::None,
         }
     }
 
@@ -410,192 +422,11 @@ pub fn check_wifi_health() -> HealthCheck {
     }
 }
 
-// ---------------------------------------------------------------------------
-// GPIO WL_REG_ON power cycle (replaces wifi-recovery.sh)
-// ---------------------------------------------------------------------------
-
-/// BCM GPIO pin for WL_REG_ON (WiFi chip power control).
-/// On Pi Zero 2W / BCM43436B0, this is GPIO 41.
-pub const WL_REG_ON_PIN: u8 = 41;
-
-/// MMC controller device ID for the Pi Zero 2W SDIO bus.
-pub const MMC_DEVICE: &str = "3f300000.mmcnr";
-/// Sysfs path for MMC driver bind/unbind.
-pub const MMC_DRIVER_PATH: &str = "/sys/bus/platform/drivers/mmc-bcm2835";
-
-/// A step in the GPIO recovery sequence, for testability.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GpioStep {
-    StopService(String),
-    ModprobeRemove(String),
-    MmcUnbind,
-    GpioPinLow(u8),
-    Sleep(Duration),
-    GpioPinHigh(u8),
-    MmcRebind,
-    ModprobeLoad(String),
-    Verify,
-    StartService(String),
-}
-
-/// Build the full GPIO power cycle sequence (matches wifi-recovery.sh).
-///
-/// This is a pure function returning the ordered list of steps.
-/// Execution is separate so the sequence is testable without hardware.
-pub fn build_gpio_recovery_sequence(delay_ms: u64) -> Vec<GpioStep> {
-    vec![
-        // Unload driver
-        GpioStep::ModprobeRemove("brcmfmac".into()),
-        GpioStep::Sleep(Duration::from_secs(1)),
-        // Unbind MMC controller (may already be unbound after crash)
-        GpioStep::MmcUnbind,
-        GpioStep::Sleep(Duration::from_secs(1)),
-        // Pull WL_REG_ON low (power off WiFi chip)
-        GpioStep::GpioPinLow(WL_REG_ON_PIN),
-        GpioStep::Sleep(Duration::from_millis(delay_ms)),
-        // Push WL_REG_ON high (power on WiFi chip)
-        GpioStep::GpioPinHigh(WL_REG_ON_PIN),
-        GpioStep::Sleep(Duration::from_secs(2)),
-        // Rebind MMC controller
-        GpioStep::MmcRebind,
-        GpioStep::Sleep(Duration::from_secs(3)),
-        // Reload driver
-        GpioStep::ModprobeLoad("brcmfmac".into()),
-        GpioStep::Sleep(Duration::from_secs(5)),
-        // Verify recovery
-        GpioStep::Verify,
-    ]
-}
-
-/// Execute the full GPIO recovery sequence.
-///
-/// Returns Ok(true) if wlan0 recovered, Ok(false) if it did not.
-/// On non-unix, all system commands are no-ops.
-pub fn execute_gpio_recovery(delay_ms: u64) -> Result<bool, String> {
-    let steps = build_gpio_recovery_sequence(delay_ms);
-
-    for step in &steps {
-        match step {
-            GpioStep::StopService(name) => {
-                let _ = stop_service(name);
-            }
-            GpioStep::ModprobeRemove(module) => {
-                run_modprobe_remove(module)?;
-            }
-            GpioStep::MmcUnbind => {
-                // Non-fatal: device may already be unbound after firmware crash
-                if let Err(e) = write_sysfs(&format!("{MMC_DRIVER_PATH}/unbind"), MMC_DEVICE) {
-                    log::warn!("MMC unbind failed (may already be unbound): {e}");
-                }
-            }
-            GpioStep::GpioPinLow(pin) => {
-                gpio_set_pin(*pin, false)?;
-            }
-            GpioStep::Sleep(dur) => {
-                std::thread::sleep(*dur);
-            }
-            GpioStep::GpioPinHigh(pin) => {
-                gpio_set_pin(*pin, true)?;
-            }
-            GpioStep::MmcRebind => {
-                // Non-fatal: bind may fail if device is already bound
-                if let Err(e) = write_sysfs(&format!("{MMC_DRIVER_PATH}/bind"), MMC_DEVICE) {
-                    log::warn!("MMC rebind failed (may already be bound): {e}");
-                }
-            }
-            GpioStep::ModprobeLoad(module) => {
-                run_modprobe_load(module)?;
-            }
-            GpioStep::Verify => {
-                if interface_exists("wlan0") {
-                    log::info!("GPIO recovery: wlan0 is back");
-                } else {
-                    log::error!("GPIO recovery: wlan0 did not return");
-                    return Ok(false);
-                }
-            }
-            GpioStep::StartService(name) => {
-                let _ = start_service(name);
-            }
-        }
-    }
-
-    Ok(true)
-}
-
-/// Perform a bare hardware power cycle of the WiFi chip (pin toggle only).
-///
-/// On non-aarch64 platforms this is a no-op stub.
-pub fn gpio_power_cycle_wifi(delay_ms: u64) -> Result<(), String> {
-    #[cfg(target_arch = "aarch64")]
-    {
-        use rppal::gpio::Gpio;
-        use std::thread;
-
-        let gpio = Gpio::new().map_err(|e| format!("GPIO init: {e}"))?;
-        let mut pin = gpio
-            .get(WL_REG_ON_PIN)
-            .map_err(|e| format!("WL_REG_ON pin {WL_REG_ON_PIN}: {e}"))?
-            .into_output();
-
-        pin.set_low();
-        thread::sleep(Duration::from_millis(delay_ms));
-        pin.set_high();
-        thread::sleep(Duration::from_millis(2000));
-
-        Ok(())
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let _ = delay_ms;
-        log::debug!("gpio_power_cycle_wifi: no-op on non-Pi platform");
-        Ok(())
-    }
-}
-
-/// Set a GPIO pin high or low.
-fn gpio_set_pin(pin: u8, high: bool) -> Result<(), String> {
-    #[cfg(target_arch = "aarch64")]
-    {
-        use rppal::gpio::Gpio;
-
-        let gpio = Gpio::new().map_err(|e| format!("GPIO init: {e}"))?;
-        let mut p = gpio
-            .get(pin)
-            .map_err(|e| format!("GPIO pin {pin}: {e}"))?
-            .into_output();
-        if high {
-            p.set_high();
-        } else {
-            p.set_low();
-        }
-        Ok(())
-    }
-    #[cfg(not(target_arch = "aarch64"))]
-    {
-        let _ = (pin, high);
-        log::debug!(
-            "gpio_set_pin: pin {} {} (no-op)",
-            pin,
-            if high { "HIGH" } else { "LOW" }
-        );
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// System command helpers
-// ---------------------------------------------------------------------------
-
-/// Run `modprobe -r <module>`.
-fn run_modprobe_remove(module: &str) -> Result<(), String> {
-    run_command("modprobe", &["-r", module])
-}
-
-/// Run `modprobe <module>`.
-fn run_modprobe_load(module: &str) -> Result<(), String> {
-    run_command("modprobe", &[module])
-}
+// GPIO WL_REG_ON recovery + brcmfmac modprobe cycle were removed — both
+// corrupt BCM43436B0 (SDIO bus death / nexmon patch loss). The only safe
+// recovery is iw-only monitor restart (SoftRecover in main.rs); HardRecover
+// surfaces FwCrash and waits for physical power cycle. See
+// memory/feedback_deployment_lessons.md #9, #11.
 
 // ---------------------------------------------------------------------------
 // PSM watchdog counter reset via SDIO RAMRW (nexmon 0x500)
@@ -653,19 +484,6 @@ pub fn reset_watchdog_counters() -> Result<(), String> {
     Ok(())
 }
 
-/// Write a string to a sysfs path.
-fn write_sysfs(path: &str, value: &str) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        std::fs::write(path, value).map_err(|e| format!("write {path}: {e}"))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, value);
-        log::debug!("write_sysfs: {path} <- {value} (no-op)");
-        Ok(())
-    }
-}
 
 /// Run an external command, returning Ok on success or Err with stderr.
 fn run_command(program: &str, args: &[&str]) -> Result<(), String> {
@@ -1043,15 +861,21 @@ mod tests {
         });
         rm.process_health(HealthCheck::Unresponsive); // soft 1
         rm.process_health(HealthCheck::Unresponsive); // soft exhausted -> hard 1
-        rm.process_health(HealthCheck::Unresponsive); // hard exhausted -> give up
-
+        // hard exhausted -> transitions to Failed, emits GiveUp exactly once
         let action = rm.process_health(HealthCheck::Unresponsive);
         assert_eq!(action, RecoveryAction::GiveUp);
+        assert_eq!(rm.state, RecoveryState::Failed);
+        assert!(rm.gave_up);
+
+        // Subsequent checks in Failed return None (suppression) — no log spam
+        let action = rm.process_health(HealthCheck::Unresponsive);
+        assert_eq!(action, RecoveryAction::None);
         assert_eq!(rm.state, RecoveryState::Failed);
 
         let action = rm.process_health(HealthCheck::Ok);
         assert_eq!(action, RecoveryAction::None);
         assert_eq!(rm.state, RecoveryState::Healthy);
+        assert!(!rm.gave_up);
     }
 
     #[test]
@@ -1139,134 +963,6 @@ mod tests {
         });
         rm.last_recovery = Some(Instant::now() - Duration::from_secs(30));
         assert!(rm.cooldown_active());
-    }
-
-    // ======= GPIO sequence tests =======
-
-    #[test]
-    fn test_gpio_sequence_correct_pin() {
-        let steps = build_gpio_recovery_sequence(3000);
-        let low_steps: Vec<_> = steps
-            .iter()
-            .filter(|s| matches!(s, GpioStep::GpioPinLow(_)))
-            .collect();
-        let high_steps: Vec<_> = steps
-            .iter()
-            .filter(|s| matches!(s, GpioStep::GpioPinHigh(_)))
-            .collect();
-
-        assert_eq!(low_steps.len(), 1);
-        assert_eq!(high_steps.len(), 1);
-        assert_eq!(low_steps[0], &GpioStep::GpioPinLow(41));
-        assert_eq!(high_steps[0], &GpioStep::GpioPinHigh(41));
-    }
-
-    #[test]
-    fn test_gpio_sequence_correct_order() {
-        let steps = build_gpio_recovery_sequence(3000);
-
-        let modprobe_remove_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::ModprobeRemove(_)))
-            .unwrap();
-        let mmc_unbind_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::MmcUnbind))
-            .unwrap();
-        let pin_low_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinLow(_)))
-            .unwrap();
-        let pin_high_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinHigh(_)))
-            .unwrap();
-        let mmc_rebind_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::MmcRebind))
-            .unwrap();
-        let modprobe_load_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::ModprobeLoad(_)))
-            .unwrap();
-        let verify_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::Verify))
-            .unwrap();
-
-        // modprobe -r -> unbind -> LOW -> HIGH -> rebind -> modprobe -> verify
-        assert!(modprobe_remove_idx < mmc_unbind_idx);
-        assert!(mmc_unbind_idx < pin_low_idx);
-        assert!(pin_low_idx < pin_high_idx);
-        assert!(pin_high_idx < mmc_rebind_idx);
-        assert!(mmc_rebind_idx < modprobe_load_idx);
-        assert!(modprobe_load_idx < verify_idx);
-    }
-
-    #[test]
-    fn test_gpio_sequence_has_sleep_between_low_and_high() {
-        let steps = build_gpio_recovery_sequence(3000);
-        let pin_low_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinLow(_)))
-            .unwrap();
-        let pin_high_idx = steps
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinHigh(_)))
-            .unwrap();
-
-        let has_sleep = steps[pin_low_idx + 1..pin_high_idx]
-            .iter()
-            .any(|s| matches!(s, GpioStep::Sleep(_)));
-        assert!(has_sleep, "must sleep between GPIO LOW and HIGH");
-    }
-
-    #[test]
-    fn test_gpio_sequence_delay_configurable() {
-        let steps_3s = build_gpio_recovery_sequence(3000);
-        let steps_5s = build_gpio_recovery_sequence(5000);
-
-        let pin_low_idx_3 = steps_3s
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinLow(_)))
-            .unwrap();
-        let sleep_3 = &steps_3s[pin_low_idx_3 + 1];
-
-        let pin_low_idx_5 = steps_5s
-            .iter()
-            .position(|s| matches!(s, GpioStep::GpioPinLow(_)))
-            .unwrap();
-        let sleep_5 = &steps_5s[pin_low_idx_5 + 1];
-
-        assert_eq!(*sleep_3, GpioStep::Sleep(Duration::from_millis(3000)));
-        assert_eq!(*sleep_5, GpioStep::Sleep(Duration::from_millis(5000)));
-    }
-
-    #[test]
-    fn test_gpio_sequence_no_legacy_services() {
-        // Daemon handles AO lifecycle directly — no legacy services to stop/start.
-        let steps = build_gpio_recovery_sequence(3000);
-        let stop_services: Vec<_> = steps
-            .iter()
-            .filter(|s| matches!(s, GpioStep::StopService(_)))
-            .collect();
-        let start_services: Vec<_> = steps
-            .iter()
-            .filter(|s| matches!(s, GpioStep::StartService(_)))
-            .collect();
-        assert_eq!(stop_services.len(), 0, "no legacy services to stop");
-        assert_eq!(start_services.len(), 0, "no legacy services to start");
-    }
-
-    #[test]
-    fn test_wl_reg_on_pin_constant() {
-        assert_eq!(WL_REG_ON_PIN, 41);
-    }
-
-    #[test]
-    fn test_gpio_power_cycle_stub() {
-        let result = gpio_power_cycle_wifi(500);
-        assert!(result.is_ok());
     }
 
     // ======= Diagnostics ring buffer tests =======
@@ -1534,17 +1230,10 @@ mod tests {
         assert_eq!(cfg.check_interval_secs, 10);
         assert_eq!(cfg.max_soft_retries, 3);
         assert_eq!(cfg.max_hard_retries, 2);
-        assert_eq!(cfg.gpio_cycle_delay_ms, 3000);
         assert!(cfg.watchdog_enabled);
         assert_eq!(cfg.watchdog_timeout_secs, 60);
         assert_eq!(cfg.recovery_cooldown_secs, 60);
         assert_eq!(cfg.max_total_retries_before_reboot, 5);
-    }
-
-    #[test]
-    fn test_mmc_constants() {
-        assert_eq!(MMC_DEVICE, "3f300000.mmcnr");
-        assert_eq!(MMC_DRIVER_PATH, "/sys/bus/platform/drivers/mmc-bcm2835");
     }
 
     // ======= Recovery tracking =======
@@ -1659,5 +1348,41 @@ mod tests {
         let action2 = rm.process_health(HealthCheck::Missing);
         assert_eq!(action2, RecoveryAction::None);
         assert_eq!(rm.hard_retry_count, 1, "hard retry count must not advance during cooldown");
+    }
+
+    #[test]
+    fn test_missing_escalates_to_give_up_then_stays_silent() {
+        // Missing → HardRecovery → Failed → GiveUp emitted once, then None.
+        // Also suppresses reboot (max_total_retries high enough that
+        // should_reboot() is false).
+        let mut rm = RecoveryManager::new(RecoveryConfig {
+            max_hard_retries: 2,
+            max_total_retries_before_reboot: 100,
+            recovery_cooldown_secs: 0,
+            ..Default::default()
+        });
+
+        // First Missing → HardRecover
+        assert_eq!(rm.process_health(HealthCheck::Missing), RecoveryAction::HardRecover);
+        // Retries 2 → still HardRecover
+        assert_eq!(rm.process_health(HealthCheck::Missing), RecoveryAction::HardRecover);
+        // Retry 3 exceeds max_hard_retries → enters Failed and emits GiveUp
+        assert_eq!(rm.process_health(HealthCheck::Missing), RecoveryAction::GiveUp);
+        assert_eq!(rm.state, RecoveryState::Failed);
+        assert!(rm.gave_up);
+
+        // Subsequent checks must return None — no "recovery exhausted" log spam
+        for _ in 0..5 {
+            assert_eq!(
+                rm.process_health(HealthCheck::Missing),
+                RecoveryAction::None,
+                "Failed state must only emit GiveUp once"
+            );
+        }
+
+        // Recovery (wlan0 returns) clears gave_up so future crashes are handled
+        assert_eq!(rm.process_health(HealthCheck::Ok), RecoveryAction::None);
+        assert_eq!(rm.state, RecoveryState::Healthy);
+        assert!(!rm.gave_up);
     }
 }
