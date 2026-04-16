@@ -3596,57 +3596,27 @@ impl Daemon {
         match action {
             recovery::RecoveryAction::None => {}
             recovery::RecoveryAction::SoftRecover => {
-                info!("attempting soft WiFi recovery (modprobe cycle)");
+                // BCM43436B0 SAFETY: never rmmod brcmfmac on this chip — it
+                // corrupts the SDIO bus and requires physical power cycle to
+                // recover (see memory/feedback_deployment_lessons.md #9).
+                // Also never toggle WL_REG_ON GPIO — it loses nexmon patches
+                // and reverts to stock brcmfmac firmware (no monitor mode).
+                // The only safe recovery is: stop AO, delete wlan0mon, sleep
+                // 2s for firmware to settle, re-add monitor, restart AO.
+                info!("attempting soft WiFi recovery (iw-only restart, no modprobe)");
                 self.epoch_loop
                     .personality
                     .set_override(personality::Face::WifiDown);
 
-                // Stop AO first — it's using the interface
                 self.ao.stop();
-
-                // Stop monitor mode (may fail if interface is gone — that's OK)
                 let _ = self.wifi.stop_monitor();
+                std::thread::sleep(Duration::from_secs(2));
 
-                // Full brcmfmac modprobe cycle (matches Python's _try_fw_recovery)
-                #[cfg(unix)]
-                {
-                    use std::process::Command;
-                    // Bring down all WiFi interfaces first — modprobe -r fails with
-                    // "Module brcmfmac is in use" if interfaces are still up
-                    info!("bringing down WiFi interfaces before rmmod");
-                    let _ = Command::new("ip")
-                        .args(["link", "set", "wlan0mon", "down"])
-                        .output();
-                    let _ = Command::new("iw").args(["dev", "wlan0mon", "del"]).output();
-                    let _ = Command::new("ip")
-                        .args(["link", "set", "wlan0", "down"])
-                        .output();
-                    std::thread::sleep(Duration::from_secs(1));
-                    info!("removing brcmfmac module");
-                    let _ = Command::new("modprobe").args(["-r", "brcmfmac"]).output();
-                    std::thread::sleep(Duration::from_secs(2));
-                    info!("reloading brcmfmac module");
-                    let _ = Command::new("modprobe").arg("brcmfmac").output();
-                    // Poll for wlan0 to reappear (firmware load is async)
-                    let wlan0 = std::path::Path::new("/sys/class/net/wlan0");
-                    for i in 0..10 {
-                        if wlan0.exists() {
-                            info!("wlan0 back after {}s", i + 2);
-                            break;
-                        }
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                }
-
-                // Re-enter monitor mode
                 match self.wifi.start_monitor() {
                     Ok(()) => {
                         info!("soft recovery: monitor mode restored");
-                        // Clear the WifiDown face — recovery succeeded
                         self.epoch_loop.personality.clear_override();
-                        // Reset AO crash counter so we don't immediately re-trigger
                         self.ao.reset();
-                        // Restart AO
                         match self.ao.start() {
                             Ok(()) => info!("soft recovery: AO restarted (PID {})", self.ao.pid),
                             Err(e) => log::error!("soft recovery: AO restart failed: {e}"),
@@ -3657,38 +3627,25 @@ impl Daemon {
                 }
             }
             recovery::RecoveryAction::HardRecover => {
-                info!("attempting hard WiFi recovery (full GPIO power cycle)");
+                // BCM43436B0 SAFETY: the GPIO WL_REG_ON power cycle used to
+                // live here. On this chip it reverts the firmware to stock
+                // brcmfmac (no nexmon monitor-mode patches), leaving the
+                // daemon running against a WiFi stack that can't inject or
+                // capture anything until a cold boot. We refuse the GPIO
+                // cycle and surface FwCrash so the user knows a physical
+                // power cycle is required.
+                log::error!(
+                    "hard recovery refused: BCM43436B0 needs physical power cycle (USB + PiSugar). \
+                     GPIO WL_REG_ON toggle would load stock firmware without monitor-mode support."
+                );
                 self.epoch_loop
                     .personality
                     .set_override(personality::Face::FwCrash);
-
-                // Stop AO before power-cycling — it's using the interface
+                self.recovery.log(
+                    recovery::DiagLevel::Error,
+                    "hard recovery refused on BCM43436B0 — physical power cycle required",
+                );
                 self.ao.stop();
-
-                let gpio_ok = match recovery::execute_gpio_recovery(self.recovery.config.gpio_cycle_delay_ms) {
-                    Ok(true) => { info!("GPIO recovery succeeded, wlan0 is back"); true }
-                    Ok(false) => { log::error!("GPIO recovery failed: wlan0 did not return"); false }
-                    Err(e) => { log::error!("GPIO recovery error: {e}"); false }
-                };
-
-                if gpio_ok {
-                    match self.wifi.start_monitor() {
-                        Ok(()) => {
-                            info!("hard recovery: monitor mode restored");
-                            // Clear the FwCrash face — recovery succeeded
-                            self.epoch_loop.personality.clear_override();
-                            // Reset AO crash counter so we don't immediately re-trigger
-                            self.ao.reset();
-                            // Restart AO
-                            match self.ao.start() {
-                                Ok(()) => info!("hard recovery: AO restarted (PID {})", self.ao.pid),
-                                Err(e) => log::error!("hard recovery: AO restart failed: {e}"),
-                            }
-                            self.recovery.record_recovery();
-                        }
-                        Err(e) => log::error!("hard recovery: monitor mode failed: {e}"),
-                    }
-                }
             }
             recovery::RecoveryAction::Reboot => {
                 log::error!("WiFi recovery exhausted after max retries, rebooting");
@@ -3961,11 +3918,13 @@ mod tests {
     fn test_daemon_recovery_hard() {
         let mut daemon = make_daemon();
         daemon.handle_recovery_action(recovery::RecoveryAction::HardRecover);
-        // On non-unix (tests), GPIO + start_monitor succeed → override cleared
+        // Hard recovery is refused on BCM43436B0 — GPIO WL_REG_ON would revert
+        // firmware to stock brcmfmac (no nexmon monitor mode). We surface
+        // FwCrash so the user knows a physical power cycle is required.
         assert_eq!(
             daemon.epoch_loop.personality.override_face,
-            None,
-            "FwCrash override should be cleared after successful hard recovery"
+            Some(personality::Face::FwCrash),
+            "hard recovery must surface FwCrash — GPIO cycle is unsafe on this chip"
         );
     }
 
