@@ -96,6 +96,22 @@ For the Pi to reach the internet via USB, **your computer has to share its own c
 
 Without any of those, USB is just SSH and dashboard access. The normal way oxigotchi gets internet in the field is **Bluetooth tethering to a phone** (see the [Bluetooth wiki page](Bluetooth)). That works stand-alone, no PC required.
 
+### BT tether up but no internet (≤ v3.3.5 only)
+
+**Symptom:** phone paired, dashboard shows `BT OK` with a valid IP on `bnep0`, `ping -I bnep0 8.8.8.8` succeeds — but `sudo apt update`, `curl`, and any default-routed traffic silently fail. `ip route show default` shows two default routes.
+
+**Cause:** on pre-v3.3.6 images the Pi installs its `usb0` default route at metric 0 (highest priority). If the host has not configured Internet Connection Sharing, that route is a black hole — all default-routed packets go to the PC and are dropped with no error, even when BT tether is up.
+
+**Fixed in v3.3.6:** the `usb0` default route is now installed with metric 2000, so BT tether (dhcpcd metric 1005) wins automatically.
+
+**Quick fix on older images** (one-shot, clears until next reboot/probe):
+
+```bash
+sudo ip route del default via 10.0.0.1 dev usb0
+```
+
+After this, `ip route show default` should list only the `bnep0` default, and `ping 8.8.8.8` works without needing `-I bnep0`. Update to v3.3.6+ for a permanent fix.
+
 ### WiFi chip in a zombie state after a crash
 
 **Symptoms:** `wlan0mon` exists but has MAC `00:00:00:00:00:00`, every AP shows RSSI `-100`, the dashboard reports "0 APs" forever, capture stops. Happens after a firmware crash on older versions (≤ v3.3.4).
